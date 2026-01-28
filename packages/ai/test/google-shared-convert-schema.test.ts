@@ -1,25 +1,25 @@
 import { describe, expect, test } from "vitest";
-import { convertSchemaForGoogle } from "../src/providers/google-shared.js";
+import { convertSchema } from "../src/providers/google-shared.js";
 
-describe("convertSchemaForGoogle", () => {
+describe("convertSchema", () => {
 	// -------------------------------------------------------------------
 	// Guard clause: null, undefined, primitives
 	// -------------------------------------------------------------------
 
 	test("returns null as-is", () => {
-		expect(convertSchemaForGoogle(null as any)).toBeNull();
+		expect(convertSchema(null as any)).toBeNull();
 	});
 
 	test("returns undefined as-is", () => {
-		expect(convertSchemaForGoogle(undefined as any)).toBeUndefined();
+		expect(convertSchema(undefined as any)).toBeUndefined();
 	});
 
 	test("returns primitive string as-is", () => {
-		expect(convertSchemaForGoogle("hello" as any)).toBe("hello");
+		expect(convertSchema("hello" as any)).toBe("hello");
 	});
 
 	test("returns empty object as-is", () => {
-		expect(convertSchemaForGoogle({})).toEqual({});
+		expect(convertSchema({})).toEqual({});
 	});
 
 	// -------------------------------------------------------------------
@@ -28,17 +28,17 @@ describe("convertSchemaForGoogle", () => {
 
 	test("strips standalone const field", () => {
 		const input = { const: "only_value", type: "string" };
-		expect(convertSchemaForGoogle(input)).toEqual({ type: "string" });
+		expect(convertSchema(input)).toEqual({ type: "string" });
 	});
 
 	test("strips const with no type field", () => {
 		const input = { const: "x" };
-		expect(convertSchemaForGoogle(input)).toEqual({});
+		expect(convertSchema(input)).toEqual({});
 	});
 
 	test("strips const and preserves other fields", () => {
 		const input = { const: "x", type: "string", description: "a field" };
-		expect(convertSchemaForGoogle(input)).toEqual({ type: "string", description: "a field" });
+		expect(convertSchema(input)).toEqual({ type: "string", description: "a field" });
 	});
 
 	// -------------------------------------------------------------------
@@ -53,7 +53,7 @@ describe("convertSchemaForGoogle", () => {
 				{ const: "blue", type: "string" },
 			],
 		};
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			type: "string",
 			enum: ["red", "green", "blue"],
 		});
@@ -63,7 +63,7 @@ describe("convertSchemaForGoogle", () => {
 		const input = {
 			anyOf: [{ const: "only", type: "string" }],
 		};
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			type: "string",
 			enum: ["only"],
 		});
@@ -73,7 +73,7 @@ describe("convertSchemaForGoogle", () => {
 		const input = {
 			anyOf: [{ const: "a" }, { const: "b" }],
 		};
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			type: "string",
 			enum: ["a", "b"],
 		});
@@ -86,7 +86,7 @@ describe("convertSchemaForGoogle", () => {
 				{ const: 2, type: "integer" },
 			],
 		};
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			type: "string",
 			enum: ["1", "2"],
 		});
@@ -100,7 +100,7 @@ describe("convertSchemaForGoogle", () => {
 				{ const: "blue", type: "string" },
 			],
 		};
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			description: "Pick a color",
 			type: "string",
 			enum: ["red", "blue"],
@@ -116,7 +116,7 @@ describe("convertSchemaForGoogle", () => {
 				{ const: "b", type: "string" },
 			],
 		};
-		const result = convertSchemaForGoogle(input);
+		const result = convertSchema(input);
 		expect(result).not.toHaveProperty("const");
 		expect(result).toEqual({ type: "string", enum: ["a", "b"] });
 	});
@@ -128,7 +128,7 @@ describe("convertSchemaForGoogle", () => {
 	test("passes empty anyOf through with recursive map", () => {
 		const input = { anyOf: [] as Record<string, unknown>[] };
 		// flattened.length === 0 → else branch → map returns []
-		expect(convertSchemaForGoogle(input)).toEqual({ anyOf: [] });
+		expect(convertSchema(input)).toEqual({ anyOf: [] });
 	});
 
 	// -------------------------------------------------------------------
@@ -156,7 +156,7 @@ describe("convertSchemaForGoogle", () => {
 				},
 			],
 		};
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			anyOf: [
 				{ type: "string", enum: ["todo", "done"] },
 				{
@@ -171,7 +171,7 @@ describe("convertSchemaForGoogle", () => {
 		const input = {
 			anyOf: [{ type: "number" }, { type: "null" }],
 		};
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			anyOf: [{ type: "number" }, { type: "null" }],
 		});
 	});
@@ -181,7 +181,7 @@ describe("convertSchemaForGoogle", () => {
 		const input = {
 			anyOf: [{ const: "x", type: "string" }, { type: "number" }],
 		};
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			anyOf: [{ type: "string" }, { type: "number" }],
 		});
 	});
@@ -202,7 +202,7 @@ describe("convertSchemaForGoogle", () => {
 				{ anyOf: [{ const: "c", type: "string" }] },
 			],
 		};
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			type: "string",
 			enum: ["a", "b", "c"],
 		});
@@ -219,7 +219,7 @@ describe("convertSchemaForGoogle", () => {
 		};
 		// Inner anyOf is mixed → not flattened → outer not all-const → recurse
 		// Inner: mixed anyOf → recurse each: strip const from first, number stays
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			anyOf: [
 				{
 					anyOf: [{ type: "string" }, { type: "number" }],
@@ -233,7 +233,7 @@ describe("convertSchemaForGoogle", () => {
 			anyOf: [{ anyOf: [{ const: "a", type: "string" }] }, { const: "b", type: "string" }],
 		};
 		// flatten: inner all-const → spread "a", then bare "b" → all const → enum
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			type: "string",
 			enum: ["a", "b"],
 		});
@@ -256,7 +256,7 @@ describe("convertSchemaForGoogle", () => {
 				},
 			},
 		};
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			type: "object",
 			properties: {
 				name: { type: "string" },
@@ -279,7 +279,7 @@ describe("convertSchemaForGoogle", () => {
 				],
 			},
 		};
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			type: "array",
 			items: { type: "string", enum: ["a", "b"] },
 		});
@@ -291,7 +291,7 @@ describe("convertSchemaForGoogle", () => {
 			items: [{ anyOf: [{ const: "a", type: "string" }] }, { type: "number" }],
 		};
 		// items is an array → !Array.isArray guard skips recursion → items unchanged
-		expect(convertSchemaForGoogle(input)).toEqual(input);
+		expect(convertSchema(input)).toEqual(input);
 	});
 
 	// -------------------------------------------------------------------
@@ -318,7 +318,7 @@ describe("convertSchemaForGoogle", () => {
 				},
 			},
 		};
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			type: "object",
 			properties: {
 				tasks: {
@@ -347,7 +347,7 @@ describe("convertSchemaForGoogle", () => {
 			},
 			required: ["name"],
 		};
-		expect(convertSchemaForGoogle(input)).toEqual(input);
+		expect(convertSchema(input)).toEqual(input);
 	});
 
 	test("passes through schema with existing enum", () => {
@@ -355,7 +355,7 @@ describe("convertSchemaForGoogle", () => {
 			type: "string",
 			enum: ["a", "b", "c"],
 		};
-		expect(convertSchemaForGoogle(input)).toEqual(input);
+		expect(convertSchema(input)).toEqual(input);
 	});
 
 	test("does not mutate the original input", () => {
@@ -371,7 +371,7 @@ describe("convertSchemaForGoogle", () => {
 			},
 		};
 		const inputCopy = JSON.parse(JSON.stringify(input));
-		convertSchemaForGoogle(input);
+		convertSchema(input);
 		expect(input).toEqual(inputCopy);
 	});
 
@@ -424,7 +424,7 @@ describe("convertSchemaForGoogle", () => {
 			},
 		};
 
-		expect(convertSchemaForGoogle(input)).toEqual({
+		expect(convertSchema(input)).toEqual({
 			type: "object",
 			properties: {
 				status: {

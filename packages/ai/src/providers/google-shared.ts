@@ -246,7 +246,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
  * - Strips stray `const` fields from any node
  * - Recurses into `properties`, `items`
  */
-export function convertSchemaForGoogle(schema: Record<string, unknown>): Record<string, unknown> {
+export function convertSchema(schema: Record<string, unknown>): Record<string, unknown> {
 	if (!schema || typeof schema !== "object") return schema;
 
 	const result = { ...schema };
@@ -268,7 +268,7 @@ export function convertSchemaForGoogle(schema: Record<string, unknown>): Record<
 			result.enum = enumValues;
 		} else {
 			// Mixed anyOf — convert each branch recursively
-			result.anyOf = (result.anyOf as Record<string, unknown>[]).map(convertSchemaForGoogle);
+			result.anyOf = (result.anyOf as Record<string, unknown>[]).map(convertSchema);
 		}
 	}
 
@@ -277,14 +277,14 @@ export function convertSchemaForGoogle(schema: Record<string, unknown>): Record<
 		const props = result.properties as Record<string, Record<string, unknown>>;
 		const converted: Record<string, unknown> = {};
 		for (const [key, value] of Object.entries(props)) {
-			converted[key] = convertSchemaForGoogle(value);
+			converted[key] = convertSchema(value);
 		}
 		result.properties = converted;
 	}
 
 	// Recurse into items (arrays)
 	if (result.items && typeof result.items === "object" && !Array.isArray(result.items)) {
-		result.items = convertSchemaForGoogle(result.items as Record<string, unknown>);
+		result.items = convertSchema(result.items as Record<string, unknown>);
 	}
 
 	return result;
@@ -326,7 +326,7 @@ export function convertTools(
 			functionDeclarations: tools.map((tool) => ({
 				name: tool.name,
 				description: tool.description,
-				parameters: convertSchemaForGoogle(tool.parameters as Record<string, unknown>) as Schema,
+				parameters: convertSchema(tool.parameters as Record<string, unknown>) as Schema,
 			})),
 		},
 	];
