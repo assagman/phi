@@ -55,6 +55,7 @@ describe("convertSchema", () => {
 		};
 		expect(convertSchema(input)).toEqual({
 			type: "string",
+			format: "enum",
 			enum: ["red", "green", "blue"],
 		});
 	});
@@ -65,6 +66,7 @@ describe("convertSchema", () => {
 		};
 		expect(convertSchema(input)).toEqual({
 			type: "string",
+			format: "enum",
 			enum: ["only"],
 		});
 	});
@@ -75,11 +77,13 @@ describe("convertSchema", () => {
 		};
 		expect(convertSchema(input)).toEqual({
 			type: "string",
+			format: "enum",
 			enum: ["a", "b"],
 		});
 	});
 
-	test("coerces number const values to strings", () => {
+	test("preserves integer type for integer const values", () => {
+		// Google SDK example 2: {type:INTEGER, format:enum, enum:["101", "201", "301"]}
 		const input = {
 			anyOf: [
 				{ const: 1, type: "integer" },
@@ -87,8 +91,59 @@ describe("convertSchema", () => {
 			],
 		};
 		expect(convertSchema(input)).toEqual({
-			type: "string",
+			type: "integer",
+			format: "enum",
 			enum: ["1", "2"],
+		});
+	});
+
+	test("preserves number type for number const values", () => {
+		const input = {
+			anyOf: [
+				{ const: 1.5, type: "number" },
+				{ const: 2.5, type: "number" },
+			],
+		};
+		expect(convertSchema(input)).toEqual({
+			type: "number",
+			format: "enum",
+			enum: ["1.5", "2.5"],
+		});
+	});
+
+	test("infers integer type from const values when items lack type", () => {
+		const input = {
+			anyOf: [{ const: 101 }, { const: 201 }, { const: 301 }],
+		};
+		expect(convertSchema(input)).toEqual({
+			type: "integer",
+			format: "enum",
+			enum: ["101", "201", "301"],
+		});
+	});
+
+	test("infers number type from const values when items lack type and values are floats", () => {
+		const input = {
+			anyOf: [{ const: 1.5 }, { const: 2.5 }],
+		};
+		expect(convertSchema(input)).toEqual({
+			type: "number",
+			format: "enum",
+			enum: ["1.5", "2.5"],
+		});
+	});
+
+	test("falls back to string for mixed-type const values", () => {
+		const input = {
+			anyOf: [
+				{ const: "a", type: "string" },
+				{ const: 1, type: "integer" },
+			],
+		};
+		expect(convertSchema(input)).toEqual({
+			type: "string",
+			format: "enum",
+			enum: ["a", "1"],
 		});
 	});
 
@@ -103,6 +158,7 @@ describe("convertSchema", () => {
 		expect(convertSchema(input)).toEqual({
 			description: "Pick a color",
 			type: "string",
+			format: "enum",
 			enum: ["red", "blue"],
 		});
 	});
@@ -118,7 +174,7 @@ describe("convertSchema", () => {
 		};
 		const result = convertSchema(input);
 		expect(result).not.toHaveProperty("const");
-		expect(result).toEqual({ type: "string", enum: ["a", "b"] });
+		expect(result).toEqual({ type: "string", format: "enum", enum: ["a", "b"] });
 	});
 
 	// -------------------------------------------------------------------
@@ -158,10 +214,10 @@ describe("convertSchema", () => {
 		};
 		expect(convertSchema(input)).toEqual({
 			anyOf: [
-				{ type: "string", enum: ["todo", "done"] },
+				{ type: "string", format: "enum", enum: ["todo", "done"] },
 				{
 					type: "array",
-					items: { type: "string", enum: ["todo", "done"] },
+					items: { type: "string", format: "enum", enum: ["todo", "done"] },
 				},
 			],
 		});
@@ -204,6 +260,7 @@ describe("convertSchema", () => {
 		};
 		expect(convertSchema(input)).toEqual({
 			type: "string",
+			format: "enum",
 			enum: ["a", "b", "c"],
 		});
 	});
@@ -235,6 +292,7 @@ describe("convertSchema", () => {
 		// flatten: inner all-const → spread "a", then bare "b" → all const → enum
 		expect(convertSchema(input)).toEqual({
 			type: "string",
+			format: "enum",
 			enum: ["a", "b"],
 		});
 	});
@@ -260,7 +318,7 @@ describe("convertSchema", () => {
 			type: "object",
 			properties: {
 				name: { type: "string" },
-				priority: { type: "string", enum: ["low", "high"] },
+				priority: { type: "string", format: "enum", enum: ["low", "high"] },
 			},
 		});
 	});
@@ -281,7 +339,7 @@ describe("convertSchema", () => {
 		};
 		expect(convertSchema(input)).toEqual({
 			type: "array",
-			items: { type: "string", enum: ["a", "b"] },
+			items: { type: "string", format: "enum", enum: ["a", "b"] },
 		});
 	});
 
@@ -326,7 +384,7 @@ describe("convertSchema", () => {
 					items: {
 						type: "object",
 						properties: {
-							status: { type: "string", enum: ["open", "closed"] },
+							status: { type: "string", format: "enum", enum: ["open", "closed"] },
 						},
 					},
 				},
@@ -430,14 +488,18 @@ describe("convertSchema", () => {
 				status: {
 					description: "Filter by status (single or array)",
 					anyOf: [
-						{ type: "string", enum: ["todo", "in_progress", "blocked", "done", "cancelled"] },
+						{ type: "string", format: "enum", enum: ["todo", "in_progress", "blocked", "done", "cancelled"] },
 						{
 							type: "array",
-							items: { type: "string", enum: ["todo", "in_progress", "blocked", "done", "cancelled"] },
+							items: {
+								type: "string",
+								format: "enum",
+								enum: ["todo", "in_progress", "blocked", "done", "cancelled"],
+							},
 						},
 					],
 				},
-				priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+				priority: { type: "string", format: "enum", enum: ["low", "medium", "high", "critical"] },
 				tags: {
 					type: "array",
 					items: { type: "string" },

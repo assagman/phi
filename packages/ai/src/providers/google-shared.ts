@@ -264,7 +264,12 @@ export function convertSchema(schema: Record<string, unknown>): Record<string, u
 		if (flattened.length > 0 && flattened.every((item) => "const" in item)) {
 			const enumValues = flattened.map((item) => String(item.const));
 			delete result.anyOf;
-			result.type = "string"; // Google requires enums to always be string type
+			// Google SDK supports enum with STRING, INTEGER, and NUMBER types.
+			// Examples from @google/genai Schema.enum docs:
+			//   1. {type:STRING, format:enum, enum:["EAST", "NORTH"]}
+			//   2. {type:INTEGER, format:enum, enum:["101", "201"]}
+			result.type = inferEnumType(flattened);
+			result.format = "enum";
 			result.enum = enumValues;
 		} else {
 			// Mixed anyOf — convert each branch recursively
@@ -311,6 +316,32 @@ function flattenAnyOf(items: Record<string, unknown>[]): Record<string, unknown>
 		}
 	}
 	return result;
+}
+
+/**
+ * Infer the Google API enum type from anyOf const items.
+ * Priority: explicit type fields > inferred from const values > fallback to "string".
+ *
+ * Per @google/genai Schema.enum docs, supported types: STRING, INTEGER, NUMBER.
+ */
+function inferEnumType(items: Record<string, unknown>[]): string {
+	// 1. Check explicit type fields — use first non-undefined, consistent type
+	const explicitTypes = new Set(items.map((item) => item.type).filter((t) => t !== undefined));
+	if (explicitTypes.size === 1) {
+		return explicitTypes.values().next().value as string;
+	}
+	// Mixed explicit types → fall back to string
+	if (explicitTypes.size > 1) {
+		return "string";
+	}
+
+	// 2. No explicit types — infer from const values
+	const constValues = items.map((item) => item.const);
+	if (constValues.every((v) => typeof v === "number")) {
+		return constValues.every((v) => Number.isInteger(v)) ? "integer" : "number";
+	}
+
+	return "string";
 }
 
 /**

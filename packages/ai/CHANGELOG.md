@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed Google providers rejecting tool schemas with `anyOf`/`const` patterns from extensions using `Type.Union(Type.Literal(...))`. `convertTools()` now recursively sanitizes schemas, converting `anyOf`+`const` to `enum` ([#1000](https://github.com/badlogic/pi-mono/issues/1000))
+- Fixed `convertSchema()` always setting `type:"string"` for enums converted from `anyOf`+`const`. Now preserves original type (`integer`, `number`) and sets `format:"enum"` per Google SDK docs
 
 ## [0.49.2] - 2026-01-19
 
