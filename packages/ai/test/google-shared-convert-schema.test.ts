@@ -79,7 +79,7 @@ describe("convertSchemaForGoogle", () => {
 		});
 	});
 
-	test("uses first item type for non-string const (number literal)", () => {
+	test("coerces number const values to strings", () => {
 		const input = {
 			anyOf: [
 				{ const: 1, type: "integer" },
@@ -87,8 +87,8 @@ describe("convertSchemaForGoogle", () => {
 			],
 		};
 		expect(convertSchemaForGoogle(input)).toEqual({
-			type: "integer",
-			enum: [1, 2],
+			type: "string",
+			enum: ["1", "2"],
 		});
 	});
 

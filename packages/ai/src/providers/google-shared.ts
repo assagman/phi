@@ -262,10 +262,9 @@ export function convertSchemaForGoogle(schema: Record<string, unknown>): Record<
 
 		// Check if all items are const-style: { const: "value", type: "string" }
 		if (flattened.length > 0 && flattened.every((item) => "const" in item)) {
-			const enumValues = flattened.map((item) => item.const as string);
-			const type = (flattened[0].type as string) || "string";
+			const enumValues = flattened.map((item) => String(item.const));
 			delete result.anyOf;
-			result.type = type;
+			result.type = "string"; // Google requires enums to always be string type
 			result.enum = enumValues;
 		} else {
 			// Mixed anyOf — convert each branch recursively
