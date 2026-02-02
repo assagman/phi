@@ -17,6 +17,6 @@
 			"tui/*": ["./packages/tui/src/*"],
 		}
 	},
-	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*"],
-	"exclude": ["**/dist/**"]
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*"],
+	"exclude": ["**/dist/**", "packages/coding-agent/examples/**"]
 }
