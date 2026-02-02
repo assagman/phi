@@ -2,8 +2,8 @@
  * Model resolution, scoping, and initial selection
  */
 
-import type { ThinkingLevel } from "@mariozechner/phi-agent-core";
-import { type Api, type KnownProvider, type Model, modelsAreEqual } from "@mariozechner/phi-ai";
+import type { ThinkingLevel } from "agent";
+import { type Api, type KnownProvider, type Model, modelsAreEqual } from "ai";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
 import { isValidThinkingLevel } from "../cli/args.js";
@@ -30,6 +30,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	minimax: "MiniMax-M2.1",
 	"minimax-cn": "MiniMax-M2.1",
 	opencode: "claude-opus-4-5",
+	"kimi-for-coding": "k2p5",
 };
 
 export interface ScopedModel {

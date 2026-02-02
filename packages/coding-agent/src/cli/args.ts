@@ -2,7 +2,7 @@
  * CLI argument parsing and help display
  */
 
-import type { ThinkingLevel } from "@mariozechner/phi-agent-core";
+import type { ThinkingLevel } from "agent";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR } from "../config.js";
 import { allTools, type ToolName } from "../core/tools/index.js";
@@ -19,7 +19,6 @@ export interface Args {
 	continue?: boolean;
 	resume?: boolean;
 	help?: boolean;
-	version?: boolean;
 	mode?: Mode;
 	noSession?: boolean;
 	session?: string;
@@ -58,8 +57,6 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 
 		if (arg === "--help" || arg === "-h") {
 			result.help = true;
-		} else if (arg === "--version" || arg === "-v") {
-			result.version = true;
 		} else if (arg === "--mode" && i + 1 < args.length) {
 			const mode = args[++i];
 			if (mode === "text" || mode === "json" || mode === "rpc") {
@@ -188,7 +185,6 @@ ${chalk.bold("Options:")}
   --export <file>                Export session file to HTML and exit
   --list-models [search]         List available models (with optional fuzzy search)
   --help, -h                     Show this help
-  --version, -v                  Show version number
 
 Extensions can register additional flags (e.g., --plan from plan-mode extension).
 
@@ -246,6 +242,7 @@ ${chalk.bold("Environment Variables:")}
   ZAI_API_KEY             - ZAI API key
   MISTRAL_API_KEY         - Mistral API key
   MINIMAX_API_KEY         - MiniMax API key
+  KIMI_API_KEY            - Kimi for Coding API key
   AWS_PROFILE             - AWS profile for Amazon Bedrock
   AWS_ACCESS_KEY_ID       - AWS access key for Amazon Bedrock
   AWS_SECRET_ACCESS_KEY   - AWS secret key for Amazon Bedrock
