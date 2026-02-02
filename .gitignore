@@ -36,4 +36,5 @@ packages/coding-agent/binaries/
 # TypeScript build outputs in src (when emit is configured to output alongside source)
 packages/*/src/**/*.js
 packages/*/src/**/*.d.ts
+packages/*/src/**/*.d.ts.map
 packages/*/src/**/*.js.map
