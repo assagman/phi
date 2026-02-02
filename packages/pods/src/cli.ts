@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import chalk from "chalk";
 import { spawn } from "child_process";
 import { readFileSync } from "fs";

@@ -25,6 +25,6 @@ else
         tail -f /dev/null
 fi
 
-# Run mom with tsx watch mode
+# Run mom with bun watch mode
 echo "Starting mom in dev mode..."
-npx tsx --watch-path src --watch src/main.ts --sandbox=docker:$CONTAINER_NAME ./data
+bun --watch src/main.ts --sandbox=docker:$CONTAINER_NAME ./data

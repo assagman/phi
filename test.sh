@@ -38,4 +38,4 @@ unset GH_TOKEN
 unset GITHUB_TOKEN
 
 echo "Running tests without API keys..."
-npm test
+bun test

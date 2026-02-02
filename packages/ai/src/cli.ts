@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { createInterface } from "readline";

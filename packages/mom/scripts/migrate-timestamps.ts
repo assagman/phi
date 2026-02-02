@@ -1,9 +1,9 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 /**
  * Migrate log.jsonl timestamps from milliseconds to Slack format (seconds.microseconds)
  * 
- * Usage: npx tsx scripts/migrate-timestamps.ts <data-dir>
- * Example: npx tsx scripts/migrate-timestamps.ts ./data
+ * Usage: bun scripts/migrate-timestamps.ts <data-dir>
+ * Example: bun scripts/migrate-timestamps.ts ./data
  */
 
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "fs";

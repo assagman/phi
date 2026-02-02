@@ -8,12 +8,12 @@
 		"packages/coding-agent/examples/extensions/with-deps"
 	],
 	"scripts": {
-		"clean": "npm run clean --workspaces",
-		"build": "npm run build -w tui && npm run build -w ai && npm run build -w agent && npm run build -w coding-agent && npm run build -w mom && npm run build -w web-ui && npm run build -w pods",
-		"dev": "concurrently --names \"ai,agent,coding-agent,mom,web-ui,tui\" --prefix-colors \"cyan,yellow,red,white,green,magenta\" \"npm run dev -w ai\" \"npm run dev -w agent\" \"npm run dev -w coding-agent\" \"npm run dev -w mom\" \"npm run dev -w web-ui\" \"npm run dev -w tui\"",
-		"dev:tsc": "concurrently --names \"ai,web-ui\" --prefix-colors \"cyan,green\" \"npm run dev:tsc -w ai\" \"npm run dev:tsc -w web-ui\"",
-		"check": "biome check --write . && tsgo --noEmit && npm run check -w web-ui",
-		"test": "npm run test --workspaces --if-present",
+		"clean": "bun run --workspaces clean",
+		"build": "bun run --filter tui build && bun run --filter ai build && bun run --filter agent build && bun run --filter coding-agent build && bun run --filter mom build && bun run --filter web-ui build && bun run --filter pods build",
+		"dev": "concurrently --names \"ai,agent,coding-agent,mom,web-ui,tui\" --prefix-colors \"cyan,yellow,red,white,green,magenta\" \"bun run --filter ai dev\" \"bun run --filter agent dev\" \"bun run --filter coding-agent dev\" \"bun run --filter mom dev\" \"bun run --filter web-ui dev\" \"bun run --filter tui dev\"",
+		"dev:tsc": "concurrently --names \"ai,web-ui\" --prefix-colors \"cyan,green\" \"bun run --filter ai dev:tsc\" \"bun run --filter web-ui dev:tsc\"",
+		"check": "biome check --write . && tsgo --noEmit && bun run --filter web-ui check",
+		"test": "bun test --workspaces",
 		"prepare": "husky"
 	},
 	"devDependencies": {
@@ -24,9 +24,6 @@
 		"husky": "^9.1.7",
 		"tsx": "^4.20.3",
 		"typescript": "^5.9.2"
-	},
-	"engines": {
-		"node": ">=20.0.0"
 	},
 	"dependencies": {
 		"@mariozechner/jiti": "^2.6.5",
