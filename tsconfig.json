@@ -13,8 +13,6 @@
 			"coding-agent/*": ["./packages/coding-agent/src/*"],
 			"@sinclair/typebox": ["./node_modules/@sinclair/typebox"],
 
-			"pods": ["./packages/pods/src/index.ts"],
-			"pods/*": ["./packages/pods/src/*"],
 			"tui": ["./packages/tui/src/index.ts"],
 			"tui/*": ["./packages/tui/src/*"],
 		}

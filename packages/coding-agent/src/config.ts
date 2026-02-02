@@ -106,6 +106,7 @@ const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8"));
 
 export const APP_NAME: string = pkg.phiConfig?.name || "phi";
 export const CONFIG_DIR_NAME: string = pkg.phiConfig?.configDir || ".phi";
+export const VERSION: string = pkg.version;
 
 // e.g., PHI_CODING_AGENT_DIR
 export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;

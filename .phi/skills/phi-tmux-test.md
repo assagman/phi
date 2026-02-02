@@ -51,7 +51,7 @@ Write extensions to /tmp and load with `-e`:
 
 ```bash
 cat > /tmp/test-extension.ts << 'EOF'
-import type { ExtensionAPI } from "@mariozechner/phi-coding-agent";
+import type { ExtensionAPI } from "coding-agent";
 export default function (pi: ExtensionAPI) {
   // extension code
 }
