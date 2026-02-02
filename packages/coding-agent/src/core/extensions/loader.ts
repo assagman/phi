@@ -10,17 +10,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "@mariozechner/jiti";
-import * as _bundledPiAgentCore from "@mariozechner/pi-agent-core";
-import * as _bundledPiAi from "@mariozechner/pi-ai";
-import type { KeyId } from "@mariozechner/pi-tui";
-import * as _bundledPiTui from "@mariozechner/pi-tui";
+import * as _bundledPiAgentCore from "@mariozechner/phi-agent-core";
+import * as _bundledPiAi from "@mariozechner/phi-ai";
+import type { KeyId } from "@mariozechner/phi-tui";
+import * as _bundledPiTui from "@mariozechner/phi-tui";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
 import * as _bundledTypebox from "@sinclair/typebox";
 import { getAgentDir, isBunBinary } from "../../config.js";
 // NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
-// avoiding a circular dependency. Extensions can import from @mariozechner/pi-coding-agent.
+// avoiding a circular dependency. Extensions can import from @mariozechner/phi-coding-agent.
 import * as _bundledPiCodingAgent from "../../index.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
@@ -39,10 +39,10 @@ import type {
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
 const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@sinclair/typebox": _bundledTypebox,
-	"@mariozechner/pi-agent-core": _bundledPiAgentCore,
-	"@mariozechner/pi-tui": _bundledPiTui,
-	"@mariozechner/pi-ai": _bundledPiAi,
-	"@mariozechner/pi-coding-agent": _bundledPiCodingAgent,
+	"@mariozechner/phi-agent-core": _bundledPiAgentCore,
+	"@mariozechner/phi-tui": _bundledPiTui,
+	"@mariozechner/phi-ai": _bundledPiAi,
+	"@mariozechner/phi-coding-agent": _bundledPiCodingAgent,
 };
 
 const require = createRequire(import.meta.url);
@@ -62,10 +62,10 @@ function getAliases(): Record<string, string> {
 	const typeboxRoot = typeboxEntry.replace(/\/build\/cjs\/index\.js$/, "");
 
 	_aliases = {
-		"@mariozechner/pi-coding-agent": packageIndex,
-		"@mariozechner/pi-agent-core": require.resolve("@mariozechner/pi-agent-core"),
-		"@mariozechner/pi-tui": require.resolve("@mariozechner/pi-tui"),
-		"@mariozechner/pi-ai": require.resolve("@mariozechner/pi-ai"),
+		"@mariozechner/phi-coding-agent": packageIndex,
+		"@mariozechner/phi-agent-core": require.resolve("@mariozechner/phi-agent-core"),
+		"@mariozechner/phi-tui": require.resolve("@mariozechner/phi-tui"),
+		"@mariozechner/phi-ai": require.resolve("@mariozechner/phi-ai"),
 		"@sinclair/typebox": typeboxRoot,
 	};
 

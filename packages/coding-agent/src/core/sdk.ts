@@ -20,8 +20,8 @@
  * ```
  */
 
-import { Agent, type AgentMessage, type AgentTool, type ThinkingLevel } from "@mariozechner/pi-agent-core";
-import type { Message, Model } from "@mariozechner/pi-ai";
+import { Agent, type AgentMessage, type AgentTool, type ThinkingLevel } from "@mariozechner/phi-agent-core";
+import type { Message, Model } from "@mariozechner/phi-ai";
 import { join } from "path";
 import { getAgentDir } from "../config.js";
 import { AgentSession } from "./agent-session.js";
@@ -318,7 +318,7 @@ export function loadSettings(cwd?: string, agentDir?: string): Settings {
  * const { session } = await createAgentSession();
  *
  * // With explicit model
- * import { getModel } from '@mariozechner/pi-ai';
+ * import { getModel } from '@mariozechner/phi-ai';
  * const { session } = await createAgentSession({
  *   model: getModel('anthropic', 'claude-opus-4-5'),
  *   thinkingLevel: 'high',

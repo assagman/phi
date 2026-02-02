@@ -131,7 +131,7 @@ Themes are defined in JSON files with the following structure:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/theme-schema.json",
+  "$schema": "https://raw.githubusercontent.com/badlogic/phi-mono/main/packages/coding-agent/theme-schema.json",
   "name": "my-theme",
   "vars": {
     "blue": "#0066cc",
@@ -247,7 +247,7 @@ Custom themes are loaded from `~/.pi/agent/themes/*.json`.
 3. **Define all colors:**
    ```json
    {
-     "$schema": "https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/theme-schema.json",
+     "$schema": "https://raw.githubusercontent.com/badlogic/phi-mono/main/packages/coding-agent/theme-schema.json",
      "name": "my-theme",
      "vars": {
        "primary": "#00aaff",
@@ -429,13 +429,13 @@ Error loading theme 'my-theme':
 
 For editor support, the JSON schema is available at:
 ```
-https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/theme-schema.json
+https://raw.githubusercontent.com/badlogic/phi-mono/main/packages/coding-agent/theme-schema.json
 ```
 
 Add to your theme file for auto-completion and validation:
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/theme-schema.json",
+  "$schema": "https://raw.githubusercontent.com/badlogic/phi-mono/main/packages/coding-agent/theme-schema.json",
   ...
 }
 ```
@@ -482,10 +482,10 @@ theme.bg('userMessageBg', content)
 
 ### TUI Component Theming
 
-TUI components (like `Markdown`, `SelectList`, `Editor`) are in the `@mariozechner/pi-tui` package and don't have direct access to the theme. Instead, they define interfaces for the colors they need:
+TUI components (like `Markdown`, `SelectList`, `Editor`) are in the `@mariozechner/phi-tui` package and don't have direct access to the theme. Instead, they define interfaces for the colors they need:
 
 ```typescript
-// In @mariozechner/pi-tui
+// In @mariozechner/phi-tui
 export interface MarkdownTheme {
   heading: (text: string) => string;
   link: (text: string) => string;
@@ -509,7 +509,7 @@ The `coding-agent` provides themed functions when creating components:
 ```typescript
 // In coding-agent
 import { theme } from './theme.js';
-import { Markdown } from '@mariozechner/pi-tui';
+import { Markdown } from '@mariozechner/phi-tui';
 
 // Helper to create markdown theme functions
 function getMarkdownTheme(): MarkdownTheme {

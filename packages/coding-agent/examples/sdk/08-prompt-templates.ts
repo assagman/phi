@@ -9,7 +9,7 @@ import {
 	discoverPromptTemplates,
 	type PromptTemplate,
 	SessionManager,
-} from "@mariozechner/pi-coding-agent";
+} from "@mariozechner/phi-coding-agent";
 
 // Discover templates from cwd/.pi/prompts/ and ~/.pi/agent/prompts/
 const discovered = discoverPromptTemplates();

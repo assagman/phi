@@ -303,7 +303,7 @@ pi.on("session_before_compact", async (event, ctx) => {
 To generate a summary with your own model, convert messages to text using `serializeConversation`:
 
 ```typescript
-import { convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
+import { convertToLlm, serializeConversation } from "@mariozechner/phi-coding-agent";
 
 pi.on("session_before_compact", async (event, ctx) => {
   const { preparation } = event;

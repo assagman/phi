@@ -10,7 +10,7 @@ import {
 	type KnownProvider,
 	type Model,
 	normalizeDomain,
-} from "@mariozechner/pi-ai";
+} from "@mariozechner/phi-ai";
 import { type Static, Type } from "@sinclair/typebox";
 import AjvModule from "ajv";
 import { execSync } from "child_process";

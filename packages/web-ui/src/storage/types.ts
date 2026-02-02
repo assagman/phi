@@ -1,5 +1,5 @@
-import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
-import type { Model } from "@mariozechner/pi-ai";
+import type { AgentMessage, ThinkingLevel } from "@mariozechner/phi-agent-core";
+import type { Model } from "@mariozechner/phi-ai";
 
 /**
  * Transaction interface for atomic operations across stores.

@@ -1,18 +1,18 @@
-# @mariozechner/pi-agent
+# @mariozechner/phi-agent
 
-Stateful agent with tool execution and event streaming. Built on `@mariozechner/pi-ai`.
+Stateful agent with tool execution and event streaming. Built on `@mariozechner/phi-ai`.
 
 ## Installation
 
 ```bash
-npm install @mariozechner/pi-agent
+npm install @mariozechner/phi-agent
 ```
 
 ## Quick Start
 
 ```typescript
-import { Agent } from "@mariozechner/pi-agent";
-import { getModel } from "@mariozechner/pi-ai";
+import { Agent } from "@mariozechner/phi-agent";
+import { getModel } from "@mariozechner/phi-ai";
 
 const agent = new Agent({
   initialState: {
@@ -293,7 +293,7 @@ Follow-up messages are checked only when there are no more tool calls and no ste
 Extend `AgentMessage` via declaration merging:
 
 ```typescript
-declare module "@mariozechner/pi-agent" {
+declare module "@mariozechner/phi-agent" {
   interface CustomAgentMessages {
     notification: { role: "notification"; text: string; timestamp: number };
   }
@@ -365,7 +365,7 @@ Thrown errors are caught by the agent and reported to the LLM as tool errors wit
 For browser apps that proxy through a backend:
 
 ```typescript
-import { Agent, streamProxy } from "@mariozechner/pi-agent";
+import { Agent, streamProxy } from "@mariozechner/phi-agent";
 
 const agent = new Agent({
   streamFn: (model, context, options) =>
@@ -382,7 +382,7 @@ const agent = new Agent({
 For direct control without the Agent class:
 
 ```typescript
-import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent";
+import { agentLoop, agentLoopContinue } from "@mariozechner/phi-agent";
 
 const context: AgentContext = {
   systemPrompt: "You are helpful.",

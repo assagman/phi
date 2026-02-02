@@ -31,10 +31,11 @@
 	"dependencies": {
 		"@mariozechner/clipboard": "^0.3.0",
 		"@mariozechner/jiti": "^2.6.2",
+		"@silvia-odwyer/photon-node": "^0.3.4",
+		"@sinclair/typebox": "^0.34.48",
 		"agent": "*",
 		"ai": "*",
-		"tui": "*",
-		"@silvia-odwyer/photon-node": "^0.3.4",
+		"ajv": "^8.17.1",
 		"chalk": "^5.5.0",
 		"cli-highlight": "^2.1.11",
 		"diff": "^8.0.2",
@@ -43,6 +44,8 @@
 		"marked": "^15.0.12",
 		"minimatch": "^10.1.1",
 		"proper-lockfile": "^4.1.2",
+		"strip-ansi": "^7.1.2",
+		"tui": "*",
 		"yaml": "^2.8.2"
 	},
 	"devDependencies": {
