@@ -4,7 +4,7 @@
  * Override settings using SettingsManager.
  */
 
-import { createAgentSession, loadSettings, SessionManager, SettingsManager } from "@mariozechner/phi-coding-agent";
+import { createAgentSession, loadSettings, SessionManager, SettingsManager } from "coding-agent";
 
 // Load current settings (merged global + project)
 const settings = loadSettings();

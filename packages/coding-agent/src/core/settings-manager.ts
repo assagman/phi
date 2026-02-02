@@ -52,6 +52,7 @@ export interface MarkdownSettings {
 }
 
 export interface Settings {
+	/** @deprecated No longer used - version check removed */
 	lastChangelogVersion?: string;
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -66,7 +67,6 @@ export interface Settings {
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows)
 	quietStartup?: boolean;
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
-	collapseChangelog?: boolean; // Show condensed changelog after update (use /changelog for full)
 	extensions?: string[]; // Array of extension file paths
 	skills?: SkillsSettings;
 	terminal?: TerminalSettings;
@@ -77,6 +77,8 @@ export interface Settings {
 	editorPaddingX?: number; // Horizontal padding for input editor (default: 0)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
+	/** @deprecated No longer used - changelog display removed */
+	collapseChangelog?: boolean;
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -212,15 +214,6 @@ export class SettingsManager {
 		// Always re-merge to update active settings (needed for both file and inMemory modes)
 		const projectSettings = this.loadProjectSettings();
 		this.settings = deepMergeSettings(this.globalSettings, projectSettings);
-	}
-
-	getLastChangelogVersion(): string | undefined {
-		return this.settings.lastChangelogVersion;
-	}
-
-	setLastChangelogVersion(version: string): void {
-		this.globalSettings.lastChangelogVersion = version;
-		this.save();
 	}
 
 	getDefaultProvider(): string | undefined {
@@ -370,15 +363,6 @@ export class SettingsManager {
 
 	setShellCommandPrefix(prefix: string | undefined): void {
 		this.globalSettings.shellCommandPrefix = prefix;
-		this.save();
-	}
-
-	getCollapseChangelog(): boolean {
-		return this.settings.collapseChangelog ?? false;
-	}
-
-	setCollapseChangelog(collapse: boolean): void {
-		this.globalSettings.collapseChangelog = collapse;
 		this.save();
 	}
 

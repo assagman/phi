@@ -2,7 +2,7 @@
  * Utilities for formatting keybinding hints in the UI.
  */
 
-import { type EditorAction, getEditorKeybindings, type KeyId } from "@mariozechner/phi-tui";
+import { type EditorAction, getEditorKeybindings, type KeyId } from "tui";
 import type { AppAction, KeybindingsManager } from "../../../core/keybindings.js";
 import { theme } from "../theme/theme.js";
 

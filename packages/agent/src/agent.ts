@@ -11,7 +11,7 @@ import {
 	streamSimple,
 	type TextContent,
 	type ThinkingBudgets,
-} from "@mariozechner/phi-ai";
+} from "ai";
 import { agentLoop, agentLoopContinue } from "./agent-loop.js";
 import type {
 	AgentContext,

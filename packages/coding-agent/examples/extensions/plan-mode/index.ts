@@ -12,10 +12,10 @@
  * - Progress tracking widget during execution
  */
 
-import type { AgentMessage } from "@mariozechner/phi-agent-core";
-import type { AssistantMessage, TextContent } from "@mariozechner/phi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/phi-coding-agent";
-import { Key } from "@mariozechner/phi-tui";
+import type { AgentMessage } from "agent";
+import type { AssistantMessage, TextContent } from "ai";
+import type { ExtensionAPI, ExtensionContext } from "coding-agent";
+import { Key } from "tui";
 import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils.js";
 
 // Tools

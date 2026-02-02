@@ -4,9 +4,9 @@
  * Escape in editor returns to options, Escape in options cancels
  */
 
-import type { ExtensionAPI } from "@mariozechner/phi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth } from "@mariozechner/phi-tui";
 import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI } from "coding-agent";
+import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth } from "tui";
 
 interface OptionWithDesc {
 	label: string;

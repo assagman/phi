@@ -2,7 +2,7 @@
  * TUI session selector for --resume flag
  */
 
-import { ProcessTerminal, TUI } from "@mariozechner/phi-tui";
+import { ProcessTerminal, TUI } from "tui";
 import type { SessionInfo, SessionListProgress } from "../core/session-manager.js";
 import { SessionSelectorComponent } from "../modes/interactive/components/session-selector.js";
 

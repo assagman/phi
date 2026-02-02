@@ -17,7 +17,7 @@ vi.mock("child_process", () => {
 	};
 });
 
-vi.mock("@mariozechner/clipboard", () => {
+vi.mock("clipboardy", () => {
 	return {
 		default: mocks.clipboard,
 	};
@@ -54,7 +54,7 @@ describe("readClipboardImage", () => {
 		mocks.clipboard.getImageBinary.mockReset();
 	});
 
-	test("Wayland: uses wl-paste and never calls @mariozechner/clipboard", async () => {
+	test("Wayland: uses wl-paste and never calls clipboardy", async () => {
 		mocks.clipboard.hasImage.mockImplementation(() => {
 			throw new Error("clipboard.hasImage should not be called on Wayland");
 		});
@@ -107,7 +107,7 @@ describe("readClipboardImage", () => {
 		expect(Array.from(result?.bytes ?? [])).toEqual([9, 8]);
 	});
 
-	test("Non-Wayland: uses @mariozechner/clipboard", async () => {
+	test("Non-Wayland: uses clipboardy", async () => {
 		mocks.spawnSync.mockImplementation(() => {
 			throw new Error("spawnSync should not be called for non-Wayland sessions");
 		});

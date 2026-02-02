@@ -1,4 +1,4 @@
-import { Container, Markdown, type MarkdownTheme, Spacer } from "@mariozechner/phi-tui";
+import { Container, Markdown, type MarkdownTheme, Spacer } from "tui";
 import { getMarkdownTheme, theme } from "../theme/theme.js";
 
 /**

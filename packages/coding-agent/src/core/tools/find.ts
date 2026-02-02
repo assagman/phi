@@ -1,5 +1,5 @@
-import type { AgentTool } from "@mariozechner/phi-agent-core";
 import { Type } from "@sinclair/typebox";
+import type { AgentTool } from "agent";
 import { spawnSync } from "child_process";
 import { existsSync } from "fs";
 import { globSync } from "glob";

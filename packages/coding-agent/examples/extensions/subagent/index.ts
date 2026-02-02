@@ -16,12 +16,12 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@mariozechner/phi-agent-core";
-import type { Message } from "@mariozechner/phi-ai";
-import { StringEnum } from "@mariozechner/phi-ai";
-import { type ExtensionAPI, getMarkdownTheme } from "@mariozechner/phi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@mariozechner/phi-tui";
 import { Type } from "@sinclair/typebox";
+import type { AgentToolResult } from "agent";
+import type { Message } from "ai";
+import { StringEnum } from "ai";
+import { type ExtensionAPI, getMarkdownTheme } from "coding-agent";
+import { Container, Markdown, Spacer, Text } from "tui";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
 
 const MAX_PARALLEL_TASKS = 8;

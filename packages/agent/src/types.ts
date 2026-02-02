@@ -1,3 +1,4 @@
+import type { Static, TSchema } from "@sinclair/typebox";
 import type {
 	AssistantMessageEvent,
 	ImageContent,
@@ -8,8 +9,7 @@ import type {
 	TextContent,
 	Tool,
 	ToolResultMessage,
-} from "@mariozechner/phi-ai";
-import type { Static, TSchema } from "@sinclair/typebox";
+} from "ai";
 
 /** Stream function - can return sync or Promise for async config lookup */
 export type StreamFn = (
@@ -109,7 +109,7 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
  *
  * @example
  * ```typescript
- * declare module "@mariozechner/agent" {
+ * declare module "agent" {
  *   interface CustomAgentMessages {
  *     artifact: ArtifactMessage;
  *     notification: NotificationMessage;

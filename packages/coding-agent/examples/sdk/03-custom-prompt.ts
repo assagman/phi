@@ -4,7 +4,7 @@
  * Shows how to replace or modify the default system prompt.
  */
 
-import { createAgentSession, SessionManager } from "@mariozechner/phi-coding-agent";
+import { createAgentSession, SessionManager } from "coding-agent";
 
 // Option 1: Replace prompt entirely
 const { session: session1 } = await createAgentSession({

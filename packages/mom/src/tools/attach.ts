@@ -1,5 +1,5 @@
-import type { AgentTool } from "@mariozechner/phi-agent-core";
 import { Type } from "@sinclair/typebox";
+import type { AgentTool } from "agent";
 import { basename, resolve as resolvePath } from "path";
 
 // This will be set by the agent before running

@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 import chalk from "chalk";
 import { spawn } from "child_process";
-import { readFileSync } from "fs";
-import { dirname, join } from "path";
+import { dirname } from "path";
 import { fileURLToPath } from "url";
 import { listModels, showKnownModels, startModel, stopAllModels, stopModel, viewLogs } from "./commands/models.js";
 import { listPods, removePodCommand, setupPod, switchActivePod } from "./commands/pods.js";
@@ -13,10 +12,8 @@ import { sshExecStream } from "./ssh.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const packageJson = JSON.parse(readFileSync(join(__dirname, "../package.json"), "utf-8"));
-
 function printHelp() {
-	console.log(`pi v${packageJson.version} - Manage vLLM deployments on GPU pods
+	console.log(`pi - Manage vLLM deployments on GPU pods
 
 Pod Management:
   pi pods setup <name> "<ssh>" --mount "<mount>"    Setup pod with mount command
@@ -58,11 +55,6 @@ const args = process.argv.slice(2);
 
 if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
 	printHelp();
-	process.exit(0);
-}
-
-if (args[0] === "--version" || args[0] === "-v") {
-	console.log(packageJson.version);
 	process.exit(0);
 }
 

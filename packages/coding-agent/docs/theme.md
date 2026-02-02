@@ -482,10 +482,10 @@ theme.bg('userMessageBg', content)
 
 ### TUI Component Theming
 
-TUI components (like `Markdown`, `SelectList`, `Editor`) are in the `@mariozechner/phi-tui` package and don't have direct access to the theme. Instead, they define interfaces for the colors they need:
+TUI components (like `Markdown`, `SelectList`, `Editor`) are in the `tui` package and don't have direct access to the theme. Instead, they define interfaces for the colors they need:
 
 ```typescript
-// In @mariozechner/phi-tui
+// In tui
 export interface MarkdownTheme {
   heading: (text: string) => string;
   link: (text: string) => string;
@@ -509,7 +509,7 @@ The `coding-agent` provides themed functions when creating components:
 ```typescript
 // In coding-agent
 import { theme } from './theme.js';
-import { Markdown } from '@mariozechner/phi-tui';
+import { Markdown } from 'tui';
 
 // Helper to create markdown theme functions
 function getMarkdownTheme(): MarkdownTheme {

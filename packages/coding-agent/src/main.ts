@@ -5,7 +5,7 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
-import { type ImageContent, modelsAreEqual, supportsXhigh } from "@mariozechner/phi-ai";
+import { type ImageContent, modelsAreEqual, supportsXhigh } from "ai";
 import chalk from "chalk";
 import { existsSync } from "fs";
 import { join } from "path";
@@ -14,7 +14,7 @@ import { type Args, parseArgs, printHelp } from "./cli/args.js";
 import { processFileArguments } from "./cli/file-processor.js";
 import { listModels } from "./cli/list-models.js";
 import { selectSession } from "./cli/session-picker.js";
-import { CONFIG_DIR_NAME, getAgentDir, getModelsPath, VERSION } from "./config.js";
+import { CONFIG_DIR_NAME, getAgentDir, getModelsPath } from "./config.js";
 import { createEventBus } from "./core/event-bus.js";
 import { exportFromFile } from "./core/export-html/index.js";
 import { discoverAndLoadExtensions, type LoadExtensionsResult, loadExtensions } from "./core/extensions/index.js";
@@ -175,13 +175,13 @@ async function createSessionManager(parsed: Args, cwd: string): Promise<SessionM
 
 /** Discover SYSTEM.md file if no CLI system prompt was provided */
 function discoverSystemPromptFile(): string | undefined {
-	// Check project-local first: .pi/SYSTEM.md
+	// Check project-local first: .phi/SYSTEM.md
 	const projectPath = join(process.cwd(), CONFIG_DIR_NAME, "SYSTEM.md");
 	if (existsSync(projectPath)) {
 		return projectPath;
 	}
 
-	// Fall back to global: ~/.pi/agent/SYSTEM.md
+	// Fall back to global: ~/.phi/agent/SYSTEM.md
 	const globalPath = join(getAgentDir(), "SYSTEM.md");
 	if (existsSync(globalPath)) {
 		return globalPath;
@@ -192,13 +192,13 @@ function discoverSystemPromptFile(): string | undefined {
 
 /** Discover APPEND_SYSTEM.md file if no CLI append system prompt was provided */
 function discoverAppendSystemPromptFile(): string | undefined {
-	// Check project-local first: .pi/APPEND_SYSTEM.md
+	// Check project-local first: .phi/APPEND_SYSTEM.md
 	const projectPath = join(process.cwd(), CONFIG_DIR_NAME, "APPEND_SYSTEM.md");
 	if (existsSync(projectPath)) {
 		return projectPath;
 	}
 
-	// Fall back to global: ~/.pi/agent/APPEND_SYSTEM.md
+	// Fall back to global: ~/.phi/agent/APPEND_SYSTEM.md
 	const globalPath = join(getAgentDir(), "APPEND_SYSTEM.md");
 	if (existsSync(globalPath)) {
 		return globalPath;
@@ -366,11 +366,6 @@ export async function main(args: string[]) {
 	// Pass flag values to extensions via runtime
 	for (const [name, value] of parsed.unknownFlags) {
 		extensionsResult.runtime.flagValues.set(name, value);
-	}
-
-	if (parsed.version) {
-		console.log(VERSION);
-		return;
 	}
 
 	if (parsed.help) {

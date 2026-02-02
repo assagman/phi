@@ -52,7 +52,7 @@ See [examples/extensions/](../examples/extensions/) for working implementations.
 Create `~/.pi/agent/extensions/my-extension.ts`:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/phi-coding-agent";
+import type { ExtensionAPI } from "coding-agent";
 import { Type } from "@sinclair/typebox";
 
 export default function (pi: ExtensionAPI) {
@@ -161,10 +161,10 @@ The `package.json` approach enables:
 
 | Package | Purpose |
 |---------|---------|
-| `@mariozechner/phi-coding-agent` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
+| `coding-agent` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
 | `@sinclair/typebox` | Schema definitions for tool parameters |
-| `@mariozechner/phi-ai` | AI utilities (`StringEnum` for Google-compatible enums) |
-| `@mariozechner/phi-tui` | TUI components for custom rendering |
+| `ai` | AI utilities (`StringEnum` for Google-compatible enums) |
+| `tui` | TUI components for custom rendering |
 
 npm dependencies work too. Add a `package.json` next to your extension (or in a parent directory), run `npm install`, and imports from `node_modules/` are resolved automatically.
 
@@ -175,7 +175,7 @@ Node.js built-ins (`node:fs`, `node:path`, etc.) are also available.
 An extension exports a default function that receives `ExtensionAPI`:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/phi-coding-agent";
+import type { ExtensionAPI } from "coding-agent";
 
 export default function (pi: ExtensionAPI) {
   // Subscribe to events
@@ -538,7 +538,7 @@ pi.on("tool_call", async (event, ctx) => {
 Fired after tool executes. **Can modify result.**
 
 ```typescript
-import { isBashToolResult } from "@mariozechner/phi-coding-agent";
+import { isBashToolResult } from "coding-agent";
 
 pi.on("tool_result", async (event, ctx) => {
   // event.toolName, event.toolCallId, event.input
@@ -784,7 +784,7 @@ Register a custom tool callable by the LLM. See [Custom Tools](#custom-tools) fo
 
 ```typescript
 import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/phi-ai";
+import { StringEnum } from "ai";
 
 pi.registerTool({
   name: "my_tool",
@@ -938,7 +938,7 @@ pi.registerCommand("stats", {
 Optional: add argument auto-completion for `/command ...`:
 
 ```typescript
-import type { AutocompleteItem } from "@mariozechner/phi-tui";
+import type { AutocompleteItem } from "tui";
 
 pi.registerCommand("deploy", {
   description: "Deploy to an environment",
@@ -1096,8 +1096,8 @@ Register tools the LLM can call via `pi.registerTool()`. Tools appear in the sys
 
 ```typescript
 import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/phi-ai";
-import { Text } from "@mariozechner/phi-tui";
+import { StringEnum } from "ai";
+import { Text } from "tui";
 
 pi.registerTool({
   name: "my_tool",
@@ -1136,7 +1136,7 @@ pi.registerTool({
 });
 ```
 
-**Important:** Use `StringEnum` from `@mariozechner/phi-ai` for string enums. `Type.Union`/`Type.Literal` doesn't work with Google's API.
+**Important:** Use `StringEnum` from `ai` for string enums. `Type.Union`/`Type.Literal` doesn't work with Google's API.
 
 ### Overriding Built-in Tools
 
@@ -1173,7 +1173,7 @@ Built-in tool implementations:
 Built-in tools support pluggable operations for delegating to remote systems (SSH, containers, etc.):
 
 ```typescript
-import { createReadTool, createBashTool, type ReadOperations } from "@mariozechner/phi-coding-agent";
+import { createReadTool, createBashTool, type ReadOperations } from "coding-agent";
 
 // Create tool with custom operations
 const remoteRead = createReadTool(cwd, {
@@ -1217,7 +1217,7 @@ import {
   formatSize,        // Human-readable size (e.g., "50KB", "1.5MB")
   DEFAULT_MAX_BYTES, // 50KB
   DEFAULT_MAX_LINES, // 2000
-} from "@mariozechner/phi-coding-agent";
+} from "coding-agent";
 
 async execute(toolCallId, params, onUpdate, ctx, signal) {
   const output = await runCommand();
@@ -1281,7 +1281,7 @@ Tool output is wrapped in a `Box` that handles padding and background. Your rend
 Renders the tool call (before/during execution):
 
 ```typescript
-import { Text } from "@mariozechner/phi-tui";
+import { Text } from "tui";
 
 renderCall(args, theme) {
   let text = theme.fg("toolTitle", theme.bold("my_tool "));
@@ -1325,7 +1325,7 @@ renderResult(result, { expanded, isPartial }, theme) {
 Use `keyHint()` to display keybinding hints that respect user's keybinding configuration:
 
 ```typescript
-import { keyHint } from "@mariozechner/phi-coding-agent";
+import { keyHint } from "coding-agent";
 
 renderResult(result, { expanded }, theme) {
   let text = theme.fg("success", "✓ Done");
@@ -1505,7 +1505,7 @@ ctx.ui.theme.fg("accent", "styled text");  // Access current theme
 For complex UI, use `ctx.ui.custom()`. This temporarily replaces the editor with your component until `done()` is called:
 
 ```typescript
-import { Text, Component } from "@mariozechner/phi-tui";
+import { Text, Component } from "tui";
 
 const result = await ctx.ui.custom<boolean>((tui, theme, keybindings, done) => {
   const text = new Text("Press Enter to confirm, Escape to cancel", 1, 1);
@@ -1565,8 +1565,8 @@ See [tui.md](tui.md) for the full `OverlayOptions` API and [overlay-qa-tests.ts]
 Replace the main input editor with a custom implementation (vim mode, emacs mode, etc.):
 
 ```typescript
-import { CustomEditor, type ExtensionAPI } from "@mariozechner/phi-coding-agent";
-import { matchesKey } from "@mariozechner/phi-tui";
+import { CustomEditor, type ExtensionAPI } from "coding-agent";
+import { matchesKey } from "tui";
 
 class VimEditor extends CustomEditor {
   private mode: "normal" | "insert" = "insert";
@@ -1608,7 +1608,7 @@ See [tui.md](tui.md) Pattern 7 for a complete example with mode indicator.
 Register a custom renderer for messages with your `customType`:
 
 ```typescript
-import { Text } from "@mariozechner/phi-tui";
+import { Text } from "tui";
 
 pi.registerMessageRenderer("my-extension", (message, options, theme) => {
   const { expanded } = options;

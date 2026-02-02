@@ -4,8 +4,8 @@
  * Shows how to select a specific model and thinking level.
  */
 
-import { getModel } from "@mariozechner/phi-ai";
-import { createAgentSession, discoverAuthStorage, discoverModels } from "@mariozechner/phi-coding-agent";
+import { getModel } from "ai";
+import { createAgentSession, discoverAuthStorage, discoverModels } from "coding-agent";
 
 // Set up auth storage and model registry
 const authStorage = discoverAuthStorage();

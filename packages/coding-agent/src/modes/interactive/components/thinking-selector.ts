@@ -1,5 +1,5 @@
-import type { ThinkingLevel } from "@mariozechner/phi-agent-core";
-import { Container, type SelectItem, SelectList } from "@mariozechner/phi-tui";
+import type { ThinkingLevel } from "agent";
+import { Container, type SelectItem, SelectList } from "tui";
 import { getSelectListTheme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 

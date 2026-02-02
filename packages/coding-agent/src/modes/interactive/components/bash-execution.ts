@@ -2,8 +2,8 @@
  * Component for displaying bash command execution with streaming output.
  */
 
-import { Container, Loader, Spacer, Text, type TUI } from "@mariozechner/phi-tui";
 import stripAnsi from "strip-ansi";
+import { Container, Loader, Spacer, Text, type TUI } from "tui";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,

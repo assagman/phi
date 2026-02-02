@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/phi-ai";
+import type { Model } from "ai";
 import { describe, expect, test } from "vitest";
 import { defaultModelPerProvider, findInitialModel, parseModelPattern } from "../src/core/model-resolver.js";
 

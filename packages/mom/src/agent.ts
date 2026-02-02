@@ -1,5 +1,5 @@
-import { Agent, type AgentEvent } from "@mariozechner/phi-agent-core";
-import { getModel, type ImageContent } from "@mariozechner/phi-ai";
+import { Agent, type AgentEvent } from "agent";
+import { getModel, type ImageContent } from "ai";
 import {
 	AgentSession,
 	AuthStorage,
@@ -9,7 +9,7 @@ import {
 	ModelRegistry,
 	SessionManager,
 	type Skill,
-} from "@mariozechner/phi-coding-agent";
+} from "coding-agent";
 import { existsSync, readFileSync } from "fs";
 import { mkdir, writeFile } from "fs/promises";
 import { homedir } from "os";

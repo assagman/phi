@@ -1,5 +1,5 @@
-import { getOAuthProviders, type OAuthProviderInfo } from "@mariozechner/phi-ai";
-import { Container, getEditorKeybindings, Spacer, TruncatedText } from "@mariozechner/phi-tui";
+import { getOAuthProviders, type OAuthProviderInfo } from "ai";
+import { Container, getEditorKeybindings, Spacer, TruncatedText } from "tui";
 import type { AuthStorage } from "../../../core/auth-storage.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";

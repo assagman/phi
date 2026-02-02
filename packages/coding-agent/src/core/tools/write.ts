@@ -1,5 +1,5 @@
-import type { AgentTool } from "@mariozechner/phi-agent-core";
 import { Type } from "@sinclair/typebox";
+import type { AgentTool } from "agent";
 import { mkdir as fsMkdir, writeFile as fsWriteFile } from "fs/promises";
 import { dirname } from "path";
 import { resolveToCwd } from "./path-utils.js";

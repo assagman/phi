@@ -4,7 +4,7 @@
 
 Hooks and custom tools can render custom TUI components for interactive user interfaces. This page covers the component system and available building blocks.
 
-**Source:** [`@mariozechner/phi-tui`](https://github.com/badlogic/phi-mono/tree/main/packages/tui)
+**Source:** [`tui`](https://github.com/badlogic/phi-mono/tree/main/packages/tui)
 
 ## Component Interface
 
@@ -31,7 +31,7 @@ The TUI appends a full SGR reset and OSC 8 reset at the end of each rendered lin
 Components that display a text cursor and need IME (Input Method Editor) support should implement the `Focusable` interface:
 
 ```typescript
-import { CURSOR_MARKER, type Component, type Focusable } from "@mariozechner/phi-tui";
+import { CURSOR_MARKER, type Component, type Focusable } from "tui";
 
 class MyInput implements Component, Focusable {
   focused: boolean = false;  // Set by TUI when focus changes
@@ -57,7 +57,7 @@ This enables IME candidate windows to appear at the correct position for CJK inp
 When a container component (dialog, selector, etc.) contains an `Input` or `Editor` child, the container must implement `Focusable` and propagate the focus state to the child. Otherwise, the hardware cursor won't be positioned correctly for IME input.
 
 ```typescript
-import { Container, type Focusable, Input } from "@mariozechner/phi-tui";
+import { Container, type Focusable, Input } from "tui";
 
 class SearchDialog extends Container implements Focusable {
   private searchInput: Input;
@@ -156,10 +156,10 @@ See [overlay-qa-tests.ts](../examples/extensions/overlay-qa-tests.ts) for compre
 
 ## Built-in Components
 
-Import from `@mariozechner/phi-tui`:
+Import from `tui`:
 
 ```typescript
-import { Text, Box, Container, Spacer, Markdown } from "@mariozechner/phi-tui";
+import { Text, Box, Container, Spacer, Markdown } from "tui";
 ```
 
 ### Text
@@ -241,7 +241,7 @@ const image = new Image(
 Use `matchesKey()` for key detection:
 
 ```typescript
-import { matchesKey, Key } from "@mariozechner/phi-tui";
+import { matchesKey, Key } from "tui";
 
 handleInput(data: string) {
   if (matchesKey(data, Key.up)) {
@@ -267,7 +267,7 @@ handleInput(data: string) {
 **Critical:** Each line from `render()` must not exceed the `width` parameter.
 
 ```typescript
-import { visibleWidth, truncateToWidth } from "@mariozechner/phi-tui";
+import { visibleWidth, truncateToWidth } from "tui";
 
 render(width: number): string[] {
   // Truncate long lines
@@ -288,7 +288,7 @@ Example: Interactive selector
 import {
   matchesKey, Key,
   truncateToWidth, visibleWidth
-} from "@mariozechner/phi-tui";
+} from "tui";
 
 class MySelector {
   private items: string[];
@@ -402,8 +402,8 @@ renderResult(result, options, theme) {
 **For Markdown**, use `getMarkdownTheme()`:
 
 ```typescript
-import { getMarkdownTheme } from "@mariozechner/phi-coding-agent";
-import { Markdown } from "@mariozechner/phi-tui";
+import { getMarkdownTheme } from "coding-agent";
+import { Markdown } from "tui";
 
 renderResult(result, options, theme) {
   const mdTheme = getMarkdownTheme();
@@ -556,12 +556,12 @@ These patterns cover the most common UI needs in extensions. **Copy these patter
 
 ### Pattern 1: Selection Dialog (SelectList)
 
-For letting users pick from a list of options. Use `SelectList` from `@mariozechner/phi-tui` with `DynamicBorder` for framing.
+For letting users pick from a list of options. Use `SelectList` from `tui` with `DynamicBorder` for framing.
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/phi-coding-agent";
-import { DynamicBorder } from "@mariozechner/phi-coding-agent";
-import { Container, type SelectItem, SelectList, Text } from "@mariozechner/phi-tui";
+import type { ExtensionAPI } from "coding-agent";
+import { DynamicBorder } from "coding-agent";
+import { Container, type SelectItem, SelectList, Text } from "tui";
 
 pi.registerCommand("pick", {
   handler: async (_args, ctx) => {
@@ -619,7 +619,7 @@ pi.registerCommand("pick", {
 For operations that take time and should be cancellable. `BorderedLoader` shows a spinner and handles escape to cancel.
 
 ```typescript
-import { BorderedLoader } from "@mariozechner/phi-coding-agent";
+import { BorderedLoader } from "coding-agent";
 
 pi.registerCommand("fetch", {
   handler: async (_args, ctx) => {
@@ -648,11 +648,11 @@ pi.registerCommand("fetch", {
 
 ### Pattern 3: Settings/Toggles (SettingsList)
 
-For toggling multiple settings. Use `SettingsList` from `@mariozechner/phi-tui` with `getSettingsListTheme()`.
+For toggling multiple settings. Use `SettingsList` from `tui` with `getSettingsListTheme()`.
 
 ```typescript
-import { getSettingsListTheme } from "@mariozechner/phi-coding-agent";
-import { Container, type SettingItem, SettingsList, Text } from "@mariozechner/phi-tui";
+import { getSettingsListTheme } from "coding-agent";
+import { Container, type SettingItem, SettingsList, Text } from "tui";
 
 pi.registerCommand("settings", {
   handler: async (_args, ctx) => {
@@ -761,8 +761,8 @@ Token stats available via `ctx.sessionManager.getBranch()` and `ctx.model`.
 Replace the main input editor with a custom implementation. Useful for modal editing (vim), different keybindings (emacs), or specialized input handling.
 
 ```typescript
-import { CustomEditor, type ExtensionAPI } from "@mariozechner/phi-coding-agent";
-import { matchesKey, truncateToWidth } from "@mariozechner/phi-tui";
+import { CustomEditor, type ExtensionAPI } from "coding-agent";
+import { matchesKey, truncateToWidth } from "tui";
 
 type Mode = "normal" | "insert";
 

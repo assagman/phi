@@ -13,7 +13,7 @@
  *   export default function (pi: ExtensionAPI) { ... }
  */
 
-import { createAgentSession, SessionManager } from "@mariozechner/phi-coding-agent";
+import { createAgentSession, SessionManager } from "coding-agent";
 
 // Extensions are discovered automatically from standard locations.
 // You can also add paths via:
@@ -37,7 +37,7 @@ console.log();
 
 // Example extension file (./my-logging-extension.ts):
 /*
-import type { ExtensionAPI } from "@mariozechner/phi-coding-agent";
+import type { ExtensionAPI } from "coding-agent";
 
 export default function (pi: ExtensionAPI) {
 	pi.on("agent_start", async () => {

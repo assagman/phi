@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/phi-ai";
+import type { Model } from "ai";
 import {
 	Container,
 	type Focusable,
@@ -9,7 +9,7 @@ import {
 	matchesKey,
 	Spacer,
 	Text,
-} from "@mariozechner/phi-tui";
+} from "tui";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 

@@ -1,5 +1,5 @@
-import type { AssistantMessage, Model, ToolResultMessage, UserMessage } from "@mariozechner/phi-ai";
-import { getModel } from "@mariozechner/phi-ai";
+import type { AssistantMessage, Model, ToolResultMessage, UserMessage } from "ai";
+import { getModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { Agent } from "../src/index.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";

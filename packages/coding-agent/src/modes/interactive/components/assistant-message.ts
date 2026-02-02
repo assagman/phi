@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "@mariozechner/phi-ai";
-import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@mariozechner/phi-tui";
+import type { AssistantMessage } from "ai";
+import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "tui";
 import { getMarkdownTheme, theme } from "../theme/theme.js";
 
 /**

@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@mariozechner/phi-agent-core";
+import type { ThinkingLevel } from "agent";
 import {
 	Container,
 	getCapabilities,
@@ -8,7 +8,7 @@ import {
 	SettingsList,
 	Spacer,
 	Text,
-} from "@mariozechner/phi-tui";
+} from "tui";
 import { getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 
@@ -34,7 +34,6 @@ export interface SettingsConfig {
 	currentTheme: string;
 	availableThemes: string[];
 	hideThinkingBlock: boolean;
-	collapseChangelog: boolean;
 	doubleEscapeAction: "fork" | "tree";
 	showHardwareCursor: boolean;
 	editorPaddingX: number;
@@ -53,7 +52,6 @@ export interface SettingsCallbacks {
 	onThemeChange: (theme: string) => void;
 	onThemePreview?: (theme: string) => void;
 	onHideThinkingBlockChange: (hidden: boolean) => void;
-	onCollapseChangelogChange: (collapsed: boolean) => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree") => void;
 	onShowHardwareCursorChange: (enabled: boolean) => void;
 	onEditorPaddingXChange: (padding: number) => void;
@@ -163,13 +161,6 @@ export class SettingsSelectorComponent extends Container {
 				label: "Hide thinking",
 				description: "Hide thinking blocks in assistant responses",
 				currentValue: config.hideThinkingBlock ? "true" : "false",
-				values: ["true", "false"],
-			},
-			{
-				id: "collapse-changelog",
-				label: "Collapse changelog",
-				description: "Show condensed changelog after updates",
-				currentValue: config.collapseChangelog ? "true" : "false",
 				values: ["true", "false"],
 			},
 			{
@@ -332,9 +323,6 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "hide-thinking":
 						callbacks.onHideThinkingBlockChange(newValue === "true");
-						break;
-					case "collapse-changelog":
-						callbacks.onCollapseChangelogChange(newValue === "true");
 						break;
 					case "quiet-startup":
 						callbacks.onQuietStartupChange(newValue === "true");

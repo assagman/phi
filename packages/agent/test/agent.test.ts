@@ -1,4 +1,4 @@
-import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@mariozechner/phi-ai";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "ai";
 import { describe, expect, it } from "vitest";
 import { Agent } from "../src/index.js";
 

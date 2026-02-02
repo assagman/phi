@@ -5,9 +5,9 @@
  * and after compaction the session is reloaded.
  */
 
-import type { AgentMessage } from "@mariozechner/phi-agent-core";
-import type { AssistantMessage, Model, Usage } from "@mariozechner/phi-ai";
-import { completeSimple } from "@mariozechner/phi-ai";
+import type { AgentMessage } from "agent";
+import type { AssistantMessage, Model, Usage } from "ai";
+import { completeSimple } from "ai";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,

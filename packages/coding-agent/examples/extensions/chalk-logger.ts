@@ -3,8 +3,8 @@
  * Tests that jiti can resolve npm modules correctly.
  */
 
-import type { ExtensionAPI } from "@mariozechner/phi-coding-agent";
 import chalk from "chalk";
+import type { ExtensionAPI } from "coding-agent";
 
 export default function (pi: ExtensionAPI) {
 	// Log with colors using chalk

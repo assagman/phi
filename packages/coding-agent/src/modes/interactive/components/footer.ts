@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "@mariozechner/phi-ai";
-import { type Component, truncateToWidth, visibleWidth } from "@mariozechner/phi-tui";
+import type { AssistantMessage } from "ai";
+import { type Component, truncateToWidth, visibleWidth } from "tui";
 import type { AgentSession } from "../../../core/agent-session.js";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.js";
 import { theme } from "../theme/theme.js";

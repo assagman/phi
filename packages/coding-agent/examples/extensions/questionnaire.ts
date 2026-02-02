@@ -5,9 +5,9 @@
  * Multiple questions: tab bar navigation between questions
  */
 
-import type { ExtensionAPI } from "@mariozechner/phi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth } from "@mariozechner/phi-tui";
 import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI } from "coding-agent";
+import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth } from "tui";
 
 // Types
 interface QuestionOption {

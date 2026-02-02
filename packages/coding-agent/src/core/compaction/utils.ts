@@ -2,8 +2,8 @@
  * Shared utilities for compaction and branch summarization.
  */
 
-import type { AgentMessage } from "@mariozechner/phi-agent-core";
-import type { Message } from "@mariozechner/phi-ai";
+import type { AgentMessage } from "agent";
+import type { Message } from "ai";
 
 // ============================================================================
 // File Operation Tracking

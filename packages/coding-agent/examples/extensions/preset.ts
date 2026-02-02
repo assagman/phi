@@ -41,9 +41,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/phi-coding-agent";
-import { DynamicBorder } from "@mariozechner/phi-coding-agent";
-import { Container, Key, type SelectItem, SelectList, Text } from "@mariozechner/phi-tui";
+import type { ExtensionAPI, ExtensionContext } from "coding-agent";
+import { DynamicBorder } from "coding-agent";
+import { Container, Key, type SelectItem, SelectList, Text } from "tui";
 
 // Preset configuration
 interface Preset {

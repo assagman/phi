@@ -1,6 +1,6 @@
-import { getOAuthProviders } from "@mariozechner/phi-ai";
-import { Container, type Focusable, getEditorKeybindings, Input, Spacer, Text, type TUI } from "@mariozechner/phi-tui";
+import { getOAuthProviders } from "ai";
 import { exec } from "child_process";
+import { Container, type Focusable, getEditorKeybindings, Input, Spacer, Text, type TUI } from "tui";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint } from "./keybinding-hints.js";

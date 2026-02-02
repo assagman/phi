@@ -115,7 +115,7 @@ async function main(): Promise<void> {
 	const command = args[0];
 
 	if (!command || command === "help" || command === "--help" || command === "-h") {
-		console.log(`Usage: npx @mariozechner/phi-ai <command> [provider]
+		console.log(`Usage: npx ai <command> [provider]
 
 Commands:
   login [provider]  Login to an OAuth provider
@@ -129,9 +129,9 @@ Providers:
   openai-codex      OpenAI Codex (ChatGPT Plus/Pro)
 
 Examples:
-  npx @mariozechner/phi-ai login              # interactive provider selection
-  npx @mariozechner/phi-ai login anthropic    # login to specific provider
-  npx @mariozechner/phi-ai list               # list providers
+  npx ai login              # interactive provider selection
+  npx ai login anthropic    # login to specific provider
+  npx ai list               # list providers
 `);
 		return;
 	}
@@ -168,7 +168,7 @@ Examples:
 
 		if (!PROVIDERS.some((p) => p.id === provider)) {
 			console.error(`Unknown provider: ${provider}`);
-			console.error(`Use 'npx @mariozechner/phi-ai list' to see available providers`);
+			console.error(`Use 'npx ai list' to see available providers`);
 			process.exit(1);
 		}
 
@@ -178,7 +178,7 @@ Examples:
 	}
 
 	console.error(`Unknown command: ${command}`);
-	console.error(`Use 'npx @mariozechner/phi-ai --help' for usage`);
+	console.error(`Use 'npx ai --help' for usage`);
 	process.exit(1);
 }
 

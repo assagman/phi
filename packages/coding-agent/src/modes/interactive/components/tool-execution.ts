@@ -1,16 +1,6 @@
 import * as os from "node:os";
-import {
-	Box,
-	Container,
-	getCapabilities,
-	getImageDimensions,
-	Image,
-	imageFallback,
-	Spacer,
-	Text,
-	type TUI,
-} from "@mariozechner/phi-tui";
 import stripAnsi from "strip-ansi";
+import { Box, Container, getCapabilities, getImageDimensions, Image, imageFallback, Spacer, Text, type TUI } from "tui";
 import type { ToolDefinition } from "../../../core/extensions/types.js";
 import { computeEditDiff, type EditDiffError, type EditDiffResult } from "../../../core/tools/edit-diff.js";
 import { allTools } from "../../../core/tools/index.js";

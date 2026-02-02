@@ -2,8 +2,8 @@
  * Hello Tool - Minimal custom tool example
  */
 
-import type { ExtensionAPI } from "@mariozechner/phi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI } from "coding-agent";
 
 export default function (pi: ExtensionAPI) {
 	pi.registerTool({

@@ -1,5 +1,5 @@
-import type { AgentTool } from "@mariozechner/phi-agent-core";
 import { Type } from "@sinclair/typebox";
+import type { AgentTool } from "agent";
 import { existsSync, readdirSync, statSync } from "fs";
 import nodePath from "path";
 import { resolveToCwd } from "./path-utils.js";

@@ -7,7 +7,7 @@
 
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import type { ExtensionAPI } from "@mariozechner/phi-coding-agent";
+import type { ExtensionAPI } from "coding-agent";
 
 const execAsync = promisify(exec);
 

@@ -2,8 +2,8 @@
  * List available models with optional fuzzy search
  */
 
-import type { Api, Model } from "@mariozechner/phi-ai";
-import { fuzzyFilter } from "@mariozechner/phi-tui";
+import type { Api, Model } from "ai";
+import { fuzzyFilter } from "tui";
 import type { ModelRegistry } from "../core/model-registry.js";
 
 /**

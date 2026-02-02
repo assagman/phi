@@ -1,14 +1,5 @@
-import { type Model, modelsAreEqual } from "@mariozechner/phi-ai";
-import {
-	Container,
-	type Focusable,
-	fuzzyFilter,
-	getEditorKeybindings,
-	Input,
-	Spacer,
-	Text,
-	type TUI,
-} from "@mariozechner/phi-tui";
+import { type Model, modelsAreEqual } from "ai";
+import { Container, type Focusable, fuzzyFilter, getEditorKeybindings, Input, Spacer, Text, type TUI } from "tui";
 import type { ModelRegistry } from "../../../core/model-registry.js";
 import type { SettingsManager } from "../../../core/settings-manager.js";
 import { theme } from "../theme/theme.js";

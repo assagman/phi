@@ -1,7 +1,7 @@
 /**
  * Extension loader - loads TypeScript extension modules using jiti.
  *
- * Uses @mariozechner/jiti fork with virtualModules support for compiled Bun binaries.
+ * Uses jiti fork with virtualModules support for compiled Bun binaries.
  */
 
 import * as fs from "node:fs";
@@ -9,18 +9,18 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "@mariozechner/jiti";
-import * as _bundledPiAgentCore from "@mariozechner/phi-agent-core";
-import * as _bundledPiAi from "@mariozechner/phi-ai";
-import type { KeyId } from "@mariozechner/phi-tui";
-import * as _bundledPiTui from "@mariozechner/phi-tui";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
 import * as _bundledTypebox from "@sinclair/typebox";
-import { getAgentDir, isBunBinary } from "../../config.js";
+import * as _bundledPiAgentCore from "agent";
+import * as _bundledPiAi from "ai";
+import { createJiti } from "jiti";
+import type { KeyId } from "tui";
+import * as _bundledPiTui from "tui";
+import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.js";
 // NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
-// avoiding a circular dependency. Extensions can import from @mariozechner/phi-coding-agent.
+// avoiding a circular dependency. Extensions can import from coding-agent.
 import * as _bundledPiCodingAgent from "../../index.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
@@ -39,10 +39,10 @@ import type {
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
 const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@sinclair/typebox": _bundledTypebox,
-	"@mariozechner/phi-agent-core": _bundledPiAgentCore,
-	"@mariozechner/phi-tui": _bundledPiTui,
-	"@mariozechner/phi-ai": _bundledPiAi,
-	"@mariozechner/phi-coding-agent": _bundledPiCodingAgent,
+	agent: _bundledPiAgentCore,
+	tui: _bundledPiTui,
+	ai: _bundledPiAi,
+	"coding-agent": _bundledPiCodingAgent,
 };
 
 const require = createRequire(import.meta.url);
@@ -62,10 +62,10 @@ function getAliases(): Record<string, string> {
 	const typeboxRoot = typeboxEntry.replace(/\/build\/cjs\/index\.js$/, "");
 
 	_aliases = {
-		"@mariozechner/phi-coding-agent": packageIndex,
-		"@mariozechner/phi-agent-core": require.resolve("@mariozechner/phi-agent-core"),
-		"@mariozechner/phi-tui": require.resolve("@mariozechner/phi-tui"),
-		"@mariozechner/phi-ai": require.resolve("@mariozechner/phi-ai"),
+		"coding-agent": packageIndex,
+		agent: require.resolve("agent"),
+		tui: require.resolve("tui"),
+		ai: require.resolve("ai"),
 		"@sinclair/typebox": typeboxRoot,
 	};
 
@@ -477,8 +477,8 @@ export async function discoverAndLoadExtensions(
 	const globalExtDir = path.join(agentDir, "extensions");
 	addPaths(discoverExtensionsInDir(globalExtDir));
 
-	// 2. Project-local extensions: cwd/.pi/extensions/
-	const localExtDir = path.join(cwd, ".pi", "extensions");
+	// 2. Project-local extensions: cwd/.phi/extensions/
+	const localExtDir = path.join(cwd, CONFIG_DIR_NAME, "extensions");
 	addPaths(discoverExtensionsInDir(localExtDir));
 
 	// 3. Explicitly configured paths

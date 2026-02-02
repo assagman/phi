@@ -1,4 +1,4 @@
-import { Container, type SelectItem, SelectList } from "@mariozechner/phi-tui";
+import { Container, type SelectItem, SelectList } from "tui";
 import { getSelectListTheme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 

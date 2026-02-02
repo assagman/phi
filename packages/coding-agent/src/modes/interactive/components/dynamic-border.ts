@@ -1,4 +1,4 @@
-import type { Component } from "@mariozechner/phi-tui";
+import type { Component } from "tui";
 import { theme } from "../theme/theme.js";
 
 /**

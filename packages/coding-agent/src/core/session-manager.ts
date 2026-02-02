@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/phi-agent-core";
-import type { ImageContent, Message, TextContent } from "@mariozechner/phi-ai";
+import type { AgentMessage } from "agent";
+import type { ImageContent, Message, TextContent } from "ai";
 import { randomUUID } from "crypto";
 import {
 	appendFileSync,

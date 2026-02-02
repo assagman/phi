@@ -5,9 +5,9 @@
  * a summary of the branch being left so context isn't lost.
  */
 
-import type { AgentMessage } from "@mariozechner/phi-agent-core";
-import type { Model } from "@mariozechner/phi-ai";
-import { completeSimple } from "@mariozechner/phi-ai";
+import type { AgentMessage } from "agent";
+import type { Model } from "ai";
+import { completeSimple } from "ai";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,

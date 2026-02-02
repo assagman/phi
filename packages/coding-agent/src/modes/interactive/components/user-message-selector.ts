@@ -1,4 +1,4 @@
-import { type Component, Container, getEditorKeybindings, Spacer, Text, truncateToWidth } from "@mariozechner/phi-tui";
+import { type Component, Container, getEditorKeybindings, Spacer, Text, truncateToWidth } from "tui";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 

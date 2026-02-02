@@ -16,7 +16,7 @@ import {
 	loginOpenAICodex,
 	type OAuthCredentials,
 	type OAuthProvider,
-} from "@mariozechner/phi-ai";
+} from "ai";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname } from "path";
 import lockfile from "proper-lockfile";

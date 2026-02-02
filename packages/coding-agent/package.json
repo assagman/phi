@@ -29,8 +29,8 @@
 		"test": "vitest --run"
 	},
 	"dependencies": {
-		"@mariozechner/clipboard": "^0.3.0",
-		"@mariozechner/jiti": "^2.6.2",
+		"clipboardy": "^5.2.0",
+		"jiti": "^2.6.1",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"@sinclair/typebox": "^0.34.48",
 		"agent": "*",

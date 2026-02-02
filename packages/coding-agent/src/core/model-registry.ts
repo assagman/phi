@@ -2,6 +2,7 @@
  * Model registry - manages built-in and custom models, provides API key resolution.
  */
 
+import { type Static, Type } from "@sinclair/typebox";
 import {
 	type Api,
 	getGitHubCopilotBaseUrl,
@@ -10,8 +11,7 @@ import {
 	type KnownProvider,
 	type Model,
 	normalizeDomain,
-} from "@mariozechner/phi-ai";
-import { type Static, Type } from "@sinclair/typebox";
+} from "ai";
 import AjvModule from "ajv";
 import { execSync } from "child_process";
 import { existsSync, readFileSync } from "fs";

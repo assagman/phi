@@ -1,7 +1,7 @@
-import { complete, getModel } from "@mariozechner/phi-ai";
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/phi-coding-agent";
-import { DynamicBorder, getMarkdownTheme } from "@mariozechner/phi-coding-agent";
-import { Container, Markdown, matchesKey, Text } from "@mariozechner/phi-tui";
+import { complete, getModel } from "ai";
+import type { ExtensionAPI, ExtensionCommandContext } from "coding-agent";
+import { DynamicBorder, getMarkdownTheme } from "coding-agent";
+import { Container, Markdown, matchesKey, Text } from "tui";
 
 type ContentBlock = {
 	type?: string;

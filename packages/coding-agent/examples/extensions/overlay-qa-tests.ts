@@ -16,10 +16,10 @@
  *   /overlay-toggle     - Toggle visibility demo (demonstrates OverlayHandle.setHidden)
  */
 
-import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@mariozechner/phi-coding-agent";
-import type { OverlayAnchor, OverlayHandle, OverlayOptions, TUI } from "@mariozechner/phi-tui";
-import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/phi-tui";
 import { spawn } from "child_process";
+import type { ExtensionAPI, ExtensionCommandContext, Theme } from "coding-agent";
+import type { OverlayAnchor, OverlayHandle, OverlayOptions, TUI } from "tui";
+import { matchesKey, truncateToWidth, visibleWidth } from "tui";
 
 // Global handle for toggle demo (in real code, use a more elegant pattern)
 let globalToggleHandle: OverlayHandle | null = null;

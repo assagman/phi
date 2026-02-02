@@ -1,4 +1,3 @@
-import Clipboard from "@mariozechner/clipboard";
 import { spawnSync } from "child_process";
 
 export type ClipboardImage = {
@@ -143,15 +142,59 @@ export async function readClipboardImage(options?: {
 		return readClipboardImageViaWlPaste() ?? readClipboardImageViaXclip();
 	}
 
-	if (!Clipboard.hasImage()) {
+	if (platform === "darwin") {
+		return readClipboardImageViaMacOS();
+	}
+
+	if (platform === "win32") {
+		return readClipboardImageViaWindows();
+	}
+
+	// Fallback to xclip for Linux X11
+	return readClipboardImageViaXclip();
+}
+
+function readClipboardImageViaMacOS(): ClipboardImage | null {
+	// Use osascript to read clipboard image on macOS
+	const result = runCommand("osascript", ["-e", "get the clipboard as «class PNGf»"]);
+	if (!result.ok || result.stdout.length === 0) {
 		return null;
 	}
 
-	const imageData = await Clipboard.getImageBinary();
-	if (!imageData || imageData.length === 0) {
+	// macOS returns clipboard data as a hex string, need to decode it
+	const hexString = result.stdout.toString("utf-8").trim();
+	if (!hexString) {
 		return null;
 	}
 
-	const bytes = imageData instanceof Uint8Array ? imageData : Uint8Array.from(imageData);
-	return { bytes, mimeType: "image/png" };
+	// Convert hex string to bytes
+	const bytes = Buffer.from(hexString, "hex");
+	if (bytes.length === 0) {
+		return null;
+	}
+
+	return { bytes: new Uint8Array(bytes), mimeType: "image/png" };
+}
+
+function readClipboardImageViaWindows(): ClipboardImage | null {
+	// Use PowerShell to read clipboard image on Windows
+	const result = runCommand("powershell.exe", [
+		"-command",
+		"Add-Type -AssemblyName System.Windows.Forms; if ([System.Windows.Forms.Clipboard]::ContainsImage()) { $img = [System.Windows.Forms.Clipboard]::GetImage(); $ms = New-Object System.IO.MemoryStream; $img.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); $bytes = $ms.ToArray(); [Convert]::ToBase64String($bytes) }",
+	]);
+	if (!result.ok || result.stdout.length === 0) {
+		return null;
+	}
+
+	const base64 = result.stdout.toString("utf-8").trim();
+	if (!base64) {
+		return null;
+	}
+
+	const bytes = Buffer.from(base64, "base64");
+	if (bytes.length === 0) {
+		return null;
+	}
+
+	return { bytes: new Uint8Array(bytes), mimeType: "image/png" };
 }

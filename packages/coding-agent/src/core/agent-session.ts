@@ -14,16 +14,9 @@
  */
 
 import { readFileSync } from "node:fs";
-import type {
-	Agent,
-	AgentEvent,
-	AgentMessage,
-	AgentState,
-	AgentTool,
-	ThinkingLevel,
-} from "@mariozechner/phi-agent-core";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@mariozechner/phi-ai";
-import { isContextOverflow, modelsAreEqual, supportsXhigh } from "@mariozechner/phi-ai";
+import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "agent";
+import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "ai";
+import { isContextOverflow, modelsAreEqual, supportsXhigh } from "ai";
 import { getAuthPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";

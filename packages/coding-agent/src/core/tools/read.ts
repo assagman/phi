@@ -1,6 +1,6 @@
-import type { AgentTool } from "@mariozechner/phi-agent-core";
-import type { ImageContent, TextContent } from "@mariozechner/phi-ai";
 import { Type } from "@sinclair/typebox";
+import type { AgentTool } from "agent";
+import type { ImageContent, TextContent } from "ai";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";

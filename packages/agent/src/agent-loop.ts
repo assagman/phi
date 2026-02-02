@@ -10,7 +10,7 @@ import {
 	streamSimple,
 	type ToolResultMessage,
 	validateToolArguments,
-} from "@mariozechner/phi-ai";
+} from "ai";
 import type {
 	AgentContext,
 	AgentEvent,

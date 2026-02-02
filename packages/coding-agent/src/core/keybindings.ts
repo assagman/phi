@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
 import {
 	DEFAULT_EDITOR_KEYBINDINGS,
 	type EditorAction,
@@ -6,9 +8,7 @@ import {
 	type KeyId,
 	matchesKey,
 	setEditorKeybindings,
-} from "@mariozechner/phi-tui";
-import { existsSync, readFileSync } from "fs";
-import { join } from "path";
+} from "tui";
 import { getAgentDir } from "../config.js";
 
 /**

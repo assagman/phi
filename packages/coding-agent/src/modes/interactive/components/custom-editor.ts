@@ -1,4 +1,4 @@
-import { Editor, type EditorOptions, type EditorTheme, type TUI } from "@mariozechner/phi-tui";
+import { Editor, type EditorOptions, type EditorTheme, type TUI } from "tui";
 import type { AppAction, KeybindingsManager } from "../../../core/keybindings.js";
 
 /**

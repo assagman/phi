@@ -6,7 +6,7 @@
  * - `pi --mode json "prompt"` - JSON event stream
  */
 
-import type { AssistantMessage, ImageContent } from "@mariozechner/phi-ai";
+import type { AssistantMessage, ImageContent } from "ai";
 import type { AgentSession } from "../core/agent-session.js";
 
 /**

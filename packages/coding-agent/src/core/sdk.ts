@@ -20,8 +20,8 @@
  * ```
  */
 
-import { Agent, type AgentMessage, type AgentTool, type ThinkingLevel } from "@mariozechner/phi-agent-core";
-import type { Message, Model } from "@mariozechner/phi-ai";
+import { Agent, type AgentMessage, type AgentTool, type ThinkingLevel } from "agent";
+import type { Message, Model } from "ai";
 import { join } from "path";
 import { getAgentDir } from "../config.js";
 import { AgentSession } from "./agent-session.js";
@@ -79,7 +79,7 @@ import {
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
 	cwd?: string;
-	/** Global config directory. Default: ~/.pi/agent */
+	/** Global config directory. Default: ~/.phi/agent */
 	agentDir?: string;
 
 	/** Auth storage for credentials. Default: discoverAuthStorage(agentDir) */
@@ -118,7 +118,7 @@ export interface CreateAgentSessionOptions {
 	skills?: Skill[];
 	/** Context files (AGENTS.md content). Default: discovered walking up from cwd */
 	contextFiles?: Array<{ path: string; content: string }>;
-	/** Prompt templates. Default: discovered from cwd/.pi/prompts/ + agentDir/prompts/ */
+	/** Prompt templates. Default: discovered from cwd/.phi/prompts/ + agentDir/prompts/ */
 	promptTemplates?: PromptTemplate[];
 
 	/** Session manager. Default: SessionManager.create(cwd) */
@@ -284,7 +284,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 // Settings
 
 /**
- * Load settings from agentDir/settings.json merged with cwd/.pi/settings.json.
+ * Load settings from agentDir/settings.json merged with cwd/.phi/settings.json.
  */
 export function loadSettings(cwd?: string, agentDir?: string): Settings {
 	const manager = SettingsManager.create(cwd ?? process.cwd(), agentDir ?? getDefaultAgentDir());
@@ -299,7 +299,6 @@ export function loadSettings(cwd?: string, agentDir?: string): Settings {
 		retry: manager.getRetrySettings(),
 		hideThinkingBlock: manager.getHideThinkingBlock(),
 		shellPath: manager.getShellPath(),
-		collapseChangelog: manager.getCollapseChangelog(),
 		extensions: manager.getExtensionPaths(),
 		skills: manager.getSkillsSettings(),
 		terminal: { showImages: manager.getShowImages() },
@@ -318,7 +317,7 @@ export function loadSettings(cwd?: string, agentDir?: string): Settings {
  * const { session } = await createAgentSession();
  *
  * // With explicit model
- * import { getModel } from '@mariozechner/phi-ai';
+ * import { getModel } from 'ai';
  * const { session } = await createAgentSession({
  *   model: getModel('anthropic', 'claude-opus-4-5'),
  *   thinkingLevel: 'high',

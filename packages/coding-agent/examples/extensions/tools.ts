@@ -9,9 +9,9 @@
  * 2. Use /tools to open the tool selector
  */
 
-import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@mariozechner/phi-coding-agent";
-import { getSettingsListTheme } from "@mariozechner/phi-coding-agent";
-import { Container, type SettingItem, SettingsList } from "@mariozechner/phi-tui";
+import type { ExtensionAPI, ExtensionContext, ToolInfo } from "coding-agent";
+import { getSettingsListTheme } from "coding-agent";
+import { Container, type SettingItem, SettingsList } from "tui";
 
 // State persisted to session
 interface ToolsState {

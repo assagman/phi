@@ -10,10 +10,10 @@
  * correct for that point in history.
  */
 
-import { StringEnum } from "@mariozechner/phi-ai";
-import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/phi-coding-agent";
-import { matchesKey, Text, truncateToWidth } from "@mariozechner/phi-tui";
 import { Type } from "@sinclair/typebox";
+import { StringEnum } from "ai";
+import type { ExtensionAPI, ExtensionContext, Theme } from "coding-agent";
+import { matchesKey, Text, truncateToWidth } from "tui";
 
 interface Todo {
 	id: number;

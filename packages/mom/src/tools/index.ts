@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/phi-agent-core";
+import type { AgentTool } from "agent";
 import type { Executor } from "../sandbox.js";
 import { attachTool } from "./attach.js";
 import { createBashTool } from "./bash.js";
