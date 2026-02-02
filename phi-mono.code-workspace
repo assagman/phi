@@ -4,9 +4,7 @@
 			"name": "phi-mono",
 			"path": "."
 		},
-		{
-			"path": "../../moms"
-		}
+
 	],
 	"settings": {}
 }

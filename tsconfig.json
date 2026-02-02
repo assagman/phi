@@ -12,8 +12,7 @@
 			"coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
 			"coding-agent/*": ["./packages/coding-agent/src/*"],
 			"@sinclair/typebox": ["./node_modules/@sinclair/typebox"],
-			"mom": ["./packages/mom/src/index.ts"],
-			"mom/*": ["./packages/mom/src/*"],
+
 			"pods": ["./packages/pods/src/index.ts"],
 			"pods/*": ["./packages/pods/src/*"],
 			"tui": ["./packages/tui/src/index.ts"],
