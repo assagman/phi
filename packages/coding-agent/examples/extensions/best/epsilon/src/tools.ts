@@ -1,8 +1,9 @@
 /**
  * Epsilon tools — task management operations.
  *
- * Tools: 7 total
+ * Tools: 10 total
  *   Tasks:   epsilon_task_create/list/update/delete/get (5)
+ *   Bulk:    epsilon_task_create_bulk/update_bulk/delete_bulk (3)
  *   Info:    epsilon_info (1)
  *   Version: epsilon_version (1)
  */
@@ -81,6 +82,43 @@ const TaskDeleteSchema = Type.Object({
 
 const TaskGetSchema = Type.Object({
 	id: Type.Number({ description: "Task ID to retrieve" }),
+});
+
+// ============ Bulk Operation Schemas ============
+
+const TaskCreateBulkSchema = Type.Object({
+	tasks: Type.Array(TaskCreateSchema, {
+		description: "Array of tasks to create",
+		minItems: 1,
+		maxItems: 50,
+	}),
+});
+
+const TaskUpdateBulkSchema = Type.Object({
+	updates: Type.Array(
+		Type.Object({
+			id: Type.Number({ description: "Task ID to update" }),
+			title: Type.Optional(Type.String()),
+			description: Type.Optional(Type.String()),
+			status: Type.Optional(TaskStatusEnum),
+			priority: Type.Optional(TaskPriorityEnum),
+			tags: Type.Optional(Type.Array(Type.String())),
+			parent_id: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+		}),
+		{
+			description: "Array of task updates",
+			minItems: 1,
+			maxItems: 50,
+		},
+	),
+});
+
+const TaskDeleteBulkSchema = Type.Object({
+	ids: Type.Array(Type.Number({ description: "Task ID to delete" }), {
+		description: "Array of task IDs to delete",
+		minItems: 1,
+		maxItems: 50,
+	}),
 });
 
 const InfoSchema = Type.Object({});
@@ -196,6 +234,85 @@ const epsilonTaskGet = createTool(
 	},
 );
 
+// ============ Bulk Task Tools ============
+
+const epsilonTaskCreateBulk = createTool(
+	"epsilon_task_create_bulk",
+	"Create Tasks (Bulk)",
+	"Create multiple tasks in a single operation. More reliable than calling epsilon_task_create multiple times. Supports up to 50 tasks.",
+	TaskCreateBulkSchema,
+	({ tasks }) => {
+		const results: string[] = [];
+		const createdIds: number[] = [];
+
+		for (const taskInput of tasks) {
+			try {
+				const id = createTask(taskInput);
+				createdIds.push(id);
+				const task = getTask(id);
+				results.push(`Created #${id}: ${task?.title ?? "unknown"}`);
+			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
+				results.push(`Error creating "${taskInput.title}": ${msg}`);
+			}
+		}
+
+		return `Created ${createdIds.length}/${tasks.length} tasks:\n${results.join("\n")}`;
+	},
+);
+
+const epsilonTaskUpdateBulk = createTool(
+	"epsilon_task_update_bulk",
+	"Update Tasks (Bulk)",
+	"Update multiple tasks in a single operation. More reliable than calling epsilon_task_update multiple times. Supports up to 50 updates.",
+	TaskUpdateBulkSchema,
+	({ updates }) => {
+		const results: string[] = [];
+		let successCount = 0;
+
+		for (const { id, ...updateData } of updates) {
+			try {
+				const updated = updateTask(id, updateData);
+				if (updated) {
+					successCount++;
+					const task = getTask(id);
+					results.push(`Updated #${id}: ${task?.title ?? "unknown"}`);
+				} else {
+					results.push(`Task #${id} not found`);
+				}
+			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
+				results.push(`Error updating #${id}: ${msg}`);
+			}
+		}
+
+		return `Updated ${successCount}/${updates.length} tasks:\n${results.join("\n")}`;
+	},
+);
+
+const epsilonTaskDeleteBulk = createTool(
+	"epsilon_task_delete_bulk",
+	"Delete Tasks (Bulk)",
+	"Delete multiple tasks by ID in a single operation. Also deletes subtasks. Supports up to 50 IDs.",
+	TaskDeleteBulkSchema,
+	({ ids }) => {
+		const results: string[] = [];
+		let successCount = 0;
+
+		for (const id of ids) {
+			const deleted = deleteTask(id);
+			if (deleted) {
+				successCount++;
+				results.push(`Deleted #${id}`);
+			} else {
+				results.push(`Task #${id} not found`);
+			}
+		}
+
+		return `Deleted ${successCount}/${ids.length} tasks:\n${results.join("\n")}`;
+	},
+);
+
 // ============ Info & Version ============
 
 const epsilonInfo = createTool(
@@ -222,11 +339,19 @@ const epsilonVersion = createTool(
 // ============ Export ============
 
 export function registerTools(pi: ExtensionAPI): void {
+	// Single operations
 	pi.registerTool(epsilonTaskCreate);
 	pi.registerTool(epsilonTaskList);
 	pi.registerTool(epsilonTaskUpdate);
 	pi.registerTool(epsilonTaskDelete);
 	pi.registerTool(epsilonTaskGet);
+
+	// Bulk operations (more reliable for batching)
+	pi.registerTool(epsilonTaskCreateBulk);
+	pi.registerTool(epsilonTaskUpdateBulk);
+	pi.registerTool(epsilonTaskDeleteBulk);
+
+	// Info & version
 	pi.registerTool(epsilonInfo);
 	pi.registerTool(epsilonVersion);
 }

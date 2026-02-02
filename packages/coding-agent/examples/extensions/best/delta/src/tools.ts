@@ -3,8 +3,10 @@
  *
  * Tools:
  * - delta_remember(content, tags, importance, context)
+ * - delta_remember_bulk(memories[])
  * - delta_search(query, tags, importance, limit, since, sessionOnly)
  * - delta_forget(id)
+ * - delta_forget_bulk(ids[])
  * - delta_info()
  * - delta_version()
  * - delta_schema()
@@ -95,6 +97,36 @@ const ForgetSchema = Type.Object({
 	id: Type.Number({ description: "Memory ID to delete" }),
 });
 
+// ============ Bulk Operation Schemas ============
+
+const RememberBulkSchema = Type.Object({
+	memories: Type.Array(
+		Type.Object({
+			content: Type.String({ description: "Memory content to store" }),
+			tags: Type.Optional(
+				Type.Array(Type.String(), {
+					description: "Classification tags (e.g., decision, preference, bug, workflow)",
+				}),
+			),
+			importance: Type.Optional(ImportanceEnum),
+			context: Type.Optional(Type.String({ description: "Additional context or metadata" })),
+		}),
+		{
+			description: "Array of memories to store",
+			minItems: 1,
+			maxItems: 50,
+		},
+	),
+});
+
+const ForgetBulkSchema = Type.Object({
+	ids: Type.Array(Type.Number({ description: "Memory ID to delete" }), {
+		description: "Array of memory IDs to delete",
+		minItems: 1,
+		maxItems: 50,
+	}),
+});
+
 // ============ Tool Definitions ============
 
 const deltaRemember = createTool(
@@ -175,6 +207,61 @@ const deltaForget = createTool(
 	},
 );
 
+// ============ Bulk Operation Tools ============
+
+const deltaRememberBulk = createTool(
+	"delta_remember_bulk",
+	"Remember (Bulk)",
+	"Store multiple memories in a single operation. More reliable than calling delta_remember multiple times. Supports up to 50 memories.",
+	RememberBulkSchema,
+	({ memories }) => {
+		const results: string[] = [];
+		const createdIds: number[] = [];
+
+		for (const mem of memories) {
+			try {
+				const id = remember(mem.content, {
+					tags: mem.tags,
+					importance: mem.importance as Importance | undefined,
+					context: mem.context,
+				});
+				createdIds.push(id);
+				const tagsStr = mem.tags && mem.tags.length > 0 ? ` {${mem.tags.join(", ")}}` : "";
+				const impStr = mem.importance ? ` [${mem.importance}]` : "";
+				results.push(`✓ Stored #${id}${impStr}${tagsStr}`);
+			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
+				results.push(`✗ Error: ${msg}`);
+			}
+		}
+
+		return `Stored ${createdIds.length}/${memories.length} memories:\n${results.join("\n")}`;
+	},
+);
+
+const deltaForgetBulk = createTool(
+	"delta_forget_bulk",
+	"Forget (Bulk)",
+	"Delete multiple memories by ID in a single operation. More reliable than calling delta_forget multiple times. Supports up to 50 IDs.",
+	ForgetBulkSchema,
+	({ ids }) => {
+		const results: string[] = [];
+		let successCount = 0;
+
+		for (const id of ids) {
+			const deleted = forget(id);
+			if (deleted) {
+				successCount++;
+				results.push(`✓ Deleted #${id}`);
+			} else {
+				results.push(`✗ Memory #${id} not found`);
+			}
+		}
+
+		return `Deleted ${successCount}/${ids.length} memories:\n${results.join("\n")}`;
+	},
+);
+
 const deltaInfo = createTool(
 	"delta_info",
 	"Memory Info",
@@ -250,9 +337,16 @@ const deltaSchema = createTool(
 // ============ Tool Registration ============
 
 export function registerTools(pi: ExtensionAPI): void {
+	// Single operations
 	pi.registerTool(deltaRemember);
 	pi.registerTool(deltaSearch);
 	pi.registerTool(deltaForget);
+
+	// Bulk operations (more reliable for batching)
+	pi.registerTool(deltaRememberBulk);
+	pi.registerTool(deltaForgetBulk);
+
+	// Info & schema
 	pi.registerTool(deltaInfo);
 	pi.registerTool(deltaVersion);
 	pi.registerTool(deltaSchema);

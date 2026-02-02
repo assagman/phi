@@ -504,7 +504,9 @@ export function buildTasksPrompt(options: PromptOptions = {}): string {
 	);
 	lines.push("");
 
-	lines.push("Create tasks with epsilon_task_create, update with epsilon_task_update.");
+	lines.push("Create tasks with epsilon_task_create (single) or epsilon_task_create_bulk (multiple).");
+	lines.push("Update tasks with epsilon_task_update (single) or epsilon_task_update_bulk (multiple).");
+	lines.push("For batch operations, always use the bulk tools - they are more reliable.");
 	lines.push("");
 	lines.push("</epsilon_tasks>");
 
