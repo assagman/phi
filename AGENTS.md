@@ -49,35 +49,13 @@ When closing issues via commit:
 ## Tools
 - GitHub CLI for issues/PRs
 - Add package labels to issues/PRs: pkg:agent, pkg:ai, pkg:coding-agent, pkg:mom, pkg:pods, pkg:tui, pkg:web-ui
-- See pi-tmux-test skill if you need to test pi interactive mode
+- See phi-tmux-test skill if you need to test phi interactive mode
 
 ## Style
 - Keep answers short and concise
 - No emojis in commits, issues, PR comments, or code
 - No fluff or cheerful filler text
 - Technical prose only, be kind but direct (e.g., "Thanks @user" not "Thanks so much @user!")
-
-## Changelog
-Location: `packages/*/CHANGELOG.md` (each package has its own)
-
-### Format
-Use these sections under `## [Unreleased]`:
-- `### Breaking Changes` - API changes requiring migration
-- `### Added` - New features
-- `### Changed` - Changes to existing functionality
-- `### Fixed` - Bug fixes
-- `### Removed` - Removed features
-
-### Rules
-- Before adding entries, read the full `[Unreleased]` section to see which subsections already exist
-- New entries ALWAYS go under `## [Unreleased]` section
-- Append to existing subsections (e.g., `### Fixed`), do not create duplicates
-- NEVER modify already-released version sections (e.g., `## [0.12.2]`)
-- Each version section is immutable once released
-
-### Attribution
-- **Internal changes (from issues)**: `Fixed foo bar ([#123](https://github.com/badlogic/pi-mono/issues/123))`
-- **External contributions**: `Added feature X ([#456](https://github.com/badlogic/pi-mono/pull/456) by [@username](https://github.com/username))`
 
 ## Adding a New LLM Provider (packages/ai)
 
@@ -119,27 +97,6 @@ For non-standard auth, create utility (e.g., `bedrock-utils.ts`) with credential
 
 ### 7. Documentation
 - `packages/ai/README.md`: Add to providers table, document options/auth, add env vars
-- `packages/ai/CHANGELOG.md`: Add entry under `## [Unreleased]`
-
-## Releasing
-
-**Lockstep versioning**: All packages always share the same version number. Every release updates all packages together.
-
-**Version semantics** (no major releases):
-- `patch`: Bug fixes and new features
-- `minor`: API breaking changes
-
-### Steps
-
-1. **Update CHANGELOGs**: Ensure all changes since last release are documented in the `[Unreleased]` section of each affected package's CHANGELOG.md
-
-2. **Run release script**:
-   ```bash
-   npm run release:patch    # Fixes and additions
-   npm run release:minor    # API breaking changes
-   ```
-
-The script handles: version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
 
 ## **CRITICAL** Tool Usage Rules **CRITICAL**
 - NEVER use sed/cat to read a file or a range of a file. Always use the read tool (use offset + limit for ranged reads).
@@ -171,7 +128,6 @@ git status
 
 # 2. Add ONLY your specific files
 git add packages/ai/src/providers/transform-messages.ts
-git add packages/ai/CHANGELOG.md
 
 # 3. Commit
 git commit -m "fix(ai): description"
