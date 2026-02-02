@@ -32,6 +32,7 @@ const TaskStatusEnum = Type.Union([
 	Type.Literal("done"),
 	Type.Literal("cancelled"),
 ]);
+
 const TaskPriorityEnum = Type.Union([
 	Type.Literal("low"),
 	Type.Literal("medium"),
