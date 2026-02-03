@@ -467,6 +467,9 @@ export class TUI extends Container {
 			if (this.renderTimer) {
 				clearTimeout(this.renderTimer);
 				this.renderTimer = null;
+				// Reset pendingRender since the timer that was going to honor it is now cleared.
+				// This ensures we schedule a new setImmediate below.
+				this.pendingRender = false;
 			}
 			if (!this.pendingRender) {
 				this.pendingRender = true;

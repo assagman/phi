@@ -491,11 +491,9 @@ export class AgentSession {
 			if (index !== -1) {
 				this._eventListeners.splice(index, 1);
 			}
-			if (coalesceTimer) {
-				clearTimeout(coalesceTimer);
-				coalesceTimer = undefined;
-			}
-			pending.clear();
+			// Flush any pending coalesced events before unsubscribing
+			// to ensure final streaming chunks are not lost.
+			flushPending();
 		};
 	}
 
