@@ -383,7 +383,7 @@ export class InteractiveMode {
 		this.pinnedInputBar = new PinnedInputBar(this.editor, {
 			minHeight: 3,
 			maxHeight: Math.min(10, Math.floor(this.ui.terminal.rows * 0.3)),
-			borderStyle: "single",
+			borderStyle: "none",
 			paddingX: this.settingsManager.getEditorPaddingX(),
 		});
 
