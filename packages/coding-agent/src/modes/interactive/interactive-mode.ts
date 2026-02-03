@@ -198,6 +198,10 @@ export class InteractiveMode {
 	private retryLoader: Loader | undefined = undefined;
 	private retryEscapeHandler?: () => void;
 
+	// Rainbow border animation state
+	private rainbowBorderTimer: ReturnType<typeof setInterval> | undefined = undefined;
+	private rainbowBorderFrame = 0;
+
 	// Messages queued while compaction is running
 	private compactionQueuedMessages: CompactionQueuedMessage[] = [];
 
@@ -982,6 +986,7 @@ export class InteractiveMode {
 			getEditorText: () => this.editor.getText(),
 			editor: (title, prefill) => this.showExtensionEditor(title, prefill),
 			setEditorComponent: (factory) => this.setCustomEditorComponent(factory),
+			editorComponent: this.editor,
 			get theme() {
 				return theme;
 			},
@@ -1618,6 +1623,8 @@ export class InteractiveMode {
 					this.defaultWorkingMessage,
 				);
 				this.statusContainer.addChild(this.loadingAnimation);
+				// Start rainbow border animation while working
+				this.startRainbowBorder();
 				this.ui.requestRender();
 				break;
 
@@ -1757,6 +1764,8 @@ export class InteractiveMode {
 			}
 
 			case "agent_end":
+				// Stop rainbow border animation
+				this.stopRainbowBorder();
 				if (this.loadingAnimation) {
 					this.loadingAnimation.stop();
 					this.loadingAnimation = undefined;
@@ -2252,6 +2261,60 @@ export class InteractiveMode {
 			this.editor.borderColor = theme.getThinkingBorderColor(level);
 		}
 		this.ui.requestRender();
+	}
+
+	// Rainbow border animation colors (8 hues across spectrum)
+	private static readonly RAINBOW_COLORS: [number, number, number][] = [
+		[255, 107, 107], // red
+		[255, 159, 67], // orange
+		[255, 217, 61], // yellow
+		[111, 207, 151], // green
+		[72, 219, 251], // cyan
+		[108, 137, 227], // blue
+		[156, 109, 217], // purple
+		[243, 104, 185], // pink
+	];
+
+	private getRainbowColor(position: number): [number, number, number] {
+		const colors = InteractiveMode.RAINBOW_COLORS;
+		const scaled = position * colors.length;
+		const index = Math.floor(scaled) % colors.length;
+		const nextIndex = (index + 1) % colors.length;
+		const t = scaled - Math.floor(scaled);
+		// Linear interpolation between adjacent colors
+		const c1 = colors[index]!;
+		const c2 = colors[nextIndex]!;
+		return [
+			Math.round(c1[0] + (c2[0] - c1[0]) * t),
+			Math.round(c1[1] + (c2[1] - c1[1]) * t),
+			Math.round(c1[2] + (c2[2] - c1[2]) * t),
+		];
+	}
+
+	private startRainbowBorder(): void {
+		if (this.rainbowBorderTimer) return;
+
+		this.rainbowBorderFrame = 0;
+		this.rainbowBorderTimer = setInterval(() => {
+			this.rainbowBorderFrame++;
+			// Slow cycle: ~4 seconds for full rainbow (60fps * 4 = 240 frames)
+			const position = (this.rainbowBorderFrame % 240) / 240;
+			const [r, g, b] = this.getRainbowColor(position);
+			const colorCode = `\x1b[38;2;${r};${g};${b}m`;
+			const reset = "\x1b[0m";
+
+			this.editor.borderColor = (str: string) => colorCode + str + reset;
+			this.ui.requestRender();
+		}, 1000 / 60); // 60fps for smooth animation
+	}
+
+	private stopRainbowBorder(): void {
+		if (this.rainbowBorderTimer) {
+			clearInterval(this.rainbowBorderTimer);
+			this.rainbowBorderTimer = undefined;
+		}
+		// Restore normal border color based on current mode
+		this.updateEditorBorderColor();
 	}
 
 	private cycleThinkingLevel(): void {

@@ -156,11 +156,15 @@ export class PinnedInputBar implements Component, Focusable {
 		// Truncate pre-rendered editor lines to fit
 		const truncatedLines = editorLines.slice(0, contentHeight);
 
+		// Get border color function from editor (if available)
+		const colorize = this.editor.borderColor ?? ((s: string) => s);
+
 		// Build lines
 		const lines: string[] = [];
 
 		// Top border
-		lines.push(chars.topLeft + chars.horizontal.repeat(Math.max(0, contentWidth)) + chars.topRight);
+		const topBorder = chars.topLeft + chars.horizontal.repeat(Math.max(0, contentWidth)) + chars.topRight;
+		lines.push(colorize(topBorder));
 
 		// Content lines with padding
 		for (let i = 0; i < contentHeight; i++) {
@@ -169,11 +173,12 @@ export class PinnedInputBar implements Component, Focusable {
 			// Use visibleWidth for ANSI-safe padding calculation
 			const rightPadSize = Math.max(0, contentWidth - paddingX - visibleWidth(content));
 			const rightPad = " ".repeat(rightPadSize);
-			lines.push(chars.vertical + leftPad + content + rightPad + chars.vertical);
+			lines.push(colorize(chars.vertical) + leftPad + content + rightPad + colorize(chars.vertical));
 		}
 
 		// Bottom border
-		lines.push(chars.bottomLeft + chars.horizontal.repeat(Math.max(0, contentWidth)) + chars.bottomRight);
+		const bottomBorder = chars.bottomLeft + chars.horizontal.repeat(Math.max(0, contentWidth)) + chars.bottomRight;
+		lines.push(colorize(bottomBorder));
 
 		return lines;
 	}
