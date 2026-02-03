@@ -373,6 +373,9 @@ export function loadSkills(options: LoadSkillsOptions = {}): LoadSkillsResult {
 		}
 	}
 
+	// Standard location for all coding agents (always enabled)
+	addSkills(loadSkillsFromDirInternal(join(homedir(), ".agents", "skills"), "agents-user", "recursive"));
+
 	if (enableCodexUser) {
 		addSkills(loadSkillsFromDirInternal(join(homedir(), ".codex", "skills"), "codex-user", "recursive"));
 	}

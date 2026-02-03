@@ -139,13 +139,14 @@ Run the extraction script:
 
 ## Skill Locations
 
-Skills are discovered from these locations (later wins on name collision):
+Skills are discovered from these locations (earlier wins on name collision):
 
-1. `~/.codex/skills/**/SKILL.md` (Codex CLI, recursive)
-2. `~/.claude/skills/*/SKILL.md` (Claude Code user, one level)
-3. `<cwd>/.claude/skills/*/SKILL.md` (Claude Code project, one level)
-4. `~/.pi/agent/skills/**/SKILL.md` (Pi user, recursive)
-5. `<cwd>/.pi/skills/**/SKILL.md` (Pi project, recursive)
+1. `~/.agents/skills/**/SKILL.md` (Standard location for all coding agents, always enabled)
+2. `~/.codex/skills/**/SKILL.md` (Codex CLI, recursive)
+3. `~/.claude/skills/*/SKILL.md` (Claude Code user, one level)
+4. `<cwd>/.claude/skills/*/SKILL.md` (Claude Code project, one level)
+5. `~/.pi/agent/skills/**/SKILL.md` (Pi user, recursive)
+6. `<cwd>/.pi/skills/**/SKILL.md` (Pi project, recursive)
 
 ## Configuration
 
