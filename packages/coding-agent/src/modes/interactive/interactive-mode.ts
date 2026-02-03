@@ -198,9 +198,8 @@ export class InteractiveMode {
 	private retryLoader: Loader | undefined = undefined;
 	private retryEscapeHandler?: () => void;
 
-	// Rainbow border animation state
-	private rainbowBorderTimer: ReturnType<typeof setInterval> | undefined = undefined;
-	private rainbowBorderFrame = 0;
+	// Rainbow border animation state (time-based, no separate timer)
+	private rainbowBorderStartTime: number | undefined = undefined;
 
 	// Messages queued while compaction is running
 	private compactionQueuedMessages: CompactionQueuedMessage[] = [];
@@ -393,6 +392,16 @@ export class InteractiveMode {
 
 		// Enable mouse tracking
 		this.ui.terminal.enableMouseTracking();
+
+		// Enable text selection with copy to clipboard
+		this.ui.setSelectionEnabled(true);
+		this.ui.onTextSelected = (text) => {
+			try {
+				copyToClipboard(text);
+			} catch {
+				// Silently ignore clipboard errors
+			}
+		};
 
 		// Create status area (holds widgets, loading indicators, pending messages between chat and input)
 		this.statusAreaContainer = new Container();
@@ -2292,27 +2301,27 @@ export class InteractiveMode {
 	}
 
 	private startRainbowBorder(): void {
-		if (this.rainbowBorderTimer) return;
+		if (this.rainbowBorderStartTime !== undefined) return;
 
-		this.rainbowBorderFrame = 0;
-		this.rainbowBorderTimer = setInterval(() => {
-			this.rainbowBorderFrame++;
-			// Slow cycle: ~4 seconds for full rainbow (60fps * 4 = 240 frames)
-			const position = (this.rainbowBorderFrame % 240) / 240;
+		this.rainbowBorderStartTime = Date.now();
+		// Set borderColor to a function that calculates color based on elapsed time
+		// This piggybacks on existing Loader animation (80ms) - no extra timer needed
+		this.editor.borderColor = (str: string) => {
+			if (this.rainbowBorderStartTime === undefined) {
+				return str; // Fallback if stopped mid-render
+			}
+			const elapsed = Date.now() - this.rainbowBorderStartTime;
+			// 4 second cycle
+			const position = (elapsed % 4000) / 4000;
 			const [r, g, b] = this.getRainbowColor(position);
 			const colorCode = `\x1b[38;2;${r};${g};${b}m`;
-			const reset = "\x1b[0m";
-
-			this.editor.borderColor = (str: string) => colorCode + str + reset;
-			this.ui.requestRender();
-		}, 1000 / 60); // 60fps for smooth animation
+			const resetFg = "\x1b[39m";
+			return colorCode + str + resetFg;
+		};
 	}
 
 	private stopRainbowBorder(): void {
-		if (this.rainbowBorderTimer) {
-			clearInterval(this.rainbowBorderTimer);
-			this.rainbowBorderTimer = undefined;
-		}
+		this.rainbowBorderStartTime = undefined;
 		// Restore normal border color based on current mode
 		this.updateEditorBorderColor();
 	}

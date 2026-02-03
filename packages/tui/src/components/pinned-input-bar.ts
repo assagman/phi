@@ -159,10 +159,13 @@ export class PinnedInputBar implements Component, Focusable {
 		// Get border color function from editor (if available)
 		const colorize = this.editor.borderColor ?? ((s: string) => s);
 
+		// Pre-colorize border characters once to reduce ANSI state changes
+		const coloredVertical = colorize(chars.vertical);
+
 		// Build lines
 		const lines: string[] = [];
 
-		// Top border
+		// Top border (single colorize call for entire line)
 		const topBorder = chars.topLeft + chars.horizontal.repeat(Math.max(0, contentWidth)) + chars.topRight;
 		lines.push(colorize(topBorder));
 
@@ -173,10 +176,11 @@ export class PinnedInputBar implements Component, Focusable {
 			// Use visibleWidth for ANSI-safe padding calculation
 			const rightPadSize = Math.max(0, contentWidth - paddingX - visibleWidth(content));
 			const rightPad = " ".repeat(rightPadSize);
-			lines.push(colorize(chars.vertical) + leftPad + content + rightPad + colorize(chars.vertical));
+			// Use pre-colorized vertical bars
+			lines.push(coloredVertical + leftPad + content + rightPad + coloredVertical);
 		}
 
-		// Bottom border
+		// Bottom border (single colorize call for entire line)
 		const bottomBorder = chars.bottomLeft + chars.horizontal.repeat(Math.max(0, contentWidth)) + chars.bottomRight;
 		lines.push(colorize(bottomBorder));
 

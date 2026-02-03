@@ -55,6 +55,14 @@ export {
 	type MouseModifiers,
 	parseMouseEvent,
 } from "./mouse.js";
+// Text selection
+export {
+	applySelectionHighlight,
+	type SelectionPosition,
+	type SelectionRange,
+	stripAnsi,
+	TextSelection,
+} from "./selection.js";
 // Input buffering for batch splitting
 export { StdinBuffer, type StdinBufferEventMap, type StdinBufferOptions } from "./stdin-buffer.js";
 // Terminal interface and implementations

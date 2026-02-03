@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { isKeyRelease, matchesKey } from "./keys.js";
 import type { MouseEvent } from "./mouse.js";
 import { isCompleteMouseEvent, isPotentialMouseEvent, parseMouseEvent } from "./mouse.js";
+import { applySelectionHighlight, TextSelection } from "./selection.js";
 import type { Terminal } from "./terminal.js";
 import { getCapabilities, setCellDimensions } from "./terminal-image.js";
 import { extractSegments, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.js";
@@ -208,7 +209,17 @@ export class TUI extends Container {
 	public onDebug?: () => void;
 	/** Global callback for mouse events. Called before input is forwarded to focused component. */
 	public onMouseEvent?: (event: MouseEvent) => void;
-	private renderRequested = false;
+
+	// Throttled rendering state (~60fps with leading+trailing behavior)
+	private static readonly RENDER_INTERVAL_MS = 16; // ~60fps
+	private lastRenderTime = 0;
+	private pendingRender = false;
+	private renderTimer: ReturnType<typeof setTimeout> | null = null;
+
+	// tmux detection: tmux doesn't support mode 2026 synchronized output,
+	// so we use padding-based overwrite instead of clear+write to prevent flickering
+	private readonly inTmux = !!process.env.TMUX;
+
 	private cursorRow = 0; // Logical cursor row (end of rendered content)
 	private hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
 	private inputBuffer = ""; // Buffer for parsing terminal responses
@@ -223,6 +234,12 @@ export class TUI extends Container {
 		preFocus: Component | null;
 		hidden: boolean;
 	}[] = [];
+
+	// Text selection state
+	private selection = new TextSelection();
+	private selectionEnabled = false;
+	/** Callback when text is selected (mouse release after drag). Called with selected text. */
+	public onTextSelected?: (text: string) => void;
 
 	constructor(terminal: Terminal, showHardwareCursor?: boolean) {
 		super();
@@ -243,6 +260,34 @@ export class TUI extends Container {
 			this.terminal.hideCursor();
 		}
 		this.requestRender();
+	}
+
+	/**
+	 * Enable or disable text selection via mouse.
+	 * When enabled, left-click drag selects text and copies to clipboard on release.
+	 */
+	setSelectionEnabled(enabled: boolean): void {
+		this.selectionEnabled = enabled;
+		if (!enabled) {
+			this.selection.clear();
+		}
+	}
+
+	/**
+	 * Check if text selection is enabled.
+	 */
+	isSelectionEnabled(): boolean {
+		return this.selectionEnabled;
+	}
+
+	/**
+	 * Clear any active text selection.
+	 */
+	clearSelection(): void {
+		if (this.selection.hasSelection()) {
+			this.selection.clear();
+			this.requestRender();
+		}
 	}
 
 	setFocus(component: Component | null): void {
@@ -372,6 +417,13 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
+		// Cancel any pending throttled render
+		if (this.renderTimer) {
+			clearTimeout(this.renderTimer);
+			this.renderTimer = null;
+		}
+		this.pendingRender = false;
+
 		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
 		if (this.previousLines.length > 0) {
 			const targetRow = this.previousLines.length; // Line after the last content
@@ -388,6 +440,13 @@ export class TUI extends Container {
 		this.terminal.stop();
 	}
 
+	/**
+	 * Request a render with throttling (~60fps).
+	 * Uses leading+trailing behavior like Ink:
+	 * - Leading: first call renders immediately if enough time has passed
+	 * - Trailing: last call is always honored via scheduled timer
+	 * This prevents visual stuttering from multiple animation timers.
+	 */
 	requestRender(force = false): void {
 		if (force) {
 			this.previousLines = [];
@@ -396,12 +455,35 @@ export class TUI extends Container {
 			this.cursorRow = 0;
 			this.hardwareCursorRow = 0;
 		}
-		if (this.renderRequested) return;
-		this.renderRequested = true;
-		process.nextTick(() => {
-			this.renderRequested = false;
+
+		const now = Date.now();
+		const elapsed = now - this.lastRenderTime;
+
+		if (elapsed >= TUI.RENDER_INTERVAL_MS) {
+			// Leading: enough time has passed, render immediately
+			if (this.renderTimer) {
+				clearTimeout(this.renderTimer);
+				this.renderTimer = null;
+			}
+			this.pendingRender = false;
+			this.lastRenderTime = now;
 			this.doRender();
-		});
+		} else if (!this.renderTimer) {
+			// Schedule trailing render
+			this.pendingRender = true;
+			const remaining = TUI.RENDER_INTERVAL_MS - elapsed;
+			this.renderTimer = setTimeout(() => {
+				this.renderTimer = null;
+				if (this.pendingRender) {
+					this.pendingRender = false;
+					this.lastRenderTime = Date.now();
+					this.doRender();
+				}
+			}, remaining);
+		} else {
+			// Timer already scheduled, just ensure we render when it fires
+			this.pendingRender = true;
+		}
 	}
 
 	private handleInput(data: string): void {
@@ -416,6 +498,12 @@ export class TUI extends Container {
 		// Handle mouse events
 		const mouseEvent = this.handleMouseInput(data);
 		if (mouseEvent) {
+			// Handle text selection first (if enabled)
+			if (this.selectionEnabled && this.handleSelectionEvent(mouseEvent)) {
+				// Selection handled the event, don't forward to other handlers
+				return;
+			}
+
 			if (this.onMouseEvent) {
 				this.onMouseEvent(mouseEvent);
 			}
@@ -529,6 +617,61 @@ export class TUI extends Container {
 
 	private containsImage(line: string): boolean {
 		return line.includes("\x1b_G") || line.includes("\x1b]1337;File=");
+	}
+
+	/**
+	 * Handle mouse events for text selection.
+	 * @returns true if the event was handled (consumed), false to pass to other handlers
+	 */
+	private handleSelectionEvent(event: MouseEvent): boolean {
+		// Only handle left button events for selection
+		if (event.button !== "left" && event.button !== "none") {
+			return false;
+		}
+
+		switch (event.type) {
+			case "press":
+				// Left button press starts a new selection
+				if (event.button === "left") {
+					// Clear any previous selection and start new one
+					this.selection.startSelection(event.row, event.column);
+					this.requestRender();
+					return true;
+				}
+				break;
+
+			case "drag":
+				// Update selection during drag (button is "left" or "none" during drag)
+				if (this.selection.isSelecting()) {
+					this.selection.updateSelection(event.row, event.column);
+					this.requestRender();
+					return true;
+				}
+				break;
+
+			case "release":
+				// End selection and copy to clipboard
+				if (this.selection.isSelecting()) {
+					this.selection.endSelection();
+					// Extract selected text and invoke callback
+					const selectedText = this.selection.extractText(this.previousLines);
+					if (selectedText && this.onTextSelected) {
+						this.onTextSelected(selectedText);
+					}
+					// Keep selection visible (user can click to clear)
+					this.requestRender();
+					return true;
+				}
+				break;
+		}
+
+		// Click without drag clears selection
+		if (event.type === "press" && this.selection.hasSelection()) {
+			this.selection.clear();
+			this.requestRender();
+		}
+
+		return false;
 	}
 
 	/**
@@ -835,6 +978,11 @@ export class TUI extends Container {
 			newLines = this.compositeOverlays(newLines, width, height);
 		}
 
+		// Apply selection highlighting (before cursor extraction and line resets)
+		if (this.selectionEnabled && this.selection.hasSelection()) {
+			newLines = applySelectionHighlight(newLines, this.selection.getRange());
+		}
+
 		// Extract cursor position before applying line resets (marker must be found first)
 		const cursorPos = this.extractCursorPosition(newLines);
 
@@ -917,8 +1065,9 @@ export class TUI extends Container {
 				buffer += "\r";
 				// Clear extra lines
 				const extraLines = this.previousLines.length - newLines.length;
+				const clearLine = this.inTmux ? " ".repeat(width) : "\x1b[2K";
 				for (let i = 0; i < extraLines; i++) {
-					buffer += "\r\n\x1b[2K";
+					buffer += `\r\n${clearLine}`;
 				}
 				buffer += `\x1b[${extraLines}A`;
 				buffer += "\x1b[?2026l";
@@ -976,7 +1125,7 @@ export class TUI extends Container {
 		const renderEnd = Math.min(lastChanged, newLines.length - 1);
 		for (let i = firstChanged; i <= renderEnd; i++) {
 			if (i > firstChanged) buffer += "\r\n";
-			buffer += "\x1b[2K"; // Clear current line
+
 			const line = newLines[i];
 			const isImageLine = this.containsImage(line);
 			if (!isImageLine && visibleWidth(line) > width) {
@@ -1007,7 +1156,18 @@ export class TUI extends Container {
 				].join("\n");
 				throw new Error(errorMsg);
 			}
-			buffer += line;
+
+			if (this.inTmux && !isImageLine) {
+				// tmux workaround: pad line to full width instead of clearing.
+				// This overwrites old content completely without the flash caused by
+				// \x1b[2K (clear) in tmux which doesn't support mode 2026 sync output.
+				const lineWidth = visibleWidth(line);
+				const padding = " ".repeat(Math.max(0, width - lineWidth));
+				buffer += `${line}\x1b[0m${padding}`;
+			} else {
+				// Native terminal with mode 2026 support: use clear for cleaner output
+				buffer += `\x1b[2K${line}`;
+			}
 		}
 
 		// Track where cursor ended up after rendering
@@ -1022,8 +1182,9 @@ export class TUI extends Container {
 				finalCursorRow = newLines.length - 1;
 			}
 			const extraLines = this.previousLines.length - newLines.length;
+			const clearLine = this.inTmux ? " ".repeat(width) : "\x1b[2K";
 			for (let i = newLines.length; i < this.previousLines.length; i++) {
-				buffer += "\r\n\x1b[2K";
+				buffer += `\r\n${clearLine}`;
 			}
 			// Move cursor back to end of new content
 			buffer += `\x1b[${extraLines}A`;
