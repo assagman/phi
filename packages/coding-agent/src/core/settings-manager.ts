@@ -79,6 +79,7 @@ export interface Settings {
 	markdown?: MarkdownSettings;
 	/** @deprecated No longer used - changelog display removed */
 	collapseChangelog?: boolean;
+	standaloneMode?: boolean; // Enable standalone TUI mode with alternate screen buffer
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -478,6 +479,19 @@ export class SettingsManager {
 
 	setShowHardwareCursor(enabled: boolean): void {
 		this.globalSettings.showHardwareCursor = enabled;
+		this.save();
+	}
+
+	getStandaloneMode(): boolean {
+		// Default to standalone mode unless explicitly disabled
+		if (this.settings.standaloneMode !== undefined) {
+			return this.settings.standaloneMode;
+		}
+		return process.env.PI_STANDALONE !== "0";
+	}
+
+	setStandaloneMode(enabled: boolean): void {
+		this.globalSettings.standaloneMode = enabled;
 		this.save();
 	}
 

@@ -35,6 +35,23 @@ export interface Terminal {
 
 	// Title operations
 	setTitle(title: string): void; // Set terminal window title
+
+	// Alternate screen buffer (for standalone TUI mode)
+	enterAlternateScreen(): void; // Switch to alternate screen buffer
+	exitAlternateScreen(): void; // Return to normal screen buffer
+	get inAlternateScreen(): boolean; // Whether currently in alternate screen
+
+	// Scroll region management
+	setScrollRegion(top: number, bottom: number): void; // Define scrollable region (1-indexed, inclusive)
+	clearScrollRegion(): void; // Clear scroll region (full screen scrollable)
+
+	// Cursor save/restore
+	saveCursor(): void; // Save cursor position
+	restoreCursor(): void; // Restore cursor position
+
+	// Mouse support
+	enableMouseTracking(): void; // Enable mouse event reporting
+	disableMouseTracking(): void; // Disable mouse event reporting
 }
 
 /**
@@ -47,9 +64,15 @@ export class ProcessTerminal implements Terminal {
 	private _kittyProtocolActive = false;
 	private stdinBuffer?: StdinBuffer;
 	private stdinDataHandler?: (data: string) => void;
+	private _inAlternateScreen = false;
+	private _mouseTrackingEnabled = false;
 
 	get kittyProtocolActive(): boolean {
 		return this._kittyProtocolActive;
+	}
+
+	get inAlternateScreen(): boolean {
+		return this._inAlternateScreen;
 	}
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
@@ -149,6 +172,12 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
+		// Exit alternate screen if active
+		this.exitAlternateScreen();
+
+		// Disable mouse tracking if enabled
+		this.disableMouseTracking();
+
 		// Disable bracketed paste mode
 		process.stdout.write("\x1b[?2004l");
 
@@ -228,5 +257,63 @@ export class ProcessTerminal implements Terminal {
 	setTitle(title: string): void {
 		// OSC 0;title BEL - set terminal window title
 		process.stdout.write(`\x1b]0;${title}\x07`);
+	}
+
+	// Alternate screen buffer management
+	enterAlternateScreen(): void {
+		if (this._inAlternateScreen) return;
+		// ESC[?1049h - Enter alternate screen buffer
+		// ESC[2J - Clear screen
+		// ESC[H - Move cursor to home position (1,1)
+		process.stdout.write("\x1b[?1049h\x1b[2J\x1b[H");
+		this._inAlternateScreen = true;
+	}
+
+	exitAlternateScreen(): void {
+		if (!this._inAlternateScreen) return;
+		// ESC[?1049l - Exit alternate screen buffer
+		process.stdout.write("\x1b[?1049l");
+		this._inAlternateScreen = false;
+	}
+
+	// Scroll region management
+	setScrollRegion(top: number, bottom: number): void {
+		// ESC[<top>;<bottom>r - Set scroll region (1-indexed, inclusive)
+		// Line 1 is top of screen
+		process.stdout.write(`\x1b[${top};${bottom}r`);
+	}
+
+	clearScrollRegion(): void {
+		// ESC[r - Clear scroll region (full screen becomes scrollable)
+		process.stdout.write("\x1b[r");
+	}
+
+	// Cursor save/restore
+	saveCursor(): void {
+		// ESC[s or ESC 7 - Save cursor position
+		process.stdout.write("\x1b7");
+	}
+
+	restoreCursor(): void {
+		// ESC[u or ESC 8 - Restore cursor position
+		process.stdout.write("\x1b8");
+	}
+
+	// Mouse support
+	enableMouseTracking(): void {
+		if (this._mouseTrackingEnabled) return;
+		// Enable SGR mouse mode with full event reporting:
+		// ESC[?1000h - Basic mouse tracking (button press/release)
+		// ESC[?1002h - Button event tracking (includes movement while pressed)
+		// ESC[?1006h - SGR coordinates (allows larger terminal sizes)
+		process.stdout.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+		this._mouseTrackingEnabled = true;
+	}
+
+	disableMouseTracking(): void {
+		if (!this._mouseTrackingEnabled) return;
+		// Disable in reverse order
+		process.stdout.write("\x1b[?1006l\x1b[?1002l\x1b[?1000l");
+		this._mouseTrackingEnabled = false;
 	}
 }

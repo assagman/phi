@@ -6,6 +6,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isKeyRelease, matchesKey } from "./keys.js";
+import type { MouseEvent } from "./mouse.js";
+import { isCompleteMouseEvent, isPotentialMouseEvent, parseMouseEvent } from "./mouse.js";
 import type { Terminal } from "./terminal.js";
 import { getCapabilities, setCellDimensions } from "./terminal-image.js";
 import { extractSegments, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.js";
@@ -199,14 +201,18 @@ export class TUI extends Container {
 	public terminal: Terminal;
 	private previousLines: string[] = [];
 	private previousWidth = 0;
+	private previousHeight = 0;
 	private focusedComponent: Component | null = null;
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
+	/** Global callback for mouse events. Called before input is forwarded to focused component. */
+	public onMouseEvent?: (event: MouseEvent) => void;
 	private renderRequested = false;
 	private cursorRow = 0; // Logical cursor row (end of rendered content)
 	private hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
 	private inputBuffer = ""; // Buffer for parsing terminal responses
+	private mouseBuffer = ""; // Buffer for incomplete mouse event sequences
 	private cellSizeQueryPending = false;
 	private showHardwareCursor = process.env.PI_HARDWARE_CURSOR === "1";
 
@@ -385,7 +391,8 @@ export class TUI extends Container {
 	requestRender(force = false): void {
 		if (force) {
 			this.previousLines = [];
-			this.previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
+			this.previousWidth = -1; // -1 triggers sizeChanged, forcing a full clear
+			this.previousHeight = -1;
 			this.cursorRow = 0;
 			this.hardwareCursorRow = 0;
 		}
@@ -404,6 +411,16 @@ export class TUI extends Container {
 			const filtered = this.parseCellSizeResponse();
 			if (filtered.length === 0) return;
 			data = filtered;
+		}
+
+		// Handle mouse events
+		const mouseEvent = this.handleMouseInput(data);
+		if (mouseEvent) {
+			if (this.onMouseEvent) {
+				this.onMouseEvent(mouseEvent);
+			}
+			// Don't forward mouse events to focused component
+			return;
 		}
 
 		// Global debug key handler (Shift+Ctrl+D)
@@ -478,6 +495,36 @@ export class TUI extends Container {
 		this.inputBuffer = "";
 		this.cellSizeQueryPending = false; // Give up waiting
 		return result;
+	}
+
+	/**
+	 * Handle mouse input events.
+	 * Returns parsed MouseEvent if data is a complete mouse event, null otherwise.
+	 * Handles buffering of incomplete mouse sequences.
+	 */
+	private handleMouseInput(data: string): MouseEvent | null {
+		// Check if this looks like a mouse event
+		if (!isPotentialMouseEvent(data) && !isPotentialMouseEvent(this.mouseBuffer + data)) {
+			return null;
+		}
+
+		// Accumulate data
+		this.mouseBuffer += data;
+
+		// Check if we have a complete mouse event
+		if (isCompleteMouseEvent(this.mouseBuffer)) {
+			const event = parseMouseEvent(this.mouseBuffer);
+			this.mouseBuffer = "";
+			return event;
+		}
+
+		// Check if buffer is getting too long or contains invalid data
+		if (this.mouseBuffer.length > 50) {
+			// Too long for a valid mouse event, discard
+			this.mouseBuffer = "";
+		}
+
+		return null;
 	}
 
 	private containsImage(line: string): boolean {
@@ -793,11 +840,13 @@ export class TUI extends Container {
 
 		newLines = this.applyLineResets(newLines);
 
-		// Width changed - need full re-render
+		// Width or height changed - need full re-render
 		const widthChanged = this.previousWidth !== 0 && this.previousWidth !== width;
+		const heightChanged = this.previousHeight !== 0 && this.previousHeight !== height;
+		const sizeChanged = widthChanged || heightChanged;
 
 		// First render - just output everything without clearing (assumes clean screen)
-		if (this.previousLines.length === 0 && !widthChanged) {
+		if (this.previousLines.length === 0 && !sizeChanged) {
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
@@ -811,11 +860,12 @@ export class TUI extends Container {
 			this.positionHardwareCursor(cursorPos, newLines.length);
 			this.previousLines = newLines;
 			this.previousWidth = width;
+			this.previousHeight = height;
 			return;
 		}
 
-		// Width changed - full re-render
-		if (widthChanged) {
+		// Size changed (width or height) - full re-render
+		if (sizeChanged) {
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
 			buffer += "\x1b[3J\x1b[2J\x1b[H"; // Clear scrollback, screen, and home
 			for (let i = 0; i < newLines.length; i++) {
@@ -829,6 +879,7 @@ export class TUI extends Container {
 			this.positionHardwareCursor(cursorPos, newLines.length);
 			this.previousLines = newLines;
 			this.previousWidth = width;
+			this.previousHeight = height;
 			return;
 		}
 
@@ -878,6 +929,7 @@ export class TUI extends Container {
 			this.positionHardwareCursor(cursorPos, newLines.length);
 			this.previousLines = newLines;
 			this.previousWidth = width;
+			this.previousHeight = height;
 			return;
 		}
 
@@ -901,6 +953,7 @@ export class TUI extends Container {
 			this.positionHardwareCursor(cursorPos, newLines.length);
 			this.previousLines = newLines;
 			this.previousWidth = width;
+			this.previousHeight = height;
 			return;
 		}
 
@@ -990,6 +1043,7 @@ export class TUI extends Container {
 
 		this.previousLines = newLines;
 		this.previousWidth = width;
+		this.previousHeight = height;
 	}
 
 	/**

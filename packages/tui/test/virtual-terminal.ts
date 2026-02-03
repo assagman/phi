@@ -96,6 +96,55 @@ export class VirtualTerminal implements Terminal {
 		this.xterm.write(`\x1b]0;${title}\x07`);
 	}
 
+	// Alternate screen buffer (no-op for virtual terminal)
+	enterAlternateScreen(): void {
+		// ESC[?1049h - Enter alternate screen buffer
+		this.xterm.write("\x1b[?1049h");
+	}
+
+	exitAlternateScreen(): void {
+		// ESC[?1049l - Exit alternate screen buffer
+		this.xterm.write("\x1b[?1049l");
+	}
+
+	get inAlternateScreen(): boolean {
+		// Virtual terminal doesn't track alternate screen state
+		return false;
+	}
+
+	// Scroll region management (no-op for virtual terminal)
+	setScrollRegion(top: number, bottom: number): void {
+		// ESC[<top>;<bottom>r - Set scroll region
+		this.xterm.write(`\x1b[${top};${bottom}r`);
+	}
+
+	clearScrollRegion(): void {
+		// ESC[r - Clear scroll region
+		this.xterm.write("\x1b[r");
+	}
+
+	// Cursor save/restore
+	saveCursor(): void {
+		// ESC[s or ESC 7 - Save cursor position
+		this.xterm.write("\x1b7");
+	}
+
+	restoreCursor(): void {
+		// ESC[u or ESC 8 - Restore cursor position
+		this.xterm.write("\x1b8");
+	}
+
+	// Mouse support (no-op for virtual terminal)
+	enableMouseTracking(): void {
+		// ESC[?1000h ESC[?1002h ESC[?1006h - Enable mouse tracking
+		this.xterm.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+	}
+
+	disableMouseTracking(): void {
+		// ESC[?1006l ESC[?1002l ESC[?1000l - Disable mouse tracking
+		this.xterm.write("\x1b[?1006l\x1b[?1002l\x1b[?1000l");
+	}
+
 	// Test-specific methods not in Terminal interface
 
 	/**

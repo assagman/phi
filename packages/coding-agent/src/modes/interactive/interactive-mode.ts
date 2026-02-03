@@ -24,6 +24,7 @@ import type {
 	EditorTheme,
 	KeyId,
 	MarkdownTheme,
+	MouseEvent,
 	OverlayHandle,
 	OverlayOptions,
 	SlashCommand,
@@ -32,11 +33,14 @@ import {
 	CombinedAutocompleteProvider,
 	type Component,
 	Container,
+	FixedLayoutContainer,
 	fuzzyFilter,
 	Loader,
 	Markdown,
 	matchesKey,
+	PinnedInputBar,
 	ProcessTerminal,
+	ScrollableViewport,
 	Spacer,
 	Text,
 	TruncatedText,
@@ -135,7 +139,6 @@ export interface InteractiveModeOptions {
 export class InteractiveMode {
 	private session: AgentSession;
 	private ui: TUI;
-	private chatContainer: Container;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
 	private defaultEditor: CustomEditor;
@@ -222,6 +225,12 @@ export class InteractiveMode {
 	// Custom header from extension (undefined = use built-in header)
 	private customHeader: (Component & { dispose?(): void }) | undefined = undefined;
 
+	// Standalone TUI mode components
+	private fixedLayout!: FixedLayoutContainer;
+	private scrollableViewport!: ScrollableViewport;
+	private pinnedInputBar!: PinnedInputBar;
+	private statusAreaContainer!: Container;
+
 	// Convenience accessors
 	private get agent() {
 		return this.session.agent;
@@ -233,13 +242,19 @@ export class InteractiveMode {
 		return this.session.settingsManager;
 	}
 
+	/**
+	 * Add a component to the chat area.
+	 */
+	private addToChat(component: Component): void {
+		this.scrollableViewport.addItem(component);
+	}
+
 	constructor(
 		session: AgentSession,
 		private options: InteractiveModeOptions = {},
 	) {
 		this.session = session;
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
-		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
 		this.widgetContainerAbove = new Container();
@@ -358,56 +373,53 @@ export class InteractiveMode {
 		this.fdPath = await ensureTool("fd");
 		this.setupAutocomplete(this.fdPath);
 
-		// Add header with keybindings from config (unless silenced)
+		// Enter alternate screen for standalone mode
+		this.ui.terminal.enterAlternateScreen();
+
+		// Create scrollable viewport for chat
+		this.scrollableViewport = new ScrollableViewport({ autoScroll: true });
+
+		// Create pinned input bar
+		this.pinnedInputBar = new PinnedInputBar(this.editor, {
+			minHeight: 3,
+			maxHeight: Math.min(10, Math.floor(this.ui.terminal.rows * 0.3)),
+			borderStyle: "single",
+			paddingX: this.settingsManager.getEditorPaddingX(),
+		});
+
+		// Enable mouse tracking
+		this.ui.terminal.enableMouseTracking();
+
+		// Create status area (holds loading indicators + pending messages between chat and input)
+		this.statusAreaContainer = new Container();
+		this.statusAreaContainer.addChild(this.pendingMessagesContainer);
+		this.statusAreaContainer.addChild(this.statusContainer);
+
+		// Create fixed layout with terminal reference for dynamic height
+		this.fixedLayout = new FixedLayoutContainer(this.ui.terminal, {
+			headerHeight: this.settingsManager.getQuietStartup() ? 0 : 1,
+			footerHeight: 1,
+			minInputHeight: 3,
+			maxInputHeight: 10,
+		});
+
+		// Build header if not silenced
 		if (!this.settingsManager.getQuietStartup()) {
 			const logo = theme.bold(theme.fg("accent", APP_NAME));
-
-			// Build startup instructions using keybinding hint helpers
-			const kb = this.keybindings;
-			const hint = (action: AppAction, desc: string) => appKeyHint(kb, action, desc);
-
-			const instructions = [
-				hint("interrupt", "to interrupt"),
-				hint("clear", "to clear"),
-				rawKeyHint(`${appKey(kb, "clear")} twice`, "to exit"),
-				hint("exit", "to exit (empty)"),
-				hint("suspend", "to suspend"),
-				keyHint("deleteToLineEnd", "to delete to end"),
-				hint("cycleThinkingLevel", "to cycle thinking"),
-				rawKeyHint(`${appKey(kb, "cycleModelForward")}/${appKey(kb, "cycleModelBackward")}`, "to cycle models"),
-				hint("selectModel", "to select model"),
-				hint("expandTools", "to expand tools"),
-				hint("toggleThinking", "to toggle thinking"),
-				hint("externalEditor", "for external editor"),
-				rawKeyHint("/", "for commands"),
-				rawKeyHint("!", "to run bash"),
-				rawKeyHint("!!", "to run bash (no context)"),
-				hint("followUp", "to queue follow-up"),
-				hint("dequeue", "to edit all queued messages"),
-				hint("pasteImage", "to paste image"),
-				rawKeyHint("drop files", "to attach"),
-			].join("\n");
-			this.builtInHeader = new Text(`${logo}\n${instructions}`, 1, 0);
-
-			// Setup UI layout
-			this.ui.addChild(new Spacer(1));
-			this.ui.addChild(this.builtInHeader);
-			this.ui.addChild(new Spacer(1));
-		} else {
-			// Minimal header when silenced
-			this.builtInHeader = new Text("", 0, 0);
+			this.builtInHeader = new Text(logo, 1, 0);
+			this.fixedLayout.setHeader(this.builtInHeader);
 		}
 
-		this.ui.addChild(this.chatContainer);
-		this.ui.addChild(this.pendingMessagesContainer);
-		this.ui.addChild(this.statusContainer);
-		this.renderWidgets(); // Initialize with default spacer
-		this.ui.addChild(this.widgetContainerAbove);
-		this.ui.addChild(this.editorContainer);
-		this.ui.addChild(this.widgetContainerBelow);
-		this.ui.addChild(this.footer);
-		this.ui.setFocus(this.editor);
+		// Set up layout components
+		this.fixedLayout.setChatViewport(this.scrollableViewport);
+		this.fixedLayout.setStatusArea(this.statusAreaContainer);
+		this.fixedLayout.setInputBar(this.pinnedInputBar);
+		this.fixedLayout.setFooter(this.footer);
 
+		// Add fixed layout to UI (only child in standalone mode)
+		this.ui.addChild(this.fixedLayout);
+
+		this.ui.setFocus(this.editor);
 		this.setupKeyHandlers();
 		this.setupEditorSubmitHandler();
 
@@ -436,6 +448,14 @@ export class InteractiveMode {
 		this.footerDataProvider.onBranchChange(() => {
 			this.ui.requestRender();
 		});
+
+		// Set up scroll handler
+		this.scrollableViewport.onScroll = (_atBottom) => {
+			// Could update UI indicator here
+		};
+
+		// Set up mouse event handler for wheel scrolling
+		this.ui.onMouseEvent = (event) => this.handleMouseEvent(event);
 	}
 
 	/**
@@ -517,16 +537,16 @@ export class InteractiveMode {
 			const contextFiles = loadProjectContextFiles();
 			if (contextFiles.length > 0) {
 				const contextList = contextFiles.map((f) => theme.fg("dim", `  ${f.path}`)).join("\n");
-				this.chatContainer.addChild(new Text(theme.fg("muted", "Loaded context:\n") + contextList, 0, 0));
-				this.chatContainer.addChild(new Spacer(1));
+				this.addToChat(new Text(theme.fg("muted", "Loaded context:\n") + contextList, 0, 0));
+				this.addToChat(new Spacer(1));
 			}
 
 			// Show loaded skills (already discovered by SDK)
 			const skills = this.session.skills;
 			if (skills.length > 0) {
 				const skillList = skills.map((s) => theme.fg("dim", `  ${s.filePath}`)).join("\n");
-				this.chatContainer.addChild(new Text(theme.fg("muted", "Loaded skills:\n") + skillList, 0, 0));
-				this.chatContainer.addChild(new Spacer(1));
+				this.addToChat(new Text(theme.fg("muted", "Loaded skills:\n") + skillList, 0, 0));
+				this.addToChat(new Spacer(1));
 			}
 
 			// Show skill warnings if any
@@ -535,16 +555,16 @@ export class InteractiveMode {
 				const warningList = skillWarnings
 					.map((w) => theme.fg("warning", `  ${w.skillPath}: ${w.message}`))
 					.join("\n");
-				this.chatContainer.addChild(new Text(theme.fg("warning", "Skill warnings:\n") + warningList, 0, 0));
-				this.chatContainer.addChild(new Spacer(1));
+				this.addToChat(new Text(theme.fg("warning", "Skill warnings:\n") + warningList, 0, 0));
+				this.addToChat(new Spacer(1));
 			}
 
 			// Show loaded prompt templates
 			const templates = this.session.promptTemplates;
 			if (templates.length > 0) {
 				const templateList = templates.map((t) => theme.fg("dim", `  /${t.name} ${t.source}`)).join("\n");
-				this.chatContainer.addChild(new Text(theme.fg("muted", "Loaded prompt templates:\n") + templateList, 0, 0));
-				this.chatContainer.addChild(new Spacer(1));
+				this.addToChat(new Text(theme.fg("muted", "Loaded prompt templates:\n") + templateList, 0, 0));
+				this.addToChat(new Spacer(1));
 			}
 		}
 
@@ -650,15 +670,15 @@ export class InteractiveMode {
 						await options.setup(this.sessionManager);
 					}
 
-					this.chatContainer.clear();
+					this.scrollableViewport.clear();
 					this.pendingMessagesContainer.clear();
 					this.compactionQueuedMessages = [];
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 					this.pendingTools.clear();
 
-					this.chatContainer.addChild(new Spacer(1));
-					this.chatContainer.addChild(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
+					this.addToChat(new Spacer(1));
+					this.addToChat(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
 					this.ui.requestRender();
 
 					return { cancelled: false };
@@ -669,7 +689,7 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
-					this.chatContainer.clear();
+					this.scrollableViewport.clear();
 					this.renderInitialMessages();
 					this.editor.setText(result.selectedText);
 					this.showStatus("Forked to new session");
@@ -687,7 +707,7 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
-					this.chatContainer.clear();
+					this.scrollableViewport.clear();
 					this.renderInitialMessages();
 					if (result.editorText) {
 						this.editor.setText(result.editorText);
@@ -713,8 +733,8 @@ export class InteractiveMode {
 			const extensionPaths = extensionRunner.getExtensionPaths();
 			if (extensionPaths.length > 0) {
 				const extList = extensionPaths.map((p) => theme.fg("dim", `  ${p}`)).join("\n");
-				this.chatContainer.addChild(new Text(theme.fg("muted", "Loaded extensions:\n") + extList, 0, 0));
-				this.chatContainer.addChild(new Spacer(1));
+				this.addToChat(new Text(theme.fg("muted", "Loaded extensions:\n") + extList, 0, 0));
+				this.addToChat(new Spacer(1));
 			}
 		}
 
@@ -888,21 +908,15 @@ export class InteractiveMode {
 			this.customFooter.dispose();
 		}
 
-		// Remove current footer from UI
-		if (this.customFooter) {
-			this.ui.removeChild(this.customFooter);
-		} else {
-			this.ui.removeChild(this.footer);
-		}
-
 		if (factory) {
-			// Create and add custom footer, passing the data provider
+			// Create custom footer with data provider
 			this.customFooter = factory(this.ui, theme, this.footerDataProvider);
-			this.ui.addChild(this.customFooter);
+			// Use FixedLayout slot (standalone mode uses fixed layout exclusively)
+			this.fixedLayout.setFooter(this.customFooter);
 		} else {
-			// Restore built-in footer
+			// Restore built-in footer via FixedLayout slot
 			this.customFooter = undefined;
-			this.ui.addChild(this.footer);
+			this.fixedLayout.setFooter(this.footer);
 		}
 
 		this.ui.requestRender();
@@ -922,21 +936,15 @@ export class InteractiveMode {
 			this.customHeader.dispose();
 		}
 
-		// Remove current header from UI
-		if (this.customHeader) {
-			this.ui.removeChild(this.customHeader);
-		} else {
-			this.ui.removeChild(this.builtInHeader);
-		}
-
 		if (factory) {
-			// Create and add custom header at position 1 (after initial spacer)
+			// Create custom header
 			this.customHeader = factory(this.ui, theme);
-			this.ui.children.splice(1, 0, this.customHeader);
+			// Use FixedLayout slot (standalone mode uses fixed layout exclusively)
+			this.fixedLayout.setHeader(this.customHeader);
 		} else {
-			// Restore built-in header at position 1
+			// Restore built-in header via FixedLayout slot
 			this.customHeader = undefined;
-			this.ui.children.splice(1, 0, this.builtInHeader);
+			this.fixedLayout.setHeader(this.builtInHeader);
 		}
 
 		this.ui.requestRender();
@@ -1309,7 +1317,7 @@ export class InteractiveMode {
 	private showExtensionError(extensionPath: string, error: string, stack?: string): void {
 		const errorMsg = `Extension "${extensionPath}" error: ${error}`;
 		const errorText = new Text(theme.fg("error", errorMsg), 1, 0);
-		this.chatContainer.addChild(errorText);
+		this.addToChat(errorText);
 		if (stack) {
 			// Show stack trace in dim color, indented
 			const stackLines = stack
@@ -1318,7 +1326,7 @@ export class InteractiveMode {
 				.map((line) => theme.fg("dim", `  ${line.trim()}`))
 				.join("\n");
 			if (stackLines) {
-				this.chatContainer.addChild(new Text(stackLines, 1, 0));
+				this.addToChat(new Text(stackLines, 1, 0));
 			}
 		}
 		this.ui.requestRender();
@@ -1372,6 +1380,14 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("externalEditor", () => this.openExternalEditor());
 		this.defaultEditor.onAction("followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("dequeue", () => this.handleDequeue());
+
+		// Scroll handlers (only in standalone mode)
+		this.defaultEditor.onAction("scrollUp", () => this.handleScrollUp());
+		this.defaultEditor.onAction("scrollDown", () => this.handleScrollDown());
+		this.defaultEditor.onAction("scrollPageUp", () => this.handleScrollPageUp());
+		this.defaultEditor.onAction("scrollPageDown", () => this.handleScrollPageDown());
+		this.defaultEditor.onAction("scrollToTop", () => this.handleScrollToTop());
+		this.defaultEditor.onAction("scrollToBottom", () => this.handleScrollToBottom());
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
@@ -1619,7 +1635,7 @@ export class InteractiveMode {
 						this.getMarkdownThemeWithSettings(),
 					);
 					this.streamingMessage = event.message;
-					this.chatContainer.addChild(this.streamingComponent);
+					this.addToChat(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage);
 					this.ui.requestRender();
 				}
@@ -1633,7 +1649,7 @@ export class InteractiveMode {
 					for (const content of this.streamingMessage.content) {
 						if (content.type === "toolCall") {
 							if (!this.pendingTools.has(content.id)) {
-								this.chatContainer.addChild(new Text("", 0, 0));
+								this.addToChat(new Text("", 0, 0));
 								const component = new ToolExecutionComponent(
 									content.name,
 									content.arguments,
@@ -1644,7 +1660,7 @@ export class InteractiveMode {
 									this.ui,
 								);
 								component.setExpanded(this.toolOutputExpanded);
-								this.chatContainer.addChild(component);
+								this.addToChat(component);
 								this.pendingTools.set(content.id, component);
 							} else {
 								const component = this.pendingTools.get(content.id);
@@ -1654,6 +1670,8 @@ export class InteractiveMode {
 							}
 						}
 					}
+					// Invalidate viewport cache so streaming updates appear
+					this.scrollableViewport.invalidateCacheOnly();
 					this.ui.requestRender();
 				}
 				break;
@@ -1709,7 +1727,7 @@ export class InteractiveMode {
 						this.ui,
 					);
 					component.setExpanded(this.toolOutputExpanded);
-					this.chatContainer.addChild(component);
+					this.addToChat(component);
 					this.pendingTools.set(event.toolCallId, component);
 					this.ui.requestRender();
 				}
@@ -1720,6 +1738,8 @@ export class InteractiveMode {
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.partialResult, isError: false }, true);
+					// Invalidate viewport cache so streaming tool output appears
+					this.scrollableViewport.invalidateCacheOnly();
 					this.ui.requestRender();
 				}
 				break;
@@ -1742,7 +1762,7 @@ export class InteractiveMode {
 					this.statusContainer.clear();
 				}
 				if (this.streamingComponent) {
-					this.chatContainer.removeChild(this.streamingComponent);
+					this.scrollableViewport.removeItem(this.streamingComponent);
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 				}
@@ -1791,7 +1811,7 @@ export class InteractiveMode {
 					this.showStatus("Auto-compaction cancelled");
 				} else if (event.result) {
 					// Rebuild chat to show compacted state
-					this.chatContainer.clear();
+					this.scrollableViewport.clear();
 					this.rebuildChatFromMessages();
 					// Add compaction component at bottom so user sees it without scrolling
 					this.addMessageToChat({
@@ -1803,8 +1823,8 @@ export class InteractiveMode {
 					this.footer.invalidate();
 				} else if (event.errorMessage) {
 					// Compaction failed (e.g., quota exceeded, API error)
-					this.chatContainer.addChild(new Spacer(1));
-					this.chatContainer.addChild(new Text(theme.fg("error", event.errorMessage), 1, 0));
+					this.addToChat(new Spacer(1));
+					this.addToChat(new Text(theme.fg("error", event.errorMessage), 1, 0));
 				}
 				void this.flushCompactionQueue({ willRetry: event.willRetry });
 				this.ui.requestRender();
@@ -1870,9 +1890,9 @@ export class InteractiveMode {
 	 * we update the previous status line instead of appending new ones to avoid log spam.
 	 */
 	private showStatus(message: string): void {
-		const children = this.chatContainer.children;
-		const last = children.length > 0 ? children[children.length - 1] : undefined;
-		const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
+		const items = this.scrollableViewport.getItems();
+		const last = items.length > 0 ? items[items.length - 1] : undefined;
+		const secondLast = items.length > 1 ? items[items.length - 2] : undefined;
 
 		if (last && secondLast && last === this.lastStatusText && secondLast === this.lastStatusSpacer) {
 			this.lastStatusText.setText(theme.fg("dim", message));
@@ -1882,8 +1902,8 @@ export class InteractiveMode {
 
 		const spacer = new Spacer(1);
 		const text = new Text(theme.fg("dim", message), 1, 0);
-		this.chatContainer.addChild(spacer);
-		this.chatContainer.addChild(text);
+		this.addToChat(spacer);
+		this.addToChat(text);
 		this.lastStatusSpacer = spacer;
 		this.lastStatusText = text;
 		this.ui.requestRender();
@@ -1902,37 +1922,35 @@ export class InteractiveMode {
 					message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
 					message.fullOutputPath,
 				);
-				this.chatContainer.addChild(component);
+				this.addToChat(component);
 				break;
 			}
 			case "custom": {
 				if (message.display) {
 					const renderer = this.session.extensionRunner?.getMessageRenderer(message.customType);
-					this.chatContainer.addChild(
-						new CustomMessageComponent(message, renderer, this.getMarkdownThemeWithSettings()),
-					);
+					this.addToChat(new CustomMessageComponent(message, renderer, this.getMarkdownThemeWithSettings()));
 				}
 				break;
 			}
 			case "compactionSummary": {
-				this.chatContainer.addChild(new Spacer(1));
+				this.addToChat(new Spacer(1));
 				const component = new CompactionSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
 				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
+				this.addToChat(component);
 				break;
 			}
 			case "branchSummary": {
-				this.chatContainer.addChild(new Spacer(1));
+				this.addToChat(new Spacer(1));
 				const component = new BranchSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
 				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
+				this.addToChat(component);
 				break;
 			}
 			case "user": {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
 					const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings());
-					this.chatContainer.addChild(userComponent);
+					this.addToChat(userComponent);
 					if (options?.populateHistory) {
 						this.editor.addToHistory?.(textContent);
 					}
@@ -1945,7 +1963,7 @@ export class InteractiveMode {
 					this.hideThinkingBlock,
 					this.getMarkdownThemeWithSettings(),
 				);
-				this.chatContainer.addChild(assistantComponent);
+				this.addToChat(assistantComponent);
 				break;
 			}
 			case "toolResult": {
@@ -1990,7 +2008,7 @@ export class InteractiveMode {
 							this.ui,
 						);
 						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
+						this.addToChat(component);
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
 							let errorMessage: string;
@@ -2054,7 +2072,7 @@ export class InteractiveMode {
 	}
 
 	private rebuildChatFromMessages(): void {
-		this.chatContainer.clear();
+		this.scrollableViewport.clear();
 		const context = this.sessionManager.buildSessionContext();
 		this.renderSessionContext(context);
 	}
@@ -2166,6 +2184,63 @@ export class InteractiveMode {
 		}
 	}
 
+	// Scroll handlers
+	private handleScrollUp(): void {
+		this.scrollableViewport.scrollUp(1);
+		this.ui.requestRender();
+	}
+
+	private handleScrollDown(): void {
+		this.scrollableViewport.scrollDown(1);
+		this.ui.requestRender();
+	}
+
+	private handleScrollPageUp(): void {
+		// Scroll up by half the terminal height
+		const pageSize = Math.max(3, Math.floor(this.ui.terminal.rows * 0.5));
+		this.scrollableViewport.scrollUp(pageSize);
+		this.ui.requestRender();
+	}
+
+	private handleScrollPageDown(): void {
+		const pageSize = Math.max(3, Math.floor(this.ui.terminal.rows * 0.5));
+		this.scrollableViewport.scrollDown(pageSize);
+		this.ui.requestRender();
+	}
+
+	private handleScrollToTop(): void {
+		this.scrollableViewport.scrollToTop();
+		this.ui.requestRender();
+	}
+
+	private handleScrollToBottom(): void {
+		this.scrollableViewport.scrollToBottom();
+		this.ui.requestRender();
+	}
+
+	/**
+	 * Handle mouse events.
+	 * Currently supports scroll wheel for scrolling the chat viewport.
+	 */
+	private handleMouseEvent(event: MouseEvent): void {
+		switch (event.type) {
+			case "scroll":
+				if (event.button === "scrollUp") {
+					this.scrollableViewport.scrollUp(3);
+					this.ui.requestRender();
+				} else if (event.button === "scrollDown") {
+					this.scrollableViewport.scrollDown(3);
+					this.ui.requestRender();
+				}
+				break;
+			case "press":
+				// TODO: Implement click-to-focus on input bar
+				// This would require calculating the input bar's screen position
+				// and checking if the click coordinates fall within its bounds
+				break;
+		}
+	}
+
 	private updateEditorBorderColor(): void {
 		if (this.isBashMode) {
 			this.editor.borderColor = theme.getBashModeBorderColor();
@@ -2207,7 +2282,7 @@ export class InteractiveMode {
 
 	private toggleToolOutputExpansion(): void {
 		this.toolOutputExpanded = !this.toolOutputExpanded;
-		for (const child of this.chatContainer.children) {
+		for (const child of this.scrollableViewport.getItems()) {
 			if (isExpandable(child)) {
 				child.setExpanded(this.toolOutputExpanded);
 			}
@@ -2220,14 +2295,14 @@ export class InteractiveMode {
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
 
 		// Rebuild chat from session messages
-		this.chatContainer.clear();
+		this.scrollableViewport.clear();
 		this.rebuildChatFromMessages();
 
 		// If streaming, re-add the streaming component with updated visibility and re-render
 		if (this.streamingComponent && this.streamingMessage) {
 			this.streamingComponent.setHideThinkingBlock(this.hideThinkingBlock);
 			this.streamingComponent.updateContent(this.streamingMessage);
-			this.chatContainer.addChild(this.streamingComponent);
+			this.addToChat(this.streamingComponent);
 		}
 
 		this.showStatus(`Thinking blocks: ${this.hideThinkingBlock ? "hidden" : "visible"}`);
@@ -2290,14 +2365,14 @@ export class InteractiveMode {
 	}
 
 	showError(errorMessage: string): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("error", `Error: ${errorMessage}`), 1, 0));
+		this.addToChat(new Spacer(1));
+		this.addToChat(new Text(theme.fg("error", `Error: ${errorMessage}`), 1, 0));
 		this.ui.requestRender();
 	}
 
 	showWarning(warningMessage: string): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
+		this.addToChat(new Spacer(1));
+		this.addToChat(new Text(theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
 		this.ui.requestRender();
 	}
 
@@ -2448,7 +2523,7 @@ export class InteractiveMode {
 	private flushPendingBashComponents(): void {
 		for (const component of this.pendingBashComponents) {
 			this.pendingMessagesContainer.removeChild(component);
-			this.chatContainer.addChild(component);
+			this.addToChat(component);
 		}
 		this.pendingBashComponents = [];
 	}
@@ -2502,7 +2577,7 @@ export class InteractiveMode {
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
-						for (const child of this.chatContainer.children) {
+						for (const child of this.scrollableViewport.getItems()) {
 							if (child instanceof ToolExecutionComponent) {
 								child.setShowImages(enabled);
 							}
@@ -2548,7 +2623,7 @@ export class InteractiveMode {
 						this.hideThinkingBlock = hidden;
 						this.settingsManager.setHideThinkingBlock(hidden);
 						// Re-render all assistant messages to apply thinking block visibility
-						this.chatContainer.clear();
+						this.scrollableViewport.clear();
 						this.rebuildChatFromMessages();
 					},
 					onQuietStartupChange: (enabled) => {
@@ -2805,7 +2880,7 @@ export class InteractiveMode {
 						return;
 					}
 
-					this.chatContainer.clear();
+					this.scrollableViewport.clear();
 					this.renderInitialMessages();
 					this.editor.setText(result.selectedText);
 					done();
@@ -2893,7 +2968,7 @@ export class InteractiveMode {
 						this.defaultEditor.onEscape = () => {
 							this.session.abortBranchSummary();
 						};
-						this.chatContainer.addChild(new Spacer(1));
+						this.addToChat(new Spacer(1));
 						summaryLoader = new Loader(
 							this.ui,
 							(spinner) => theme.fg("accent", spinner),
@@ -2922,7 +2997,7 @@ export class InteractiveMode {
 						}
 
 						// Update UI
-						this.chatContainer.clear();
+						this.scrollableViewport.clear();
 						this.renderInitialMessages();
 						if (result.editorText) {
 							this.editor.setText(result.editorText);
@@ -2995,7 +3070,7 @@ export class InteractiveMode {
 		await this.session.switchSession(sessionPath);
 
 		// Clear and re-render the chat
-		this.chatContainer.clear();
+		this.scrollableViewport.clear();
 		this.renderInitialMessages();
 		this.showStatus("Resumed session");
 	}
@@ -3263,8 +3338,8 @@ export class InteractiveMode {
 		if (!name) {
 			const currentName = this.sessionManager.getSessionName();
 			if (currentName) {
-				this.chatContainer.addChild(new Spacer(1));
-				this.chatContainer.addChild(new Text(theme.fg("dim", `Session name: ${currentName}`), 1, 0));
+				this.addToChat(new Spacer(1));
+				this.addToChat(new Text(theme.fg("dim", `Session name: ${currentName}`), 1, 0));
 			} else {
 				this.showWarning("Usage: /name <name>");
 			}
@@ -3273,8 +3348,8 @@ export class InteractiveMode {
 		}
 
 		this.sessionManager.appendSessionInfo(name);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${name}`), 1, 0));
+		this.addToChat(new Spacer(1));
+		this.addToChat(new Text(theme.fg("dim", `Session name set: ${name}`), 1, 0));
 		this.ui.requestRender();
 	}
 
@@ -3310,8 +3385,8 @@ export class InteractiveMode {
 			info += `${theme.fg("dim", "Total:")} ${stats.cost.toFixed(4)}`;
 		}
 
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(info, 1, 0));
+		this.addToChat(new Spacer(1));
+		this.addToChat(new Text(info, 1, 0));
 		this.ui.requestRender();
 	}
 
@@ -3436,12 +3511,12 @@ export class InteractiveMode {
 			}
 		}
 
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Keyboard Shortcuts")), 1, 0));
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Markdown(hotkeys.trim(), 1, 1, this.getMarkdownThemeWithSettings()));
-		this.chatContainer.addChild(new DynamicBorder());
+		this.addToChat(new Spacer(1));
+		this.addToChat(new DynamicBorder());
+		this.addToChat(new Text(theme.bold(theme.fg("accent", "Keyboard Shortcuts")), 1, 0));
+		this.addToChat(new Spacer(1));
+		this.addToChat(new Markdown(hotkeys.trim(), 1, 1, this.getMarkdownThemeWithSettings()));
+		this.addToChat(new DynamicBorder());
 		this.ui.requestRender();
 	}
 
@@ -3457,15 +3532,15 @@ export class InteractiveMode {
 		await this.session.newSession();
 
 		// Clear UI state
-		this.chatContainer.clear();
+		this.scrollableViewport.clear();
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.pendingTools.clear();
 
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
+		this.addToChat(new Spacer(1));
+		this.addToChat(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
 		this.ui.requestRender();
 	}
 
@@ -3494,16 +3569,16 @@ export class InteractiveMode {
 		fs.mkdirSync(path.dirname(debugLogPath), { recursive: true });
 		fs.writeFileSync(debugLogPath, debugData);
 
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(
+		this.addToChat(new Spacer(1));
+		this.addToChat(
 			new Text(`${theme.fg("accent", "✓ Debug log written")}\n${theme.fg("muted", debugLogPath)}`, 1, 1),
 		);
 		this.ui.requestRender();
 	}
 
 	private handleArminSaysHi(): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new ArminComponent(this.ui));
+		this.addToChat(new Spacer(1));
+		this.addToChat(new ArminComponent(this.ui));
 		this.ui.requestRender();
 	}
 
@@ -3530,7 +3605,7 @@ export class InteractiveMode {
 				this.pendingMessagesContainer.addChild(this.bashComponent);
 				this.pendingBashComponents.push(this.bashComponent);
 			} else {
-				this.chatContainer.addChild(this.bashComponent);
+				this.addToChat(this.bashComponent);
 			}
 
 			// Show output and complete
@@ -3561,7 +3636,7 @@ export class InteractiveMode {
 			this.pendingBashComponents.push(this.bashComponent);
 		} else {
 			// Show in chat immediately when agent is idle
-			this.chatContainer.addChild(this.bashComponent);
+			this.addToChat(this.bashComponent);
 		}
 		this.ui.requestRender();
 
@@ -3623,7 +3698,7 @@ export class InteractiveMode {
 		};
 
 		// Show compacting status
-		this.chatContainer.addChild(new Spacer(1));
+		this.addToChat(new Spacer(1));
 		const cancelHint = `(${appKey(this.keybindings, "interrupt")} to cancel)`;
 		const label = isAuto ? `Auto-compacting context... ${cancelHint}` : `Compacting context... ${cancelHint}`;
 		const compactingLoader = new Loader(

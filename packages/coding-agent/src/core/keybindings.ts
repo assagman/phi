@@ -28,7 +28,13 @@ export type AppAction =
 	| "externalEditor"
 	| "followUp"
 	| "dequeue"
-	| "pasteImage";
+	| "pasteImage"
+	| "scrollUp"
+	| "scrollDown"
+	| "scrollPageUp"
+	| "scrollPageDown"
+	| "scrollToTop"
+	| "scrollToBottom";
 
 /**
  * All configurable actions.
@@ -60,6 +66,12 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	followUp: "alt+enter",
 	dequeue: "alt+up",
 	pasteImage: "ctrl+v",
+	scrollUp: "shift+up",
+	scrollDown: "shift+down",
+	scrollPageUp: "pageUp",
+	scrollPageDown: "pageDown",
+	scrollToTop: "ctrl+home",
+	scrollToBottom: "ctrl+end",
 };
 
 /**
@@ -86,6 +98,12 @@ const APP_ACTIONS: AppAction[] = [
 	"followUp",
 	"dequeue",
 	"pasteImage",
+	"scrollUp",
+	"scrollDown",
+	"scrollPageUp",
+	"scrollPageDown",
+	"scrollToTop",
+	"scrollToBottom",
 ];
 
 function isAppAction(action: string): action is AppAction {
