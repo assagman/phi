@@ -83,16 +83,10 @@ export class PinnedInputBar implements Component, Focusable {
 	}
 
 	/**
-	 * Calculate the actual height based on editor content.
+	 * Calculate the actual height based on pre-rendered editor lines.
 	 */
-	private calculateHeight(width: number): number {
-		const borderWidth = this.options.borderStyle === "none" ? 0 : 2;
+	private calculateHeight(editorLines: string[], borderWidth: number): number {
 		const paddingY = this.options.paddingY ?? 0;
-		const paddingX = this.options.paddingX ?? 0;
-
-		// Get editor's preferred height with clamped width
-		const editorWidth = Math.max(1, width - borderWidth - paddingX * 2);
-		const editorLines = this.editor.render(editorWidth);
 		const contentHeight = editorLines.length;
 
 		// Calculate total height with borders and padding
@@ -104,12 +98,14 @@ export class PinnedInputBar implements Component, Focusable {
 
 	/**
 	 * Get current height (cached if available).
+	 * Note: For accurate height, call render() first which caches the result.
 	 */
 	getHeight(width: number): number {
 		if (this.cachedHeight === undefined) {
-			this.cachedHeight = this.calculateHeight(width);
+			// Render to calculate and cache height
+			this.render(width);
 		}
-		return this.cachedHeight;
+		return this.cachedHeight!;
 	}
 
 	handleInput(data: string): void {
@@ -119,33 +115,37 @@ export class PinnedInputBar implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
-		const height = this.calculateHeight(width);
+		const borderWidth = this.options.borderStyle === "none" ? 0 : 2;
+		const paddingX = this.options.paddingX ?? 0;
+
+		// Render editor once and reuse for both height calculation and content
+		const editorWidth = Math.max(1, width - borderWidth - paddingX * 2);
+		const editorLines = this.editor.render(editorWidth);
+
+		const height = this.calculateHeight(editorLines, borderWidth);
 		this.cachedHeight = height;
 
 		if (this.options.borderStyle === "none") {
-			return this.renderWithoutBorders(width, height);
+			return this.renderWithoutBorders(width, height, editorLines);
 		}
 
-		return this.renderWithBorders(width, height);
+		return this.renderWithBorders(width, height, editorLines);
 	}
 
-	private renderWithBorders(width: number, height: number): string[] {
+	private renderWithBorders(width: number, height: number, editorLines: string[]): string[] {
 		const borderStyle = this.options.borderStyle ?? "single";
 		if (borderStyle === "none") {
-			return this.renderWithoutBorders(width, height);
+			return this.renderWithoutBorders(width, height, editorLines);
 		}
 		const chars = BORDER_CHARS[borderStyle];
 		// Clamp dimensions to prevent negative values on small terminals
 		const contentWidth = Math.max(0, width - 2); // Subtract borders
 		const contentHeight = Math.max(0, height - 2); // Subtract borders
 
-		// Render editor content
 		const paddingX = this.options.paddingX ?? 0;
-		const editorWidth = Math.max(1, contentWidth - paddingX * 2);
-		let editorLines = this.editor.render(editorWidth);
 
-		// Truncate to fit
-		editorLines = editorLines.slice(0, contentHeight);
+		// Truncate pre-rendered editor lines to fit
+		const truncatedLines = editorLines.slice(0, contentHeight);
 
 		// Build lines
 		const lines: string[] = [];
@@ -155,7 +155,7 @@ export class PinnedInputBar implements Component, Focusable {
 
 		// Content lines with padding
 		for (let i = 0; i < contentHeight; i++) {
-			const content = editorLines[i] ?? "";
+			const content = truncatedLines[i] ?? "";
 			const leftPad = " ".repeat(Math.max(0, paddingX));
 			// Use visibleWidth for ANSI-safe padding calculation
 			const rightPadSize = Math.max(0, contentWidth - paddingX - visibleWidth(content));
@@ -169,20 +169,18 @@ export class PinnedInputBar implements Component, Focusable {
 		return lines;
 	}
 
-	private renderWithoutBorders(width: number, height: number): string[] {
+	private renderWithoutBorders(width: number, height: number, editorLines: string[]): string[] {
 		const paddingX = this.options.paddingX ?? 0;
-		const editorWidth = Math.max(1, width - paddingX * 2);
-		let editorLines = this.editor.render(editorWidth);
 
-		// Truncate to fit
-		editorLines = editorLines.slice(0, Math.max(0, height));
+		// Truncate pre-rendered editor lines to fit
+		const truncatedLines = editorLines.slice(0, Math.max(0, height));
 
 		// Pad if needed
-		while (editorLines.length < height) {
-			editorLines.push("");
+		while (truncatedLines.length < height) {
+			truncatedLines.push("");
 		}
 
-		return editorLines.map((line) => {
+		return truncatedLines.map((line) => {
 			const leftPad = " ".repeat(Math.max(0, paddingX));
 			// Use visibleWidth for ANSI-safe padding calculation
 			const rightPadSize = Math.max(0, width - paddingX - visibleWidth(line));

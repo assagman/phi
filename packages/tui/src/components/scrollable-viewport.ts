@@ -21,9 +21,11 @@ export class ScrollableViewport implements Component {
 	private scrollOffset = 0; // Lines from bottom
 	private cachedLines: string[] = [];
 	private cachedWidth = 0;
+	private cacheValid = false; // Track cache validity (handles empty content)
 	private options: ScrollableViewportOptions;
 	private contentHeight = 0;
 	private prevContentHeight = 0; // Track for scroll offset stability
+	private lastViewportHeight = 0; // Track last known viewport height
 
 	onScroll?: (atBottom: boolean) => void;
 
@@ -161,11 +163,15 @@ export class ScrollableViewport implements Component {
 	}
 
 	render(width: number, height?: number): string[] {
-		// Use provided height or calculate from cached state
-		const viewportHeight = height ?? 24;
+		// Use provided height, or last known height, or minimum fallback of 1
+		// (FixedLayoutContainer always provides height, so fallback is defensive only)
+		const viewportHeight = height ?? (this.lastViewportHeight || 1);
+		if (height !== undefined) {
+			this.lastViewportHeight = height;
+		}
 
-		// Check if we can use cached result
-		if (this.cachedLines.length > 0 && this.cachedWidth === width) {
+		// Check if we can use cached result (cacheValid handles empty content case)
+		if (this.cacheValid && this.cachedWidth === width) {
 			return this.sliceForViewport(viewportHeight);
 		}
 
@@ -193,6 +199,7 @@ export class ScrollableViewport implements Component {
 
 		this.cachedLines = allLines;
 		this.cachedWidth = width;
+		this.cacheValid = true;
 
 		return this.sliceForViewport(viewportHeight);
 	}
@@ -226,6 +233,7 @@ export class ScrollableViewport implements Component {
 	invalidate(): void {
 		this.cachedLines = [];
 		this.cachedWidth = 0;
+		this.cacheValid = false;
 
 		// Invalidate all child items
 		for (const item of this.items) {
@@ -241,5 +249,6 @@ export class ScrollableViewport implements Component {
 	invalidateCacheOnly(): void {
 		this.cachedLines = [];
 		this.cachedWidth = 0;
+		this.cacheValid = false;
 	}
 }

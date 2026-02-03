@@ -390,10 +390,12 @@ export class InteractiveMode {
 		// Enable mouse tracking
 		this.ui.terminal.enableMouseTracking();
 
-		// Create status area (holds loading indicators + pending messages between chat and input)
+		// Create status area (holds widgets, loading indicators, pending messages between chat and input)
 		this.statusAreaContainer = new Container();
+		this.statusAreaContainer.addChild(this.widgetContainerAbove);
 		this.statusAreaContainer.addChild(this.pendingMessagesContainer);
 		this.statusAreaContainer.addChild(this.statusContainer);
+		this.statusAreaContainer.addChild(this.widgetContainerBelow);
 
 		// Create fixed layout with terminal reference for dynamic height
 		this.fixedLayout = new FixedLayoutContainer(this.ui.terminal, {
@@ -2533,18 +2535,32 @@ export class InteractiveMode {
 	// =========================================================================
 
 	/**
-	 * Shows a selector component in place of the editor.
+	 * Shows a selector component as an overlay.
+	 * In standalone mode, uses overlay system since editorContainer is not in the UI tree.
 	 * @param create Factory that receives a `done` callback and returns the component and focus target
 	 */
 	private showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
+		let overlayHandle: OverlayHandle | null = null;
+
 		const done = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
+			if (overlayHandle) {
+				overlayHandle.hide();
+				overlayHandle = null;
+			}
 			this.ui.setFocus(this.editor);
+			this.ui.requestRender();
 		};
+
 		const { component, focus } = create(done);
-		this.editorContainer.clear();
-		this.editorContainer.addChild(component);
+
+		// Use overlay system for selectors (works in standalone mode)
+		overlayHandle = this.ui.showOverlay(component, {
+			anchor: "bottom-center",
+			offsetY: -4, // Above the input bar
+			width: "90%",
+			maxHeight: "60%",
+		});
+
 		this.ui.setFocus(focus);
 		this.ui.requestRender();
 	}
