@@ -83,6 +83,15 @@ export class PinnedInputBar implements Component, Focusable {
 	}
 
 	/**
+	 * Replace the editor component.
+	 * Used by extensions to swap in custom editors.
+	 */
+	setEditor(editor: EditorComponent): void {
+		this.editor = editor;
+		this.cachedHeight = undefined;
+	}
+
+	/**
 	 * Calculate the actual height based on pre-rendered editor lines.
 	 */
 	private calculateHeight(editorLines: string[], borderWidth: number): number {

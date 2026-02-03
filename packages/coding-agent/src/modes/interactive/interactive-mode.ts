@@ -81,7 +81,7 @@ import { ExtensionEditorComponent } from "./components/extension-editor.js";
 import { ExtensionInputComponent } from "./components/extension-input.js";
 import { ExtensionSelectorComponent } from "./components/extension-selector.js";
 import { FooterComponent } from "./components/footer.js";
-import { appKey, appKeyHint, editorKey, keyHint, rawKeyHint } from "./components/keybinding-hints.js";
+import { appKey, editorKey } from "./components/keybinding-hints.js";
 import { LoginDialogComponent } from "./components/login-dialog.js";
 import { ModelSelectorComponent } from "./components/model-selector.js";
 import { OAuthSelectorComponent } from "./components/oauth-selector.js";
@@ -145,7 +145,6 @@ export class InteractiveMode {
 	private editor: EditorComponent;
 	private autocompleteProvider: CombinedAutocompleteProvider | undefined;
 	private fdPath: string | undefined;
-	private editorContainer: Container;
 	private footer: FooterComponent;
 	private footerDataProvider: FooterDataProvider;
 	private keybindings: KeybindingsManager;
@@ -207,8 +206,11 @@ export class InteractiveMode {
 
 	// Extension UI state
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
+	private extensionSelectorOverlay: OverlayHandle | undefined = undefined;
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
+	private extensionInputOverlay: OverlayHandle | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
+	private extensionEditorOverlay: OverlayHandle | undefined = undefined;
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -263,8 +265,6 @@ export class InteractiveMode {
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
 		this.defaultEditor = new CustomEditor(this.ui, getEditorTheme(), this.keybindings, { paddingX: editorPaddingX });
 		this.editor = this.defaultEditor;
-		this.editorContainer = new Container();
-		this.editorContainer.addChild(this.editor as Component);
 		this.footerDataProvider = new FooterDataProvider();
 		this.footer = new FooterComponent(session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(session.autoCompactionEnabled);
@@ -400,7 +400,7 @@ export class InteractiveMode {
 		// Create fixed layout with terminal reference for dynamic height
 		this.fixedLayout = new FixedLayoutContainer(this.ui.terminal, {
 			headerHeight: this.settingsManager.getQuietStartup() ? 0 : 1,
-			footerHeight: 1,
+			footerHeight: 2,
 			minInputHeight: 3,
 			maxInputHeight: 10,
 		});
@@ -1038,8 +1038,12 @@ export class InteractiveMode {
 				{ tui: this.ui, timeout: opts?.timeout },
 			);
 
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionSelector);
+			// Show as centered overlay
+			this.extensionSelectorOverlay = this.ui.showOverlay(this.extensionSelector, {
+				anchor: "center",
+				width: "80%",
+				maxHeight: "70%",
+			});
 			this.ui.setFocus(this.extensionSelector);
 			this.ui.requestRender();
 		});
@@ -1050,8 +1054,8 @@ export class InteractiveMode {
 	 */
 	private hideExtensionSelector(): void {
 		this.extensionSelector?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
+		this.extensionSelectorOverlay?.hide();
+		this.extensionSelectorOverlay = undefined;
 		this.extensionSelector = undefined;
 		this.ui.setFocus(this.editor);
 		this.ui.requestRender();
@@ -1105,8 +1109,12 @@ export class InteractiveMode {
 				{ tui: this.ui, timeout: opts?.timeout },
 			);
 
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionInput);
+			// Show as centered overlay
+			this.extensionInputOverlay = this.ui.showOverlay(this.extensionInput, {
+				anchor: "center",
+				width: "80%",
+				maxHeight: "70%",
+			});
 			this.ui.setFocus(this.extensionInput);
 			this.ui.requestRender();
 		});
@@ -1117,8 +1125,8 @@ export class InteractiveMode {
 	 */
 	private hideExtensionInput(): void {
 		this.extensionInput?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
+		this.extensionInputOverlay?.hide();
+		this.extensionInputOverlay = undefined;
 		this.extensionInput = undefined;
 		this.ui.setFocus(this.editor);
 		this.ui.requestRender();
@@ -1144,8 +1152,12 @@ export class InteractiveMode {
 				},
 			);
 
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionEditor);
+			// Show as centered overlay
+			this.extensionEditorOverlay = this.ui.showOverlay(this.extensionEditor, {
+				anchor: "center",
+				width: "80%",
+				maxHeight: "70%",
+			});
 			this.ui.setFocus(this.extensionEditor);
 			this.ui.requestRender();
 		});
@@ -1155,8 +1167,8 @@ export class InteractiveMode {
 	 * Hide the extension editor.
 	 */
 	private hideExtensionEditor(): void {
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
+		this.extensionEditorOverlay?.hide();
+		this.extensionEditorOverlay = undefined;
 		this.extensionEditor = undefined;
 		this.ui.setFocus(this.editor);
 		this.ui.requestRender();
@@ -1171,8 +1183,6 @@ export class InteractiveMode {
 	): void {
 		// Save text from current editor before switching
 		const currentText = this.editor.getText();
-
-		this.editorContainer.clear();
 
 		if (factory) {
 			// Create the custom editor with tui, theme, and keybindings
@@ -1216,7 +1226,8 @@ export class InteractiveMode {
 			this.editor = this.defaultEditor;
 		}
 
-		this.editorContainer.addChild(this.editor as Component);
+		// Update the pinned input bar with the new editor
+		this.pinnedInputBar.setEditor(this.editor);
 		this.ui.setFocus(this.editor as Component);
 		this.ui.requestRender();
 	}
@@ -1234,7 +1245,7 @@ export class InteractiveMode {
 		}
 	}
 
-	/** Show a custom component with keyboard focus. Overlay mode renders on top of existing content. */
+	/** Show a custom component with keyboard focus. Always uses overlay system for standalone mode compatibility. */
 	private async showExtensionCustom<T>(
 		factory: (
 			tui: TUI,
@@ -1248,27 +1259,17 @@ export class InteractiveMode {
 			onHandle?: (handle: OverlayHandle) => void;
 		},
 	): Promise<T> {
-		const savedText = this.editor.getText();
-		const isOverlay = options?.overlay ?? false;
-
-		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.editor.setText(savedText);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
-		};
-
 		return new Promise((resolve, reject) => {
 			let component: Component & { dispose?(): void };
+			let overlayHandle: OverlayHandle | null = null;
 			let closed = false;
 
 			const close = (result: T) => {
 				if (closed) return;
 				closed = true;
-				if (isOverlay) this.ui.hideOverlay();
-				else restoreEditor();
-				// Note: both branches above already call requestRender
+				overlayHandle?.hide();
+				this.ui.setFocus(this.editor);
+				this.ui.requestRender();
 				resolve(result);
 				try {
 					component?.dispose?.();
@@ -1281,33 +1282,31 @@ export class InteractiveMode {
 				.then((c) => {
 					if (closed) return;
 					component = c;
-					if (isOverlay) {
-						// Resolve overlay options - can be static or dynamic function
-						const resolveOptions = (): OverlayOptions | undefined => {
-							if (options?.overlayOptions) {
-								const opts =
-									typeof options.overlayOptions === "function"
-										? options.overlayOptions()
-										: options.overlayOptions;
-								return opts;
-							}
-							// Fallback: use component's width property if available
-							const w = (component as { width?: number }).width;
-							return w ? { width: w } : undefined;
+					// Resolve overlay options - can be static or dynamic function
+					const resolveOptions = (): OverlayOptions => {
+						if (options?.overlayOptions) {
+							const opts =
+								typeof options.overlayOptions === "function"
+									? options.overlayOptions()
+									: options.overlayOptions;
+							return opts;
+						}
+						// Default: centered overlay with sensible defaults
+						const w = (component as { width?: number }).width;
+						return {
+							anchor: "center",
+							width: w ?? "80%",
+							maxHeight: "70%",
 						};
-						const handle = this.ui.showOverlay(component, resolveOptions());
-						// Expose handle to caller for visibility control
-						options?.onHandle?.(handle);
-					} else {
-						this.editorContainer.clear();
-						this.editorContainer.addChild(component);
-						this.ui.setFocus(component);
-						this.ui.requestRender();
-					}
+					};
+					overlayHandle = this.ui.showOverlay(component, resolveOptions());
+					// Expose handle to caller for visibility control
+					options?.onHandle?.(overlayHandle);
+					this.ui.setFocus(component);
+					this.ui.requestRender();
 				})
 				.catch((err) => {
 					if (closed) return;
-					if (!isOverlay) restoreEditor();
 					reject(err);
 				});
 		});
@@ -2227,11 +2226,13 @@ export class InteractiveMode {
 	private handleMouseEvent(event: MouseEvent): void {
 		switch (event.type) {
 			case "scroll":
+				// Instant scrolling - 2 lines per wheel tick for responsive feel
+				// No momentum: stops immediately when user stops scrolling
 				if (event.button === "scrollUp") {
-					this.scrollableViewport.scrollUp(3);
+					this.scrollableViewport.scrollUp(2);
 					this.ui.requestRender();
 				} else if (event.button === "scrollDown") {
-					this.scrollableViewport.scrollDown(3);
+					this.scrollableViewport.scrollDown(2);
 					this.ui.requestRender();
 				}
 				break;
@@ -2260,7 +2261,6 @@ export class InteractiveMode {
 		} else {
 			this.footer.invalidate();
 			this.updateEditorBorderColor();
-			this.showStatus(`Thinking level: ${newLevel}`);
 		}
 	}
 
@@ -2536,7 +2536,6 @@ export class InteractiveMode {
 
 	/**
 	 * Shows a selector component as an overlay.
-	 * In standalone mode, uses overlay system since editorContainer is not in the UI tree.
 	 * @param create Factory that receives a `done` callback and returns the component and focus target
 	 */
 	private showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
@@ -2555,10 +2554,9 @@ export class InteractiveMode {
 
 		// Use overlay system for selectors (works in standalone mode)
 		overlayHandle = this.ui.showOverlay(component, {
-			anchor: "bottom-center",
-			offsetY: -4, // Above the input bar
-			width: "90%",
-			maxHeight: "60%",
+			anchor: "center",
+			width: "80%",
+			maxHeight: "70%",
 		});
 
 		this.ui.setFocus(focus);
@@ -3148,9 +3146,12 @@ export class InteractiveMode {
 			// Completion handled below
 		});
 
-		// Show dialog in editor container
-		this.editorContainer.clear();
-		this.editorContainer.addChild(dialog);
+		// Show dialog as centered overlay
+		const overlayHandle = this.ui.showOverlay(dialog, {
+			anchor: "center",
+			width: "80%",
+			maxHeight: "70%",
+		});
 		this.ui.setFocus(dialog);
 		this.ui.requestRender();
 
@@ -3164,8 +3165,7 @@ export class InteractiveMode {
 
 		// Restore editor helper
 		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
+			overlayHandle.hide();
 			this.ui.setFocus(this.editor);
 			this.ui.requestRender();
 		};
@@ -3262,17 +3262,19 @@ export class InteractiveMode {
 			return;
 		}
 
-		// Show cancellable loader, replacing the editor
+		// Show cancellable loader as centered overlay
 		const loader = new BorderedLoader(this.ui, theme, "Creating gist...");
-		this.editorContainer.clear();
-		this.editorContainer.addChild(loader);
+		const loaderOverlay = this.ui.showOverlay(loader, {
+			anchor: "center",
+			width: "60%",
+			maxHeight: "30%",
+		});
 		this.ui.setFocus(loader);
 		this.ui.requestRender();
 
 		const restoreEditor = () => {
 			loader.dispose();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
+			loaderOverlay.hide();
 			this.ui.setFocus(this.editor);
 			try {
 				fs.unlinkSync(tmpFile);
