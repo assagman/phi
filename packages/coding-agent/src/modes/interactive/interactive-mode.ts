@@ -2330,12 +2330,16 @@ export class InteractiveMode {
 			const resetFg = "\x1b[39m";
 			return colorCode + str + resetFg;
 		};
+		// Set dark purple background while working (#0E031C)
+		this.editor.backgroundColor = [14, 3, 28];
 	}
 
 	private stopRainbowBorder(): void {
 		this.rainbowBorderStartTime = undefined;
 		// Restore normal border color based on current mode
 		this.updateEditorBorderColor();
+		// Clear background color
+		this.editor.backgroundColor = undefined;
 	}
 
 	private cycleThinkingLevel(): void {

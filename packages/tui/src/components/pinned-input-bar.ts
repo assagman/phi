@@ -198,11 +198,20 @@ export class PinnedInputBar implements Component, Focusable {
 			truncatedLines.push("");
 		}
 
+		// Get background color from editor (if available)
+		const bgColor = this.editor.backgroundColor;
+		const bgStart = bgColor ? `\x1b[48;2;${bgColor[0]};${bgColor[1]};${bgColor[2]}m` : "";
+		const bgEnd = bgColor ? "\x1b[49m" : "";
+
 		return truncatedLines.map((line) => {
 			const leftPad = " ".repeat(Math.max(0, paddingX));
 			// Use visibleWidth for ANSI-safe padding calculation
 			const rightPadSize = Math.max(0, width - paddingX - visibleWidth(line));
 			const rightPad = " ".repeat(rightPadSize);
+			if (bgColor) {
+				// Apply background only to the editor content (box area), not outer padding
+				return leftPad + bgStart + line + bgEnd + rightPad;
+			}
 			return leftPad + line + rightPad;
 		});
 	}
