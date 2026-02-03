@@ -235,6 +235,8 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			// Custom editor components not supported in RPC mode
 		},
 
+		editorComponent: undefined,
+
 		get theme() {
 			return theme;
 		},

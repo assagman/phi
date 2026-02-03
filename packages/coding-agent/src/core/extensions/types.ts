@@ -184,6 +184,9 @@ export interface ExtensionUIContext {
 		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => EditorComponent) | undefined,
 	): void;
 
+	/** Get the current editor component. Useful for modifying borderColor or other properties. */
+	readonly editorComponent: EditorComponent | undefined;
+
 	/** Get the current theme for styling. */
 	readonly theme: Theme;
 
