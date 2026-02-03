@@ -10,6 +10,12 @@ export interface ScrollableViewportOptions {
 	autoScroll?: boolean;
 	/** Scroll offset from bottom (0 = at bottom) */
 	initialScrollOffset?: number;
+	/** Enable smooth/momentum scrolling (default: true) */
+	smoothScroll?: boolean;
+	/** Velocity decay factor per frame (0-1, lower = more friction, default: 0.88) */
+	scrollDecay?: number;
+	/** Minimum velocity threshold to stop animation (default: 0.3) */
+	scrollThreshold?: number;
 }
 
 /**
@@ -18,24 +24,36 @@ export interface ScrollableViewportOptions {
  */
 export class ScrollableViewport implements Component {
 	private items: Component[] = [];
-	private scrollOffset = 0; // Lines from bottom
+	private scrollOffset = 0; // Lines from bottom (integer part of position)
 	private cachedLines: string[] = [];
 	private cachedWidth = 0;
 	private cacheValid = false; // Track cache validity (handles empty content)
-	private options: ScrollableViewportOptions;
+	private options: Required<ScrollableViewportOptions>;
 	private contentHeight = 0;
 	private prevContentHeight = 0; // Track for scroll offset stability
 	private lastViewportHeight = 0; // Track last known viewport height
 
+	// Smooth scroll state
+	private velocity = 0; // Lines per frame (positive = scroll up, negative = scroll down)
+	private fractionalOffset = 0; // Sub-line scroll position for smooth animation
+	private animationTimer: ReturnType<typeof setTimeout> | null = null;
+	private static readonly FRAME_INTERVAL = 16; // ~60fps
+
 	onScroll?: (atBottom: boolean) => void;
+	/** Called when smooth scroll animation updates (for triggering re-render) */
+	onSmoothScrollUpdate?: () => void;
 
 	constructor(options: ScrollableViewportOptions = {}) {
 		this.options = {
 			autoScroll: true,
 			initialScrollOffset: 0,
+			smoothScroll: true,
+			scrollDecay: 0.88,
+			scrollThreshold: 0.3,
 			...options,
 		};
-		this.scrollOffset = this.options.initialScrollOffset ?? 0;
+		this.scrollOffset = this.options.initialScrollOffset;
+		this.fractionalOffset = this.scrollOffset;
 	}
 
 	/**
@@ -60,7 +78,9 @@ export class ScrollableViewport implements Component {
 	clear(): void {
 		this.items = [];
 		this.scrollOffset = 0;
+		this.fractionalOffset = 0;
 		this.prevContentHeight = 0;
+		this.stopSmoothScroll();
 		this.invalidate();
 	}
 
@@ -90,51 +110,65 @@ export class ScrollableViewport implements Component {
 	}
 
 	/**
-	 * Scroll up by the specified number of lines.
+	 * Scroll up by the specified number of lines (instant).
+	 * Note: Does NOT invalidate cache - scrolling changes the visible slice,
+	 * not the content. The cached lines remain valid.
 	 */
 	scrollUp(lines: number): void {
+		this.stopSmoothScroll(); // Cancel any momentum
 		const oldOffset = this.scrollOffset;
 		this.scrollOffset += lines;
 		this.clampScrollOffset();
+		this.fractionalOffset = this.scrollOffset; // Keep in sync
 
 		if (this.scrollOffset !== oldOffset) {
-			this.invalidate();
+			// No invalidate() - cache is still valid, only scroll offset changed
 			this.onScroll?.(this.scrollOffset === 0);
 		}
 	}
 
 	/**
-	 * Scroll down by the specified number of lines.
+	 * Scroll down by the specified number of lines (instant).
+	 * Note: Does NOT invalidate cache - scrolling changes the visible slice,
+	 * not the content. The cached lines remain valid.
 	 */
 	scrollDown(lines: number): void {
+		this.stopSmoothScroll(); // Cancel any momentum
 		const oldOffset = this.scrollOffset;
 		this.scrollOffset = Math.max(0, this.scrollOffset - lines);
+		this.fractionalOffset = this.scrollOffset; // Keep in sync
 
 		if (this.scrollOffset !== oldOffset) {
-			this.invalidate();
+			// No invalidate() - cache is still valid, only scroll offset changed
 			this.onScroll?.(this.scrollOffset === 0);
 		}
 	}
 
 	/**
-	 * Scroll to the top of the content.
+	 * Scroll to the top of the content (instant).
+	 * Note: Does NOT invalidate cache - only scroll offset changes.
 	 */
 	scrollToTop(): void {
+		this.stopSmoothScroll(); // Cancel any momentum
 		const maxOffset = Math.max(0, this.contentHeight - 1);
 		if (this.scrollOffset !== maxOffset) {
 			this.scrollOffset = maxOffset;
-			this.invalidate();
+			this.fractionalOffset = maxOffset; // Keep in sync
+			// No invalidate() - cache is still valid
 			this.onScroll?.(false);
 		}
 	}
 
 	/**
-	 * Scroll to the bottom of the content.
+	 * Scroll to the bottom of the content (instant).
+	 * Note: Does NOT invalidate cache - only scroll offset changes.
 	 */
 	scrollToBottom(): void {
+		this.stopSmoothScroll(); // Cancel any momentum
 		if (this.scrollOffset !== 0) {
 			this.scrollOffset = 0;
-			this.invalidate();
+			this.fractionalOffset = 0; // Keep in sync
+			// No invalidate() - cache is still valid
 			this.onScroll?.(true);
 		}
 	}
@@ -151,6 +185,100 @@ export class ScrollableViewport implements Component {
 	 */
 	isAtBottom(): boolean {
 		return this.scrollOffset === 0;
+	}
+
+	/**
+	 * Check if smooth scroll animation is currently running.
+	 */
+	isAnimating(): boolean {
+		return this.animationTimer !== null;
+	}
+
+	/**
+	 * Smooth scroll up with momentum.
+	 * Adds velocity instead of instant jump.
+	 * @param impulse Initial velocity boost (lines per frame)
+	 */
+	smoothScrollUp(impulse: number): void {
+		if (!this.options.smoothScroll) {
+			this.scrollUp(Math.round(impulse));
+			return;
+		}
+		// Add to existing velocity (allows accumulation from rapid inputs)
+		this.velocity += impulse;
+		this.startAnimation();
+	}
+
+	/**
+	 * Smooth scroll down with momentum.
+	 * Adds velocity instead of instant jump.
+	 * @param impulse Initial velocity boost (lines per frame, positive value)
+	 */
+	smoothScrollDown(impulse: number): void {
+		if (!this.options.smoothScroll) {
+			this.scrollDown(Math.round(impulse));
+			return;
+		}
+		// Subtract from velocity (negative = scroll down)
+		this.velocity -= impulse;
+		this.startAnimation();
+	}
+
+	/**
+	 * Stop any ongoing smooth scroll animation.
+	 */
+	stopSmoothScroll(): void {
+		if (this.animationTimer !== null) {
+			clearTimeout(this.animationTimer);
+			this.animationTimer = null;
+		}
+		this.velocity = 0;
+	}
+
+	/**
+	 * Start the smooth scroll animation loop.
+	 */
+	private startAnimation(): void {
+		if (this.animationTimer !== null) return; // Already running
+		this.runAnimationFrame();
+	}
+
+	/**
+	 * Run a single animation frame.
+	 */
+	private runAnimationFrame(): void {
+		// Apply velocity to fractional position
+		this.fractionalOffset += this.velocity;
+
+		// Clamp fractional offset to valid range
+		const maxOffset = Math.max(0, this.contentHeight - 1);
+		this.fractionalOffset = Math.max(0, Math.min(this.fractionalOffset, maxOffset));
+
+		// Check if integer scroll position changed
+		const newIntOffset = Math.round(this.fractionalOffset);
+		const offsetChanged = newIntOffset !== this.scrollOffset;
+
+		if (offsetChanged) {
+			this.scrollOffset = newIntOffset;
+			this.invalidate();
+			this.onScroll?.(this.scrollOffset === 0);
+			this.onSmoothScrollUpdate?.();
+		}
+
+		// Apply decay (friction)
+		this.velocity *= this.options.scrollDecay;
+
+		// Stop if velocity is below threshold
+		if (Math.abs(this.velocity) < this.options.scrollThreshold) {
+			this.velocity = 0;
+			this.animationTimer = null;
+			// Snap fractional to integer
+			this.fractionalOffset = this.scrollOffset;
+			return;
+		}
+
+		// Schedule next frame
+		this.animationTimer = setTimeout(() => this.runAnimationFrame(), ScrollableViewport.FRAME_INTERVAL);
 	}
 
 	/**
