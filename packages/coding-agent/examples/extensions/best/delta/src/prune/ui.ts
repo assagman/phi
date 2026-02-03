@@ -49,11 +49,6 @@ type ViewMode = "list" | "detail" | "confirm";
 
 // ============ Dashboard Component ============
 
-interface Theme {
-	fg: (color: string, text: string) => string;
-	bold: (text: string) => string;
-}
-
 export class PruneDashboard {
 	private analysis: PruneAnalysis | null = null;
 	private isLoading = true;
@@ -73,12 +68,9 @@ export class PruneDashboard {
 
 	constructor(
 		private tui: TUI,
-		// biome-ignore lint/suspicious/noExplicitAny: Theme type from coding-agent
-		private theme: any,
-		// biome-ignore lint/suspicious/noExplicitAny: Keybindings type from coding-agent
-		private keybindings: any,
-		// biome-ignore lint/suspicious/noExplicitAny: Callback type varies
-		private done: (result: any) => void,
+		_theme: unknown,
+		_keybindings: unknown,
+		private done: (result: unknown) => void,
 	) {
 		this.init();
 	}
