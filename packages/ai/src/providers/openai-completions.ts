@@ -105,7 +105,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			const openaiStream = await client.chat.completions.create(params, { signal: options?.signal });
 			stream.push({ type: "start", partial: output });
 
-			let currentBlock: TextContent | ThinkingContent | (ToolCall & { partialArgs?: string }) | null = null;
+			let currentBlock:
+				| TextContent
+				| ThinkingContent
+				| (ToolCall & { partialArgs?: string; index?: number })
+				| null = null;
 			const blocks = output.content;
 			const blockIndex = () => blocks.length - 1;
 			const finishCurrentBlock = (block?: typeof currentBlock) => {
@@ -127,6 +131,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					} else if (block.type === "toolCall") {
 						block.arguments = JSON.parse(block.partialArgs || "{}");
 						delete block.partialArgs;
+						delete block.index;
 						stream.push({
 							type: "toolcall_end",
 							contentIndex: blockIndex(),
@@ -239,9 +244,14 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 					if (choice?.delta?.tool_calls) {
 						for (const toolCall of choice.delta.tool_calls) {
+							// Use index field (if available) to track which tool call this delta belongs to.
+							// The index field is the reliable discriminator for multiple parallel tool calls.
+							const toolIndex = toolCall.index ?? 0;
+
 							if (
 								!currentBlock ||
 								currentBlock.type !== "toolCall" ||
+								currentBlock.index !== toolIndex ||
 								(toolCall.id && currentBlock.id !== toolCall.id)
 							) {
 								finishCurrentBlock(currentBlock);
@@ -251,6 +261,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 									name: toolCall.function?.name || "",
 									arguments: {},
 									partialArgs: "",
+									index: toolIndex,
 								};
 								output.content.push(currentBlock);
 								stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
