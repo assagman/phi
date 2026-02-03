@@ -1,0 +1,21 @@
+{
+	"name": "sigma",
+	"version": "1.0.0",
+	"description": "Better questionnaire tool for Pi with vim-style keybindings",
+	"type": "module",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"scripts": {
+		"build": "tsc",
+		"clean": "rm -rf dist"
+	},
+	"dependencies": {
+		"@sinclair/typebox": "^0.34.0"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"@types/node": "^22",
+		"typescript": "^5"
+	},
+	"packageManager": "bun"
+}
