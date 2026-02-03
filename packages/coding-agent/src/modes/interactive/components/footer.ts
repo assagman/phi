@@ -3,6 +3,7 @@ import { type Component, truncateToWidth, visibleWidth } from "tui";
 import type { AgentSession } from "../../../core/agent-session.js";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.js";
 import { theme } from "../theme/theme.js";
+import { processStatsCollector } from "./process-stats-collector.js";
 
 /**
  * Sanitize text for display in a single-line status.
@@ -44,29 +45,6 @@ function renderProgressBar(percent: number, width: number): string {
 	return "▓".repeat(Math.max(0, filled)) + "░".repeat(Math.max(0, empty));
 }
 
-// CPU tracking state
-let lastCpuUsage = process.cpuUsage();
-let lastCpuTime = Date.now();
-let cpuPercent = 0;
-
-/**
- * Get CPU usage percentage since last call
- */
-function getCpuPercent(): number {
-	const now = Date.now();
-	const elapsed = now - lastCpuTime;
-	if (elapsed < 100) return cpuPercent;
-
-	const currentUsage = process.cpuUsage(lastCpuUsage);
-	const totalCpuMs = (currentUsage.user + currentUsage.system) / 1000;
-	cpuPercent = (totalCpuMs / elapsed) * 100;
-
-	lastCpuUsage = process.cpuUsage();
-	lastCpuTime = now;
-
-	return cpuPercent;
-}
-
 /**
  * Footer component with 2-row layout:
  * Row 1: [path (branch)]                 [↑in ↓out] [Rread Wwrite] [$cost] [▓▓░░░░░░] [ctx/max %]
@@ -78,14 +56,18 @@ export class FooterComponent implements Component {
 	constructor(
 		private session: AgentSession,
 		private footerData: ReadonlyFooterDataProvider,
-	) {}
+	) {
+		processStatsCollector.start();
+	}
 
 	setAutoCompactEnabled(enabled: boolean): void {
 		this.autoCompactEnabled = enabled;
 	}
 
 	invalidate(): void {}
-	dispose(): void {}
+	dispose(): void {
+		processStatsCollector.stop();
+	}
 
 	render(width: number): string[] {
 		const state = this.session.state;
@@ -200,8 +182,9 @@ export class FooterComponent implements Component {
 		// ===== ROW 2: Process stats + Model =====
 		// Left: [PID:xxxx] [RSS:xxxM] [CPU:x.x%]
 		const pidPart = theme.fg("dim", `[PID:${process.pid}]`);
-		const rssPart = theme.fg("dim", `[RSS:${formatBytes(process.memoryUsage().rss)}]`);
-		const cpuPart = theme.fg("dim", `[CPU:${getCpuPercent().toFixed(1)}%]`);
+		const processStatsSnapshot = processStatsCollector.getStats();
+		const rssPart = theme.fg("dim", `[RSS:${formatBytes(processStatsSnapshot.rss)}]`);
+		const cpuPart = theme.fg("dim", `[CPU:${processStatsSnapshot.cpuPercent.toFixed(1)}%]`);
 		const processStats = `${pidPart} ${rssPart} ${cpuPart}`;
 
 		// Right: [provider:model:thinkingLevel]

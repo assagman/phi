@@ -68,7 +68,26 @@ export type AgentSessionEvent =
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
 
 /** Listener function for agent session events */
-export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
+export type AgentSessionEventListener = (event: AgentSessionEvent) => void | Promise<void>;
+
+export interface AgentSessionSubscribeOptions {
+	/**
+	 * Whether to process events sequentially per listener (prevents async listeners from
+	 * running concurrently and blocking the event loop during high-volume streaming).
+	 * Defaults to true.
+	 */
+	sequential?: boolean;
+	/**
+	 * Coalesce high-volume events to at most N ms. This is designed for UI listeners.
+	 * Defaults to { intervalMs: 16, types: ["message_update", "tool_execution_update"] }.
+	 */
+	coalesce?:
+		| false
+		| {
+				intervalMs?: number;
+				types?: AgentSessionEvent["type"][];
+		  };
+}
 
 // ============================================================================
 // Types
@@ -387,15 +406,96 @@ export class AgentSession {
 	 * Session persistence is handled internally (saves messages on message_end).
 	 * Multiple listeners can be added. Returns unsubscribe function for this listener.
 	 */
-	subscribe(listener: AgentSessionEventListener): () => void {
-		this._eventListeners.push(listener);
+	subscribe(listener: AgentSessionEventListener, options?: AgentSessionSubscribeOptions): () => void {
+		const sequential = options?.sequential ?? true;
+		const coalesceConfig = options?.coalesce === false ? undefined : (options?.coalesce ?? {});
+		const coalesceIntervalMs = coalesceConfig?.intervalMs ?? 16;
+		const coalesceTypes = new Set<AgentSessionEvent["type"]>(
+			coalesceConfig?.types ?? (["message_update", "tool_execution_update"] as AgentSessionEvent["type"][]),
+		);
 
-		// Return unsubscribe function for this specific listener
+		let inFlight = Promise.resolve();
+		let coalesceTimer: ReturnType<typeof setTimeout> | undefined;
+		const pending = new Map<AgentSessionEvent["type"], AgentSessionEvent>();
+
+		const invoke = (event: AgentSessionEvent): void => {
+			if (!sequential) {
+				void listener(event);
+				return;
+			}
+
+			inFlight = inFlight
+				.then(() => listener(event))
+				.catch(() => {
+					// Never allow listener errors to break the event pipeline.
+				});
+		};
+
+		const flushPending = (): void => {
+			if (coalesceTimer) {
+				clearTimeout(coalesceTimer);
+				coalesceTimer = undefined;
+			}
+			if (pending.size === 0) return;
+
+			const orderedTypes: AgentSessionEvent["type"][] = [
+				"message_update" as AgentSessionEvent["type"],
+				"tool_execution_update" as AgentSessionEvent["type"],
+			];
+
+			for (const t of orderedTypes) {
+				const ev = pending.get(t);
+				if (ev) {
+					pending.delete(t);
+					invoke(ev);
+				}
+			}
+
+			for (const ev of pending.values()) {
+				invoke(ev);
+			}
+			pending.clear();
+		};
+
+		const scheduleFlush = (): void => {
+			if (coalesceTimer || pending.size === 0) return;
+			if (coalesceIntervalMs <= 0) {
+				flushPending();
+				return;
+			}
+
+			coalesceTimer = setTimeout(() => {
+				coalesceTimer = undefined;
+				flushPending();
+			}, coalesceIntervalMs);
+
+			// Don't keep the process alive for UI listeners.
+			coalesceTimer.unref?.();
+		};
+
+		const wrapped: AgentSessionEventListener = (event: AgentSessionEvent) => {
+			if (coalesceTypes.has(event.type)) {
+				pending.set(event.type, event);
+				scheduleFlush();
+				return;
+			}
+
+			flushPending();
+			invoke(event);
+		};
+
+		this._eventListeners.push(wrapped);
+
 		return () => {
-			const index = this._eventListeners.indexOf(listener);
+			const index = this._eventListeners.indexOf(wrapped);
 			if (index !== -1) {
 				this._eventListeners.splice(index, 1);
 			}
+			if (coalesceTimer) {
+				clearTimeout(coalesceTimer);
+				coalesceTimer = undefined;
+			}
+			pending.clear();
 		};
 	}
 

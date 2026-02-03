@@ -460,14 +460,24 @@ export class TUI extends Container {
 		const elapsed = now - this.lastRenderTime;
 
 		if (elapsed >= TUI.RENDER_INTERVAL_MS) {
-			// Leading: enough time has passed, render immediately
+			// Leading: enough time has passed, schedule render via setImmediate
+			// This yields to the event loop first, allowing any pending stdin events
+			// to be processed before we block with rendering. Prevents key repeat
+			// from being interrupted during heavy streaming.
 			if (this.renderTimer) {
 				clearTimeout(this.renderTimer);
 				this.renderTimer = null;
 			}
-			this.pendingRender = false;
-			this.lastRenderTime = now;
-			this.doRender();
+			if (!this.pendingRender) {
+				this.pendingRender = true;
+				setImmediate(() => {
+					if (this.pendingRender) {
+						this.pendingRender = false;
+						this.lastRenderTime = Date.now();
+						this.doRender();
+					}
+				});
+			}
 		} else if (!this.renderTimer) {
 			// Schedule trailing render
 			this.pendingRender = true;

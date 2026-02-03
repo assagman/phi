@@ -18,20 +18,36 @@ export interface ScrollableViewportOptions {
 	scrollThreshold?: number;
 }
 
+interface ItemRenderCache {
+	component: Component;
+	lines: string[];
+	height: number;
+	start: number;
+	dirty: boolean;
+}
+
 /**
  * ScrollableViewport manages a scrollable region of content.
  * It tracks scroll position and renders only the visible portion.
  */
 export class ScrollableViewport implements Component {
 	private items: Component[] = [];
-	private scrollOffset = 0; // Lines from bottom (integer part of position)
-	private cachedLines: string[] = [];
+
+	/** Lines from bottom (integer part of position) */
+	private scrollOffset = 0;
+
+	/** Last width used for item render caching */
 	private cachedWidth = 0;
-	private cacheValid = false; // Track cache validity (handles empty content)
-	private options: Required<ScrollableViewportOptions>;
+
+	/** Total number of content lines across all items */
 	private contentHeight = 0;
-	private prevContentHeight = 0; // Track for scroll offset stability
 	private lastViewportHeight = 0; // Track last known viewport height
+
+	/** Per-item render cache (enables independent component rendering) */
+	private itemCache: ItemRenderCache[] = [];
+	private layoutDirty = true;
+
+	private options: Required<ScrollableViewportOptions>;
 
 	// Smooth scroll state
 	private velocity = 0; // Lines per frame (positive = scroll up, negative = scroll down)
@@ -63,11 +79,6 @@ export class ScrollableViewport implements Component {
 		this.items.push(component);
 		this.invalidate();
 
-		// Auto-scroll to bottom if enabled and currently at bottom
-		if (this.options.autoScroll && this.scrollOffset === 0) {
-			// Already at bottom, will render correctly
-		}
-
 		// Notify about scroll state
 		this.onScroll?.(this.scrollOffset === 0);
 	}
@@ -79,7 +90,6 @@ export class ScrollableViewport implements Component {
 		this.items = [];
 		this.scrollOffset = 0;
 		this.fractionalOffset = 0;
-		this.prevContentHeight = 0;
 		this.stopSmoothScroll();
 		this.invalidate();
 	}
@@ -115,14 +125,13 @@ export class ScrollableViewport implements Component {
 	 * not the content. The cached lines remain valid.
 	 */
 	scrollUp(lines: number): void {
-		this.stopSmoothScroll(); // Cancel any momentum
+		this.stopSmoothScroll();
 		const oldOffset = this.scrollOffset;
 		this.scrollOffset += lines;
 		this.clampScrollOffset();
-		this.fractionalOffset = this.scrollOffset; // Keep in sync
+		this.fractionalOffset = this.scrollOffset;
 
 		if (this.scrollOffset !== oldOffset) {
-			// No invalidate() - cache is still valid, only scroll offset changed
 			this.onScroll?.(this.scrollOffset === 0);
 		}
 	}
@@ -133,13 +142,12 @@ export class ScrollableViewport implements Component {
 	 * not the content. The cached lines remain valid.
 	 */
 	scrollDown(lines: number): void {
-		this.stopSmoothScroll(); // Cancel any momentum
+		this.stopSmoothScroll();
 		const oldOffset = this.scrollOffset;
 		this.scrollOffset = Math.max(0, this.scrollOffset - lines);
-		this.fractionalOffset = this.scrollOffset; // Keep in sync
+		this.fractionalOffset = this.scrollOffset;
 
 		if (this.scrollOffset !== oldOffset) {
-			// No invalidate() - cache is still valid, only scroll offset changed
 			this.onScroll?.(this.scrollOffset === 0);
 		}
 	}
@@ -149,12 +157,11 @@ export class ScrollableViewport implements Component {
 	 * Note: Does NOT invalidate cache - only scroll offset changes.
 	 */
 	scrollToTop(): void {
-		this.stopSmoothScroll(); // Cancel any momentum
+		this.stopSmoothScroll();
 		const maxOffset = Math.max(0, this.contentHeight - 1);
 		if (this.scrollOffset !== maxOffset) {
 			this.scrollOffset = maxOffset;
-			this.fractionalOffset = maxOffset; // Keep in sync
-			// No invalidate() - cache is still valid
+			this.fractionalOffset = maxOffset;
 			this.onScroll?.(false);
 		}
 	}
@@ -164,11 +171,10 @@ export class ScrollableViewport implements Component {
 	 * Note: Does NOT invalidate cache - only scroll offset changes.
 	 */
 	scrollToBottom(): void {
-		this.stopSmoothScroll(); // Cancel any momentum
+		this.stopSmoothScroll();
 		if (this.scrollOffset !== 0) {
 			this.scrollOffset = 0;
-			this.fractionalOffset = 0; // Keep in sync
-			// No invalidate() - cache is still valid
+			this.fractionalOffset = 0;
 			this.onScroll?.(true);
 		}
 	}
@@ -197,14 +203,12 @@ export class ScrollableViewport implements Component {
 	/**
 	 * Smooth scroll up with momentum.
 	 * Adds velocity instead of instant jump.
-	 * @param impulse Initial velocity boost (lines per frame)
 	 */
 	smoothScrollUp(impulse: number): void {
 		if (!this.options.smoothScroll) {
 			this.scrollUp(Math.round(impulse));
 			return;
 		}
-		// Add to existing velocity (allows accumulation from rapid inputs)
 		this.velocity += impulse;
 		this.startAnimation();
 	}
@@ -212,14 +216,12 @@ export class ScrollableViewport implements Component {
 	/**
 	 * Smooth scroll down with momentum.
 	 * Adds velocity instead of instant jump.
-	 * @param impulse Initial velocity boost (lines per frame, positive value)
 	 */
 	smoothScrollDown(impulse: number): void {
 		if (!this.options.smoothScroll) {
 			this.scrollDown(Math.round(impulse));
 			return;
 		}
-		// Subtract from velocity (negative = scroll down)
 		this.velocity -= impulse;
 		this.startAnimation();
 	}
@@ -235,49 +237,35 @@ export class ScrollableViewport implements Component {
 		this.velocity = 0;
 	}
 
-	/**
-	 * Start the smooth scroll animation loop.
-	 */
 	private startAnimation(): void {
-		if (this.animationTimer !== null) return; // Already running
+		if (this.animationTimer !== null) return;
 		this.runAnimationFrame();
 	}
 
-	/**
-	 * Run a single animation frame.
-	 */
 	private runAnimationFrame(): void {
-		// Apply velocity to fractional position
 		this.fractionalOffset += this.velocity;
 
-		// Clamp fractional offset to valid range
 		const maxOffset = Math.max(0, this.contentHeight - 1);
 		this.fractionalOffset = Math.max(0, Math.min(this.fractionalOffset, maxOffset));
 
-		// Check if integer scroll position changed
 		const newIntOffset = Math.round(this.fractionalOffset);
 		const offsetChanged = newIntOffset !== this.scrollOffset;
 
 		if (offsetChanged) {
 			this.scrollOffset = newIntOffset;
-			this.invalidate();
 			this.onScroll?.(this.scrollOffset === 0);
 			this.onSmoothScrollUpdate?.();
 		}
 
-		// Apply decay (friction)
 		this.velocity *= this.options.scrollDecay;
 
-		// Stop if velocity is below threshold
 		if (Math.abs(this.velocity) < this.options.scrollThreshold) {
 			this.velocity = 0;
 			this.animationTimer = null;
-			// Snap fractional to integer
 			this.fractionalOffset = this.scrollOffset;
 			return;
 		}
 
-		// Schedule next frame
 		this.animationTimer = setTimeout(() => this.runAnimationFrame(), ScrollableViewport.FRAME_INTERVAL);
 	}
 
@@ -285,98 +273,206 @@ export class ScrollableViewport implements Component {
 	 * Clamp scroll offset to valid range based on content height.
 	 */
 	private clampScrollOffset(): void {
-		// Ensure scroll offset doesn't exceed content height
 		const maxOffset = Math.max(0, this.contentHeight - 1);
 		this.scrollOffset = Math.min(this.scrollOffset, maxOffset);
 	}
 
+	/**
+	 * Mark a specific item's render cache as dirty.
+	 * This enables independent rendering updates without invalidating other items.
+	 */
+	invalidateItemCache(component: Component): void {
+		this.ensureItemCacheAligned();
+		const entry = this.itemCache.find((e) => e.component === component);
+		if (entry) {
+			entry.dirty = true;
+			this.layoutDirty = true;
+		}
+	}
+
 	render(width: number, height?: number): string[] {
-		// Use provided height, or last known height, or minimum fallback of 1
-		// (FixedLayoutContainer always provides height, so fallback is defensive only)
 		const viewportHeight = height ?? (this.lastViewportHeight || 1);
 		if (height !== undefined) {
 			this.lastViewportHeight = height;
 		}
 
-		// Check if we can use cached result (cacheValid handles empty content case)
-		if (this.cacheValid && this.cachedWidth === width) {
-			return this.sliceForViewport(viewportHeight);
+		this.ensureItemCacheAligned();
+
+		// Width changed → invalidate all item render caches.
+		if (this.cachedWidth !== width) {
+			this.cachedWidth = width;
+			for (const entry of this.itemCache) {
+				entry.dirty = true;
+			}
+			this.layoutDirty = true;
 		}
 
-		// Render all items to get total content
-		const allLines: string[] = [];
-		for (const item of this.items) {
-			const lines = item.render(width);
-			allLines.push(...lines);
-		}
-
-		this.contentHeight = allLines.length;
+		const prevHeight = this.contentHeight;
+		this.renderDirtyItems(width);
+		this.recomputeLayout();
 
 		// Scroll offset stability: when user is scrolled up (scrollOffset > 0),
 		// adjust offset by content height delta to "freeze" the visible region.
-		// This prevents the viewport from drifting toward bottom when new content arrives.
-		if (this.scrollOffset > 0 && this.prevContentHeight > 0) {
-			const delta = this.contentHeight - this.prevContentHeight;
+		if (this.scrollOffset > 0 && prevHeight > 0) {
+			const delta = this.contentHeight - prevHeight;
 			if (delta > 0) {
 				this.scrollOffset += delta;
 			}
 		}
-		this.prevContentHeight = this.contentHeight;
 
 		this.clampScrollOffset();
 
-		this.cachedLines = allLines;
-		this.cachedWidth = width;
-		this.cacheValid = true;
-
 		return this.sliceForViewport(viewportHeight);
+	}
+
+	/**
+	 * Ensure cache array matches items array.
+	 */
+	private ensureItemCacheAligned(): void {
+		if (this.itemCache.length === this.items.length) {
+			// Fast path: if all components match by identity, keep cache.
+			let matches = true;
+			for (let i = 0; i < this.items.length; i++) {
+				if (this.itemCache[i]?.component !== this.items[i]) {
+					matches = false;
+					break;
+				}
+			}
+			if (matches) return;
+		}
+
+		this.itemCache = this.items.map((component) => ({
+			component,
+			lines: [],
+			height: 0,
+			start: 0,
+			dirty: true,
+		}));
+		this.layoutDirty = true;
+	}
+
+	/**
+	 * Render only dirty items.
+	 */
+	private renderDirtyItems(width: number): void {
+		for (const entry of this.itemCache) {
+			if (!entry.dirty) continue;
+			entry.lines = entry.component.render(width);
+			entry.height = entry.lines.length;
+			entry.dirty = false;
+			this.layoutDirty = true;
+		}
+	}
+
+	/**
+	 * Recompute per-item start offsets and total content height.
+	 */
+	private recomputeLayout(): void {
+		if (!this.layoutDirty) return;
+
+		let start = 0;
+		for (const entry of this.itemCache) {
+			entry.start = start;
+			start += entry.height;
+		}
+
+		this.contentHeight = start;
+		this.layoutDirty = false;
 	}
 
 	/**
 	 * Extract visible portion of content based on scroll offset.
 	 */
 	private sliceForViewport(viewportHeight: number): string[] {
-		if (this.cachedLines.length === 0) {
+		if (this.contentHeight === 0) {
 			return Array(viewportHeight).fill("");
 		}
 
-		// Calculate visible range
-		// scrollOffset is lines from bottom
-		const endIndex = this.cachedLines.length - this.scrollOffset;
-		const startIndex = Math.max(0, endIndex - viewportHeight);
-		const actualEndIndex = Math.min(this.cachedLines.length, startIndex + viewportHeight);
+		const endLine = this.contentHeight - this.scrollOffset;
+		const startLine = Math.max(0, endLine - viewportHeight);
+		const actualEndLine = Math.min(this.contentHeight, startLine + viewportHeight);
 
-		const visible = this.cachedLines.slice(startIndex, actualEndIndex);
+		const visible: string[] = [];
 
-		// Pad to fill viewport if needed
+		let globalLine = startLine;
+		let idx = this.findItemIndexForLine(globalLine);
+
+		while (idx < this.itemCache.length && globalLine < actualEndLine) {
+			const entry = this.itemCache[idx];
+			const entryStart = entry.start;
+			const entryEnd = entry.start + entry.height;
+
+			if (entry.height === 0) {
+				idx++;
+				continue;
+			}
+
+			const localStart = Math.max(0, globalLine - entryStart);
+			const localEnd = Math.min(entry.height, actualEndLine - entryStart);
+
+			visible.push(...entry.lines.slice(localStart, localEnd));
+			globalLine = Math.min(entryEnd, entryStart + localEnd);
+			idx++;
+		}
+
 		const padding = viewportHeight - visible.length;
 		if (padding > 0) {
-			// Add empty lines at top (content is bottom-aligned when at bottom)
 			return [...Array(padding).fill(""), ...visible];
 		}
 
 		return visible;
 	}
 
-	invalidate(): void {
-		this.cachedLines = [];
-		this.cachedWidth = 0;
-		this.cacheValid = false;
+	/**
+	 * Find the item index containing the given global line.
+	 */
+	private findItemIndexForLine(globalLine: number): number {
+		if (this.itemCache.length === 0) return 0;
+		if (globalLine <= 0) return 0;
+		if (globalLine >= this.contentHeight) return this.itemCache.length;
 
-		// Invalidate all child items
+		let low = 0;
+		let high = this.itemCache.length - 1;
+
+		while (low <= high) {
+			const mid = (low + high) >> 1;
+			const entry = this.itemCache[mid];
+			const start = entry.start;
+			const end = entry.start + entry.height;
+
+			if (globalLine < start) {
+				high = mid - 1;
+			} else if (globalLine >= end) {
+				low = mid + 1;
+			} else {
+				return mid;
+			}
+		}
+
+		return Math.min(low, this.itemCache.length);
+	}
+
+	invalidate(): void {
+		this.cachedWidth = 0;
+		this.contentHeight = 0;
+
+		this.itemCache = [];
+		this.layoutDirty = true;
+
 		for (const item of this.items) {
 			item.invalidate?.();
 		}
 	}
 
 	/**
-	 * Invalidate only the viewport's line cache, not children.
+	 * Invalidate only the viewport's cache, not children.
 	 * Use when a child's content changes but the child manages its own cache.
-	 * More efficient than full invalidate() for streaming updates.
 	 */
 	invalidateCacheOnly(): void {
-		this.cachedLines = [];
-		this.cachedWidth = 0;
-		this.cacheValid = false;
+		this.ensureItemCacheAligned();
+		for (const entry of this.itemCache) {
+			entry.dirty = true;
+		}
+		this.layoutDirty = true;
 	}
 }

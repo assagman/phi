@@ -181,6 +181,9 @@ export class InteractiveMode {
 	// Agent subscription unsubscribe function
 	private unsubscribe?: () => void;
 
+	// Idle render tick (used for async stats like CPU/RSS in footer)
+	private idleRenderTimer: ReturnType<typeof setInterval> | undefined = undefined;
+
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
 
@@ -441,6 +444,13 @@ export class InteractiveMode {
 		// Start the UI
 		this.ui.start();
 		this.isInitialized = true;
+
+		// Render tick for footer stats (CPU/RSS) and other async UI data.
+		// Keeps the UI "live" even when user isn't typing.
+		this.idleRenderTimer = setInterval(() => {
+			this.ui.requestRender();
+		}, 1000);
+		this.idleRenderTimer.unref?.();
 
 		// Set terminal title
 		const cwdBasename = path.basename(process.cwd());
@@ -1687,8 +1697,10 @@ export class InteractiveMode {
 							}
 						}
 					}
-					// Invalidate viewport cache so streaming updates appear
-					this.scrollableViewport.invalidateCacheOnly();
+					// Invalidate only the streaming component's cache entry
+					if (this.streamingComponent) {
+						this.scrollableViewport.invalidateItemCache(this.streamingComponent);
+					}
 					this.ui.requestRender();
 				}
 				break;
@@ -1755,8 +1767,8 @@ export class InteractiveMode {
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.partialResult, isError: false }, true);
-					// Invalidate viewport cache so streaming tool output appears
-					this.scrollableViewport.invalidateCacheOnly();
+					// Invalidate only this tool's cache entry
+					this.scrollableViewport.invalidateItemCache(component);
 					this.ui.requestRender();
 				}
 				break;
@@ -3833,6 +3845,10 @@ export class InteractiveMode {
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
 			this.loadingAnimation = undefined;
+		}
+		if (this.idleRenderTimer) {
+			clearInterval(this.idleRenderTimer);
+			this.idleRenderTimer = undefined;
 		}
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
