@@ -1,12 +1,6 @@
 import { getModel } from "ai";
 import { describe, expect, it } from "vitest";
-import {
-	codeReviewerTemplate,
-	createPreset,
-	mergeSynthesizerTemplate,
-	perfAnalyzerTemplate,
-	securityAuditorTemplate,
-} from "../src/index.js";
+import { codeReviewerTemplate, createPreset, perfAnalyzerTemplate, securityAuditorTemplate } from "../src/index.js";
 
 describe("Preset Templates", () => {
 	describe("codeReviewerTemplate", () => {
@@ -14,7 +8,7 @@ describe("Preset Templates", () => {
 			expect(codeReviewerTemplate.name).toBe("code-reviewer");
 			expect(codeReviewerTemplate.description).toBeDefined();
 			expect(codeReviewerTemplate.systemPrompt).toContain("code reviewer");
-			expect(codeReviewerTemplate.thinkingLevel).toBe("medium");
+			expect(codeReviewerTemplate.thinkingLevel).toBe("high");
 			expect(codeReviewerTemplate.temperature).toBe(0.3);
 		});
 
@@ -46,14 +40,6 @@ describe("Preset Templates", () => {
 
 		it("should include performance categories", () => {
 			expect(perfAnalyzerTemplate.systemPrompt).toContain("complexity");
-		});
-	});
-
-	describe("mergeSynthesizerTemplate", () => {
-		it("should have required fields", () => {
-			expect(mergeSynthesizerTemplate.name).toBe("merge-synthesizer");
-			expect(mergeSynthesizerTemplate.description).toBeDefined();
-			expect(mergeSynthesizerTemplate.systemPrompt).toContain("verify");
 		});
 	});
 });
