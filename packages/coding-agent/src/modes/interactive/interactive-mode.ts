@@ -52,7 +52,6 @@ import {
 import { APP_NAME, getAuthPath, getDebugLogPath } from "../../config.js";
 import type { AgentSession, AgentSessionEvent } from "../../core/agent-session.js";
 import {
-	BUILTIN_TEAMS,
 	createResolvedTeamStream,
 	createTeamStream,
 	formatTeamDetailHelp,
@@ -60,12 +59,13 @@ import {
 	formatTeamPresets,
 	formatTeamResults,
 	formatTeamSelectorOption,
+	getTeamAgentNames,
 	loadAllTeams,
 	parseTeamSelectorOption,
 	type TeamInfo,
 } from "../../core/commands/team.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
-import { getYamlTeamAgents } from "../../core/config/index.js";
+
 import type {
 	ExtensionContext,
 	ExtensionRunner,
@@ -4186,17 +4186,11 @@ Which team is best suited for this task? Reply with ONLY the team name, nothing 
 	}
 
 	/**
-	 * Get agent names for a team from YAML config
+	 * Get agent names for a team by name.
+	 * Delegates to the unified getTeamAgentNames function.
 	 */
 	private getBuiltinTeamAgents(teamName: string): string[] {
-		// Try YAML config first
-		const yamlAgents = getYamlTeamAgents(teamName);
-		if (yamlAgents.length > 0) {
-			return yamlAgents;
-		}
-		// Fallback to hardcoded BUILTIN_TEAMS for backward compatibility
-		const team = BUILTIN_TEAMS.find((t) => t.name === teamName);
-		return team?.agents ?? [];
+		return getTeamAgentNames(teamName, process.cwd());
 	}
 
 	/**

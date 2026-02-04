@@ -13,11 +13,25 @@ import type { ResolvedConfig, ResolvedPreset, ResolvedTeamConfig } from "./types
 // Singleton Config Instance
 // =============================================================================
 
+/**
+ * Config caching strategy:
+ *
+ * The config is cached per-cwd because reloading YAML files on every call
+ * would be expensive. This is acceptable for CLI tools where sessions are
+ * short-lived and users expect to restart for config changes.
+ *
+ * For long-running scenarios (language servers, watch mode), consumers should
+ * either call clearConfigCache() periodically or implement file watching
+ * and call clearConfigCache() on changes to:
+ * - ~/.phi/config.yaml
+ * - .phi/config.yaml (in project tree)
+ */
 let cachedConfig: ResolvedConfig | null = null;
 let configCwd: string | null = null;
 
 /**
  * Get the loaded configuration, loading if needed.
+ * Returns cached config if cwd hasn't changed.
  */
 export function getConfig(options?: LoadConfigOptions): ResolvedConfig {
 	const cwd = options?.cwd ?? process.cwd();
@@ -35,7 +49,13 @@ export function getConfig(options?: LoadConfigOptions): ResolvedConfig {
 }
 
 /**
- * Clear the configuration cache (useful for testing or reloading).
+ * Clear the configuration cache.
+ *
+ * Call this to force reload of config files on next getConfig() call.
+ * Useful for:
+ * - Testing (reset between tests)
+ * - File watcher callbacks (when config files change)
+ * - Manual refresh commands (/config reload)
  */
 export function clearConfigCache(): void {
 	cachedConfig = null;

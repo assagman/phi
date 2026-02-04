@@ -24,10 +24,20 @@ export { typeSafetyAuditorTemplate } from "./type-safety-auditor.js";
 export type { PresetTemplate } from "./types.js";
 export { createPreset, EPSILON_TASK_INSTRUCTIONS } from "./types.js";
 
-// Helper to wrap dynamic import with error handling
-function loadTemplate<T>(importFn: () => Promise<{ default?: T } & Record<string, T>>, key: string): Promise<T> {
+// Helper to wrap dynamic import with error handling and runtime type validation
+function loadTemplate<T>(importFn: () => Promise<Record<string, unknown>>, key: string): Promise<T> {
 	return importFn()
-		.then((m) => m[key as keyof typeof m] as T)
+		.then((m) => {
+			const value = m[key];
+			if (value === undefined) {
+				throw new Error(`Export '${key}' not found in module`);
+			}
+			// Runtime validation: ensure it's a PresetTemplate-like object
+			if (typeof value !== "object" || value === null || !("name" in value) || !("systemPrompt" in value)) {
+				throw new Error(`Export '${key}' is not a valid preset template`);
+			}
+			return value as T;
+		})
 		.catch((err) => {
 			throw new Error(
 				`Failed to load preset template '${key}': ${err instanceof Error ? err.message : String(err)}`,

@@ -1,10 +1,26 @@
 /**
  * /team command - Multi-agent team orchestration
  *
- * Teams and presets are defined in YAML config files:
- * - packages/coding-agent/config/defaults.yaml (builtin)
- * - ~/.phi/config.yaml (user overrides)
- * - .phi/config.yaml (project overrides)
+ * ## Configuration Architecture
+ *
+ * **TypeScript Templates (Source of Truth for Behavior)**
+ * - packages/agents/src/presets/*.ts - Define agent system prompts, thinking levels
+ * - Registered in packages/coding-agent/src/core/preset-registry.ts
+ * - Provides runtime guarantees via compile-time type checking
+ *
+ * **YAML Configuration (User Customization Layer)**
+ * - packages/coding-agent/config/defaults.yaml - Built-in team definitions
+ * - ~/.phi/config.yaml - User overrides
+ * - .phi/config.yaml - Project overrides
+ *
+ * The TypeScript presets define WHAT agents do (prompts, behavior).
+ * The YAML config defines HOW agents are grouped into teams.
+ * YAML teams reference TypeScript presets by name.
+ *
+ * This separation ensures:
+ * - Type safety for preset definitions (compile-time validation)
+ * - Flexibility for team composition (YAML is easy to edit)
+ * - Clear upgrade path (TypeScript presets can be improved without breaking user teams)
  */
 
 import type { AgentTool } from "agent";
@@ -22,7 +38,7 @@ import {
 	type TeamResult,
 } from "agents";
 import type { Api, Model } from "ai";
-import { getYamlTeams } from "../config/index.js";
+import { getYamlTeamAgents, getYamlTeams } from "../config/index.js";
 import type { ModelRegistry } from "../model-registry.js";
 import { AGENT_INFO, getPresetTemplate, isPresetName, type PresetName } from "../preset-registry.js";
 import {
@@ -336,6 +352,22 @@ export function formatTeamSelectorOption(team: TeamInfo): string {
 	return `${team.name}${sourceIcon}: ${team.description} (${team.agentCount} agents)`;
 }
 
+/**
+ * Get agent names for a team by name.
+ * Unified lookup that checks YAML config first, then falls back to BUILTIN_TEAMS.
+ * This provides a single entry point for all team agent lookups.
+ */
+export function getTeamAgentNames(teamName: string, cwd?: string): string[] {
+	// Try YAML config first (includes merged builtin + user + project)
+	const yamlAgents = getYamlTeamAgents(teamName, cwd ? { cwd } : undefined);
+	if (yamlAgents.length > 0) {
+		return yamlAgents;
+	}
+	// Fallback to hardcoded BUILTIN_TEAMS for backward compatibility
+	const team = BUILTIN_TEAMS.find((t) => t.name === teamName);
+	return team?.agents ?? [];
+}
+
 /** Parse selector option back to team name */
 export function parseTeamSelectorOption(option: string): string {
 	// Extract name before first colon or bracket
@@ -392,8 +424,7 @@ async function executeTeamInternal(teamConfig: TeamConfig, options: TeamCommandO
 			task,
 			signal,
 			getApiKey: async (provider: string) => {
-				// Only pass provider to getApiKey - it's all that's needed
-				return modelRegistry.getApiKey({ provider } as Model<Api>);
+				return modelRegistry.getApiKeyForProvider(provider);
 			},
 		});
 
@@ -581,7 +612,7 @@ export function createResolvedTeamStream(team: ResolvedTeam, options: TeamStream
 		task,
 		signal,
 		getApiKey: async (provider: string) => {
-			return modelRegistry.getApiKey({ provider } as Model<Api>);
+			return modelRegistry.getApiKeyForProvider(provider);
 		},
 	});
 
@@ -622,7 +653,7 @@ function createTeamStreamInternal(
 		task,
 		signal,
 		getApiKey: async (provider: string) => {
-			return modelRegistry.getApiKey({ provider } as Model<Api>);
+			return modelRegistry.getApiKeyForProvider(provider);
 		},
 	});
 

@@ -18,6 +18,8 @@ import type {
  * Parses tool execution events to extract task creation/update info.
  */
 class AgentTaskTracker {
+	/** Maximum tasks to track per agent to prevent unbounded memory growth */
+	private static readonly MAX_TASKS_PER_AGENT = 100;
 	private tasks: Map<string, Map<number, { title: string; status: TaskStatus }>> = new Map();
 
 	/**
@@ -25,70 +27,90 @@ class AgentTaskTracker {
 	 * Returns updated AgentTaskInfo if task state changed, undefined otherwise.
 	 */
 	processToolEvent(agentName: string, event: AgentEvent): AgentTaskInfo | undefined {
-		if (event.type !== "tool_execution_end") return undefined;
+		try {
+			if (event.type !== "tool_execution_end") return undefined;
 
-		const toolName = event.toolName;
-		if (!toolName.startsWith("epsilon_task_")) return undefined;
+			const toolName = event.toolName;
+			if (!toolName.startsWith("epsilon_task_")) return undefined;
 
-		// Initialize agent task map if needed
-		if (!this.tasks.has(agentName)) {
-			this.tasks.set(agentName, new Map());
-		}
-		const agentTasks = this.tasks.get(agentName)!;
-
-		// Parse tool result to extract task info
-		const result = event.result;
-		if (!result || typeof result !== "object") return undefined;
-
-		// Extract text content from result
-		let text = "";
-		if ("content" in result && Array.isArray(result.content)) {
-			for (const item of result.content) {
-				if (item && typeof item === "object" && "type" in item && item.type === "text" && "text" in item) {
-					text += item.text;
-				}
+			// Initialize agent task map if needed
+			if (!this.tasks.has(agentName)) {
+				this.tasks.set(agentName, new Map());
 			}
-		}
+			const agentTasks = this.tasks.get(agentName)!;
 
-		// Parse task info from result text
-		if (toolName === "epsilon_task_create" || toolName === "epsilon_task_create_bulk") {
-			// Extract created task IDs and titles
-			// Format: "Created task #123:" or "Created #123: Title"
-			const matches = text.matchAll(/Created(?:\s+task)?\s+#(\d+)[:\s]+([^\n]+)?/gi);
-			for (const match of matches) {
-				const id = Number.parseInt(match[1], 10);
-				const title = match[2]?.trim() || `Task #${id}`;
-				agentTasks.set(id, { title, status: "todo" });
-			}
-		} else if (toolName === "epsilon_task_update" || toolName === "epsilon_task_update_bulk") {
-			// Extract updated task status
-			// Format: "Updated task #123:" or "Updated #123: Title"
-			const matches = text.matchAll(/Updated(?:\s+task)?\s+#(\d+)[:\s]+([^\n]+)?/gi);
-			for (const match of matches) {
-				const id = Number.parseInt(match[1], 10);
-				const existing = agentTasks.get(id);
-				if (existing) {
-					// Check if status changed in the update
-					const statusMatch = text.match(/\b(todo|in_progress|blocked|done|cancelled)\b/i);
-					if (statusMatch) {
-						existing.status = statusMatch[1].toLowerCase() as TaskStatus;
-					}
-					// Update title if present
-					if (match[2]) {
-						existing.title = match[2].trim();
+			// Parse tool result to extract task info
+			const result = event.result;
+			if (!result || typeof result !== "object") return undefined;
+
+			// Extract text content from result with explicit type validation
+			let text = "";
+			if ("content" in result) {
+				const content = (result as { content: unknown }).content;
+				if (Array.isArray(content)) {
+					for (const item of content) {
+						if (
+							item &&
+							typeof item === "object" &&
+							"type" in item &&
+							(item as { type: unknown }).type === "text" &&
+							"text" in item &&
+							typeof (item as { text: unknown }).text === "string"
+						) {
+							text += (item as { text: string }).text;
+						}
 					}
 				}
 			}
-		} else if (toolName === "epsilon_task_delete" || toolName === "epsilon_task_delete_bulk") {
-			// Remove deleted tasks
-			const matches = text.matchAll(/Deleted(?:\s+task)?\s+#(\d+)/gi);
-			for (const match of matches) {
-				const id = Number.parseInt(match[1], 10);
-				agentTasks.delete(id);
-			}
-		}
 
-		return this.getTaskInfo(agentName);
+			// Parse task info from result text
+			if (toolName === "epsilon_task_create" || toolName === "epsilon_task_create_bulk") {
+				// Extract created task IDs and titles
+				// Format: "Created task #123:" or "Created #123: Title"
+				const matches = text.matchAll(/Created(?:\s+task)?\s+#(\d+)[:\s]+([^\n]+)?/gi);
+				for (const match of matches) {
+					// Enforce per-agent task limit to prevent unbounded memory growth
+					if (agentTasks.size >= AgentTaskTracker.MAX_TASKS_PER_AGENT) {
+						break;
+					}
+					const id = Number.parseInt(match[1], 10);
+					const title = match[2]?.trim() || `Task #${id}`;
+					agentTasks.set(id, { title, status: "todo" });
+				}
+			} else if (toolName === "epsilon_task_update" || toolName === "epsilon_task_update_bulk") {
+				// Extract updated task status
+				// Format: "Updated task #123:" or "Updated #123: Title"
+				const matches = text.matchAll(/Updated(?:\s+task)?\s+#(\d+)[:\s]+([^\n]+)?/gi);
+				for (const match of matches) {
+					const id = Number.parseInt(match[1], 10);
+					const existing = agentTasks.get(id);
+					if (existing) {
+						// Check if status changed in the update
+						const statusMatch = text.match(/\b(todo|in_progress|blocked|done|cancelled)\b/i);
+						if (statusMatch) {
+							existing.status = statusMatch[1].toLowerCase() as TaskStatus;
+						}
+						// Update title if present
+						if (match[2]) {
+							existing.title = match[2].trim();
+						}
+					}
+				}
+			} else if (toolName === "epsilon_task_delete" || toolName === "epsilon_task_delete_bulk") {
+				// Remove deleted tasks
+				const matches = text.matchAll(/Deleted(?:\s+task)?\s+#(\d+)/gi);
+				for (const match of matches) {
+					const id = Number.parseInt(match[1], 10);
+					agentTasks.delete(id);
+				}
+			}
+
+			return this.getTaskInfo(agentName);
+		} catch {
+			// Silently fail - regex parsing errors shouldn't break progress tracking
+			// Return current state (may be partial) rather than crashing
+			return this.tasks.has(agentName) ? this.getTaskInfo(agentName) : undefined;
+		}
 	}
 
 	/**
@@ -647,13 +669,11 @@ export class Team {
 		// Support multiple CWE formats
 		const cweMatches = block.matchAll(/\b(CWE-\d+)\b/gi);
 
-		const descMatch = block.match(
-			/\*{0,2}description\*{0,2}[:\s]+([\s\S]*?)(?=\*{0,2}(?:severity|category|file|line|suggestion|confidence)\*{0,2}[:\s]|```|$)/i,
-		);
-		const suggestionMatch = block.match(
-			/\*{0,2}(?:suggestion|fix|recommendation)\*{0,2}[:\s]+([\s\S]*?)(?=\*{0,2}(?:severity|category|file|line|description|confidence)\*{0,2}[:\s]|```|$)/i,
-		);
-		const codeMatch = block.match(/```[\w]*\n?([\s\S]*?)```/);
+		// Parse description/suggestion by finding content between labeled sections
+		// Using line-based parsing to avoid ReDoS with [\s\S]*? patterns
+		const descMatch = this.extractLabeledContent(block, ["description"]);
+		const suggestionMatch = this.extractLabeledContent(block, ["suggestion", "fix", "recommendation"]);
+		const codeMatch = block.match(/```[\w]*\n?([^`]+)```/);
 
 		const rawSeverity = severityMatch?.[1]?.toLowerCase();
 		const severity = (
@@ -696,12 +716,48 @@ export class Team {
 					: Number(lineMatch[1])
 				: undefined,
 			title,
-			description: descMatch?.[1]?.trim() || block.slice(0, 200),
-			suggestion: suggestionMatch?.[1]?.trim(),
+			description: descMatch?.trim() || block.slice(0, 200),
+			suggestion: suggestionMatch?.trim(),
 			codeSnippet: codeMatch?.[1]?.trim(),
 			confidence: confidenceMatch ? Number(confidenceMatch[1]) : undefined,
 			references: references.length > 0 ? references : undefined,
 		};
+	}
+
+	/**
+	 * Extract content following a labeled section (e.g., **Description:**).
+	 * Uses line-based parsing to avoid ReDoS-vulnerable [\s\S]*? patterns.
+	 */
+	private extractLabeledContent(block: string, labels: string[]): string | undefined {
+		const lines = block.split("\n");
+		const labelPattern = new RegExp(`^\\*{0,2}(${labels.join("|")})\\*{0,2}[:\\s]+(.*)$`, "i");
+		const nextLabelPattern =
+			/^\*{0,2}(severity|category|file|lines?|suggestion|fix|recommendation|confidence|description)\*{0,2}[:\s]/i;
+		const codeBlockPattern = /^```/;
+
+		let capturing = false;
+		const captured: string[] = [];
+
+		for (const line of lines) {
+			if (!capturing) {
+				const match = line.match(labelPattern);
+				if (match) {
+					capturing = true;
+					// First line may have content after the label
+					if (match[2]?.trim()) {
+						captured.push(match[2].trim());
+					}
+				}
+			} else {
+				// Stop at next label or code block
+				if (nextLabelPattern.test(line) || codeBlockPattern.test(line)) {
+					break;
+				}
+				captured.push(line);
+			}
+		}
+
+		return captured.length > 0 ? captured.join("\n") : undefined;
 	}
 
 	private aggregateUsage(results: AgentResult[]): TeamResult["totalUsage"] {

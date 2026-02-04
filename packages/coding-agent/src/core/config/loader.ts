@@ -80,24 +80,61 @@ export function deepMerge<T extends object>(base: T, override: Partial<T>): T {
 // File Loading
 // =============================================================================
 
+/** Result of loading a YAML file */
+interface LoadYamlResult {
+	config: AppConfig | null;
+	error?: string;
+}
+
 /**
  * Load and parse a YAML config file.
- * Returns null if file doesn't exist or is invalid.
+ * Returns { config: null } if file doesn't exist.
+ * Returns { config: null, error: string } if file exists but failed to parse.
  */
-function loadYamlFile(filePath: string): AppConfig | null {
+function loadYamlFile(filePath: string): LoadYamlResult {
+	try {
+		// Check if file exists first
+		fs.accessSync(filePath, fs.constants.R_OK);
+	} catch {
+		// File doesn't exist - this is expected, not an error
+		return { config: null };
+	}
+
 	try {
 		const content = fs.readFileSync(filePath, "utf-8");
 		const parsed = parseYaml(content);
 
 		// Basic validation
 		if (parsed === null || typeof parsed !== "object") {
-			return null;
+			return { config: null, error: `Invalid YAML structure in ${filePath}` };
 		}
 
-		return parsed as AppConfig;
-	} catch {
-		return null;
+		// Type guard validation for expected structure
+		if (!isValidAppConfig(parsed)) {
+			return { config: null, error: `Invalid config structure in ${filePath}` };
+		}
+
+		return { config: parsed };
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		return { config: null, error: `Failed to parse ${filePath}: ${message}` };
 	}
+}
+
+/**
+ * Type guard for AppConfig structure validation.
+ */
+function isValidAppConfig(value: unknown): value is AppConfig {
+	if (typeof value !== "object" || value === null) return false;
+	const obj = value as Record<string, unknown>;
+
+	// All top-level keys are optional, but if present must be objects
+	if (obj.presets !== undefined && (typeof obj.presets !== "object" || obj.presets === null)) return false;
+	if (obj.teams !== undefined && (typeof obj.teams !== "object" || obj.teams === null)) return false;
+	if (obj.models !== undefined && (typeof obj.models !== "object" || obj.models === null)) return false;
+	if (obj.settings !== undefined && (typeof obj.settings !== "object" || obj.settings === null)) return false;
+
+	return true;
 }
 
 /**
@@ -327,7 +364,7 @@ export interface LoadConfigOptions {
 /**
  * Load and merge all configuration sources.
  *
- * @returns Fully resolved configuration
+ * @returns Fully resolved configuration with any errors encountered
  */
 export function loadConfig(options: LoadConfigOptions = {}): ResolvedConfig {
 	const cwd = options.cwd ?? process.cwd();
@@ -339,29 +376,38 @@ export function loadConfig(options: LoadConfigOptions = {}): ResolvedConfig {
 	let teams = new Map<string, ResolvedTeamConfig>();
 	let models: ModelsConfig = { defaults: {}, providers: {} };
 	let settings: Required<SettingsConfig> = mergeSettings({}, undefined);
+	const configErrors: string[] = [];
 
-	// 1. Load embedded defaults
-	const defaults = loadYamlFile(defaultsPath);
-	if (defaults) {
-		presets = resolvePresets(defaults, "builtin", presets);
-		teams = resolveTeams(defaults, "builtin", teams, presets);
-		if (defaults.models) {
-			models = mergeModels(models, defaults.models);
+	// 1. Load embedded defaults - critical, should always exist
+	const defaultsResult = loadYamlFile(defaultsPath);
+	if (defaultsResult.error) {
+		// Defaults file error is critical - log but continue with empty config
+		configErrors.push(`Defaults config error: ${defaultsResult.error}`);
+	}
+	if (defaultsResult.config) {
+		presets = resolvePresets(defaultsResult.config, "builtin", presets);
+		teams = resolveTeams(defaultsResult.config, "builtin", teams, presets);
+		if (defaultsResult.config.models) {
+			models = mergeModels(models, defaultsResult.config.models);
 		}
-		settings = mergeSettings(defaults.settings ?? {}, undefined);
+		settings = mergeSettings(defaultsResult.config.settings ?? {}, undefined);
 	}
 
 	// 2. Load user config
 	if (!options.skipUserConfig) {
-		const userConfig = loadYamlFile(userConfigPath);
-		if (userConfig) {
-			presets = resolvePresets(userConfig, "user", presets);
-			teams = resolveTeams(userConfig, "user", teams, presets);
-			if (userConfig.models) {
-				models = mergeModels(models, userConfig.models);
+		const userResult = loadYamlFile(userConfigPath);
+		if (userResult.error) {
+			// User config parse error - warn but continue
+			configErrors.push(`User config error: ${userResult.error}`);
+		}
+		if (userResult.config) {
+			presets = resolvePresets(userResult.config, "user", presets);
+			teams = resolveTeams(userResult.config, "user", teams, presets);
+			if (userResult.config.models) {
+				models = mergeModels(models, userResult.config.models);
 			}
-			if (userConfig.settings) {
-				settings = mergeSettings(settings, userConfig.settings);
+			if (userResult.config.settings) {
+				settings = mergeSettings(settings, userResult.config.settings);
 			}
 		}
 	}
@@ -370,21 +416,32 @@ export function loadConfig(options: LoadConfigOptions = {}): ResolvedConfig {
 	if (!options.skipProjectConfig) {
 		const projectConfigPath = findProjectConfig(cwd);
 		if (projectConfigPath) {
-			const projectConfig = loadYamlFile(projectConfigPath);
-			if (projectConfig) {
-				presets = resolvePresets(projectConfig, "project", presets);
-				teams = resolveTeams(projectConfig, "project", teams, presets);
-				if (projectConfig.models) {
-					models = mergeModels(models, projectConfig.models);
+			const projectResult = loadYamlFile(projectConfigPath);
+			if (projectResult.error) {
+				// Project config parse error - warn but continue
+				configErrors.push(`Project config error: ${projectResult.error}`);
+			}
+			if (projectResult.config) {
+				presets = resolvePresets(projectResult.config, "project", presets);
+				teams = resolveTeams(projectResult.config, "project", teams, presets);
+				if (projectResult.config.models) {
+					models = mergeModels(models, projectResult.config.models);
 				}
-				if (projectConfig.settings) {
-					settings = mergeSettings(settings, projectConfig.settings);
+				if (projectResult.config.settings) {
+					settings = mergeSettings(settings, projectResult.config.settings);
 				}
 			}
 		}
 	}
 
-	return { presets, teams, models, settings };
+	// Log errors to stderr if any (but don't throw - partial config is better than none)
+	if (configErrors.length > 0 && process.env.DEBUG) {
+		for (const err of configErrors) {
+			console.error(`[config] ${err}`);
+		}
+	}
+
+	return { presets, teams, models, settings, configErrors };
 }
 
 /**

@@ -229,4 +229,6 @@ export interface ResolvedConfig {
 	teams: Map<string, ResolvedTeamConfig>;
 	models: ModelsConfig;
 	settings: Required<SettingsConfig>;
+	/** Errors encountered during config loading (non-fatal) */
+	configErrors?: string[];
 }
