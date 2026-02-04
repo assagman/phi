@@ -35,9 +35,15 @@ export type { Answer, AskResult, Question, QuestionOption, SigmaUIContext } from
 export { createSigmaTool, createSigmaUI, SIGMA_SYSTEM_PROMPT } from "./sigma/index.js";
 // ─── Storage ─────────────────────────────────────────────────────────────────
 export { getBuiltinDbPath, getDataDir, getRepoIdentifier } from "./storage.js";
-export type { SubagentToolContext, SubagentUIContext } from "./subagent/index.js";
+export type { SubagentToolContext } from "./subagent/index.js";
 // ─── Subagent (Agent Delegation) ─────────────────────────────────────────────
-export { type AgentDefinition, type AgentRegistry, createAgentRegistry, createSubagentTool } from "./subagent/index.js";
+export {
+	type AgentDefinition,
+	type AgentRegistry,
+	clearRegistryCache as clearSubagentRegistryCache,
+	createAgentRegistry,
+	createSubagentTool,
+} from "./subagent/index.js";
 
 // ─── Combined Lifecycle ──────────────────────────────────────────────────────
 
@@ -137,7 +143,8 @@ export function createBuiltinToolsLifecycle(config: BuiltinToolsConfig): Builtin
 	// Create tools
 	const sigmaTool = createSigmaTool(config.getSessionBranch, config.ui);
 	const handoffTool = createHandoffTool(config.handoffContext, config.ui);
-	const subagentTool = createSubagentTool(config.subagentContext, config.ui);
+	// Subagent no longer uses UI overlay - runs inline with status updates
+	const subagentTool = createSubagentTool(config.subagentContext);
 
 	// Registered tools: sigma, handoff, subagent
 	// Delta and epsilon are accessed via bash: phi_delta, phi_epsilon
