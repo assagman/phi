@@ -8,6 +8,7 @@
  */
 
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -61,10 +62,18 @@ function validatePath(basePath: string, targetPath: string): void {
 }
 
 function getDbPath(sessionId: string): string {
-	// Sanitize session ID for filesystem
-	const sanitizedId = sessionId.replace(/[^a-zA-Z0-9_.-]/g, "_").substring(0, 100);
+	// Use hash-based directory name to avoid collisions from different session IDs
+	// that would sanitize to the same string (e.g., "a/b" and "a_b" both -> "a_b")
+	// Hash ensures unique, collision-resistant directory names
+	const hash = createHash("sha256").update(sessionId).digest("hex").substring(0, 16);
+	// Include sanitized prefix for human readability in the filesystem
+	const sanitizedPrefix = sessionId
+		.replace(/[^a-zA-Z0-9_.-]/g, "_")
+		.substring(0, 20)
+		.replace(/_+$/, "");
+	const dirName = sanitizedPrefix ? `${sanitizedPrefix}_${hash}` : hash;
 
-	const dirPath = join(LOCAL_SHARE, sanitizedId);
+	const dirPath = join(LOCAL_SHARE, dirName);
 	validatePath(LOCAL_SHARE, dirPath);
 
 	if (!existsSync(LOCAL_SHARE)) {

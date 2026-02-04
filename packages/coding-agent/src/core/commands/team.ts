@@ -293,10 +293,52 @@ export async function executeTeam(teamName: string, options: TeamCommandOptions)
 }
 
 /**
+ * Internal helper to execute a team and process events.
+ * Shared by executeResolvedTeam, executeTeamWithAgents, and executeCustomTeam.
+ */
+async function executeTeamInternal(teamConfig: TeamConfig, options: TeamCommandOptions): Promise<TeamResult | null> {
+	const { modelRegistry, task, signal, onProgress } = options;
+
+	// Initialize state
+	const state: TeamExecutionState = {
+		phase: "starting",
+		teamName: teamConfig.name,
+		agentCount: teamConfig.agents.length,
+		agentResults: new Map(),
+	};
+
+	const teamInstance = new Team(teamConfig);
+
+	try {
+		const stream = teamInstance.run({
+			task,
+			signal,
+			getApiKey: async (provider: string) => {
+				// Only pass provider to getApiKey - it's all that's needed
+				return modelRegistry.getApiKey({ provider } as Model<Api>);
+			},
+		});
+
+		// Process events
+		for await (const event of stream) {
+			handleTeamEvent(event, state);
+			onProgress?.(state);
+		}
+
+		return await stream.result();
+	} catch (error) {
+		state.phase = "error";
+		state.error = error instanceof Error ? error.message : String(error);
+		onProgress?.(state);
+		return null;
+	}
+}
+
+/**
  * Execute a resolved team (from config file).
  */
 export async function executeResolvedTeam(team: ResolvedTeam, options: TeamCommandOptions): Promise<TeamResult | null> {
-	const { model, modelRegistry, tools = [], task, signal, onProgress } = options;
+	const { model, modelRegistry, tools = [] } = options;
 
 	// Validate models against registry
 	const modelErrors = validateTeamModels(team, modelRegistry);
@@ -313,7 +355,6 @@ export async function executeResolvedTeam(team: ResolvedTeam, options: TeamComma
 			if (resolved) {
 				agentModel = resolved;
 			}
-			// If resolved is undefined, we already validated above, so this shouldn't happen
 		}
 
 		return {
@@ -344,38 +385,7 @@ export async function executeResolvedTeam(team: ResolvedTeam, options: TeamComma
 		continueOnError: true,
 	};
 
-	// Initialize state
-	const state: TeamExecutionState = {
-		phase: "starting",
-		teamName: team.name,
-		agentCount: agentPresets.length,
-		agentResults: new Map(),
-	};
-
-	const teamInstance = new Team(teamConfig);
-
-	try {
-		const stream = teamInstance.run({
-			task,
-			signal,
-			getApiKey: async (provider: string) => {
-				return modelRegistry.getApiKey({ provider } as Model<Api>);
-			},
-		});
-
-		// Process events
-		for await (const event of stream) {
-			handleTeamEvent(event, state);
-			onProgress?.(state);
-		}
-
-		return await stream.result();
-	} catch (error) {
-		state.phase = "error";
-		state.error = error instanceof Error ? error.message : String(error);
-		onProgress?.(state);
-		return null;
-	}
+	return executeTeamInternal(teamConfig, options);
 }
 
 /**
@@ -540,7 +550,7 @@ async function executeTeamWithAgents(
 	strategy: MergeStrategyType,
 	options: TeamCommandOptions,
 ): Promise<TeamResult | null> {
-	const { model, modelRegistry, tools = [], task, signal, onProgress } = options;
+	const { model, tools = [] } = options;
 
 	// Create agent presets
 	const agentPresets = createAgentPresets(agentNames, model);
@@ -562,38 +572,7 @@ async function executeTeamWithAgents(
 		continueOnError: true,
 	};
 
-	// Initialize state
-	const state: TeamExecutionState = {
-		phase: "starting",
-		teamName,
-		agentCount: agentPresets.length,
-		agentResults: new Map(),
-	};
-
-	const team = new Team(teamConfig);
-
-	try {
-		const stream = team.run({
-			task,
-			signal,
-			getApiKey: async (provider: string) => {
-				return modelRegistry.getApiKey({ provider } as Model<any>);
-			},
-		});
-
-		// Process events
-		for await (const event of stream) {
-			handleTeamEvent(event, state);
-			onProgress?.(state);
-		}
-
-		return await stream.result();
-	} catch (error) {
-		state.phase = "error";
-		state.error = error instanceof Error ? error.message : String(error);
-		onProgress?.(state);
-		return null;
-	}
+	return executeTeamInternal(teamConfig, options);
 }
 
 // ============================================================================

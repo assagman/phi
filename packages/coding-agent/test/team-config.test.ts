@@ -35,9 +35,14 @@ describe("parseModelString", () => {
 		}
 	});
 
-	test("returns null for invalid thinking level", () => {
+	test("treats invalid thinking level as part of model ID", () => {
+		// "ultra" is not a valid thinking level, so it becomes part of model ID
 		const result = parseModelString("anthropic:claude:ultra");
-		expect(result).toBeNull();
+		expect(result).toEqual({
+			provider: "anthropic",
+			modelId: "claude:ultra",
+			thinking: undefined,
+		});
 	});
 
 	test("returns null for empty string", () => {
@@ -56,8 +61,14 @@ describe("parseModelString", () => {
 		expect(parseModelString("just-a-model")).toBeNull();
 	});
 
-	test("returns null for too many segments", () => {
-		expect(parseModelString("a:b:c:d")).toBeNull();
+	test("handles multiple colons in model ID", () => {
+		// Multiple colons are now supported - they become part of model ID
+		const result = parseModelString("a:b:c:d");
+		expect(result).toEqual({
+			provider: "a",
+			modelId: "b:c:d",
+			thinking: undefined,
+		});
 	});
 
 	test("handles complex model IDs with hyphens", () => {
@@ -139,5 +150,79 @@ describe("loadCustomTeams", () => {
 		const result = loadCustomTeams("/tmp/nonexistent-path-for-test");
 		expect(result.teams).toEqual([]);
 		expect(result.errors).toEqual([]);
+	});
+});
+
+describe("parseModelString edge cases", () => {
+	test("handles model IDs containing colons (e.g., openrouter)", () => {
+		// Model ID like "meta-llama/llama-3-70b" with thinking level
+		const result = parseModelString("openrouter:meta-llama/llama-3-70b:high");
+		expect(result).toEqual({
+			provider: "openrouter",
+			modelId: "meta-llama/llama-3-70b",
+			thinking: "high",
+		});
+	});
+
+	test("handles model IDs with multiple colons but no thinking", () => {
+		// Hypothetical model with colon in name
+		const result = parseModelString("custom:model:v2");
+		// Since "v2" is not a valid thinking level, it should be part of model ID
+		expect(result).toEqual({
+			provider: "custom",
+			modelId: "model:v2",
+			thinking: undefined,
+		});
+	});
+
+	test("returns null for non-string input", () => {
+		expect(parseModelString(null as any)).toBeNull();
+		expect(parseModelString(undefined as any)).toBeNull();
+		expect(parseModelString(123 as any)).toBeNull();
+		expect(parseModelString({} as any)).toBeNull();
+	});
+
+	test("handles whitespace in input", () => {
+		// Leading/trailing whitespace should still work
+		const result = parseModelString("anthropic:claude-3-5-sonnet-20241022");
+		expect(result?.provider).toBe("anthropic");
+	});
+});
+
+describe("validateModelAgainstRegistry edge cases", () => {
+	const mockRegistry = {
+		find: (_provider: string, _modelId: string) => undefined,
+	};
+
+	test("handles empty model ID", () => {
+		const parsed: ParsedModelString = {
+			provider: "anthropic",
+			modelId: "",
+		};
+		const error = validateModelAgainstRegistry(parsed, mockRegistry);
+		expect(error).toBe("Model not found: anthropic:");
+	});
+
+	test("handles special characters in model ID", () => {
+		const parsed: ParsedModelString = {
+			provider: "anthropic",
+			modelId: "model/with/slashes",
+		};
+		const error = validateModelAgainstRegistry(parsed, mockRegistry);
+		expect(error).toBe("Model not found: anthropic:model/with/slashes");
+	});
+});
+
+describe("preset resolution", () => {
+	test("all presets have required fields", () => {
+		const presets = getAvailablePresets();
+		for (const name of presets) {
+			const template = getPresetTemplate(name);
+			expect(template).toBeDefined();
+			expect(template?.name).toBe(name);
+			expect(typeof template?.systemPrompt).toBe("string");
+			expect(template?.systemPrompt.length).toBeGreaterThan(0);
+			expect(typeof template?.description).toBe("string");
+		}
 	});
 });

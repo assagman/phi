@@ -10,6 +10,9 @@
  *   - anthropic:claude-3-5-sonnet-20241022
  *   - openai:gpt-4o:medium
  *   - google:gemini-2.0-flash-exp:high
+ *
+ * Security note: User-defined system prompts are executed as-is. Custom team
+ * configurations should only be loaded from trusted sources.
  */
 
 import * as fs from "node:fs";
@@ -26,6 +29,9 @@ import {
 } from "agents";
 import type { Api, Model } from "ai";
 import { parse as parseYaml } from "yaml";
+
+// Maximum number of config errors to accumulate before truncating
+const MAX_CONFIG_ERRORS = 50;
 
 // ============================================================================
 // Types
@@ -113,9 +119,13 @@ const VALID_THINKING_LEVELS: ThinkingLevel[] = ["off", "low", "medium", "high"];
 /**
  * Parse a model string in format: provider:model-id[:thinking]
  *
+ * Uses rightmost colon for thinking level detection to support model IDs with colons
+ * (e.g., "openrouter:meta-llama/llama-3-70b:high").
+ *
  * Examples:
  *   - "anthropic:claude-3-5-sonnet-20241022" → { provider: "anthropic", modelId: "claude-3-5-sonnet-20241022" }
  *   - "openai:gpt-4o:medium" → { provider: "openai", modelId: "gpt-4o", thinking: "medium" }
+ *   - "openrouter:meta/llama:high" → { provider: "openrouter", modelId: "meta/llama", thinking: "high" }
  *
  * @returns ParsedModelString or null if invalid format
  */
@@ -124,25 +134,34 @@ export function parseModelString(modelStr: string): ParsedModelString | null {
 		return null;
 	}
 
-	const parts = modelStr.split(":");
-	if (parts.length < 2 || parts.length > 3) {
+	// Find first colon (provider separator)
+	const firstColonIdx = modelStr.indexOf(":");
+	if (firstColonIdx === -1 || firstColonIdx === 0) {
 		return null;
 	}
 
-	const [provider, modelId, thinkingStr] = parts;
-	if (!provider || !modelId) {
+	const provider = modelStr.slice(0, firstColonIdx);
+	let rest = modelStr.slice(firstColonIdx + 1);
+	if (!rest) {
 		return null;
 	}
 
+	// Check if last segment is a valid thinking level
 	let thinking: ThinkingLevel | undefined;
-	if (thinkingStr) {
-		if (!VALID_THINKING_LEVELS.includes(thinkingStr as ThinkingLevel)) {
-			return null;
+	const lastColonIdx = rest.lastIndexOf(":");
+	if (lastColonIdx !== -1) {
+		const possibleThinking = rest.slice(lastColonIdx + 1);
+		if (VALID_THINKING_LEVELS.includes(possibleThinking as ThinkingLevel)) {
+			thinking = possibleThinking as ThinkingLevel;
+			rest = rest.slice(0, lastColonIdx);
 		}
-		thinking = thinkingStr as ThinkingLevel;
 	}
 
-	return { provider, modelId, thinking };
+	if (!rest) {
+		return null;
+	}
+
+	return { provider, modelId: rest, thinking };
 }
 
 /**
@@ -169,7 +188,13 @@ function findProjectConfig(cwd: string): string | null {
 	let dir = cwd;
 	while (true) {
 		const candidate = path.join(dir, ".phi", "teams.yaml");
-		if (fs.existsSync(candidate)) return candidate;
+		// Try to read directly (avoids TOCTOU race)
+		try {
+			fs.accessSync(candidate, fs.constants.R_OK);
+			return candidate;
+		} catch {
+			// File doesn't exist or not readable
+		}
 
 		const parent = path.dirname(dir);
 		if (parent === dir) return null;
@@ -179,13 +204,51 @@ function findProjectConfig(cwd: string): string | null {
 
 function getUserConfig(): string | null {
 	const userConfig = path.join(os.homedir(), ".phi", "teams.yaml");
-	return fs.existsSync(userConfig) ? userConfig : null;
+	try {
+		fs.accessSync(userConfig, fs.constants.R_OK);
+		return userConfig;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Type guard for TeamsConfigFile structure.
+ */
+function isValidTeamsConfig(data: unknown): data is TeamsConfigFile {
+	if (data === null || typeof data !== "object") return false;
+	const obj = data as Record<string, unknown>;
+	if (obj.teams !== undefined) {
+		if (typeof obj.teams !== "object" || obj.teams === null) return false;
+	}
+	return true;
+}
+
+/**
+ * Type guard for TeamConfigDefinition structure.
+ */
+function isValidTeamConfig(data: unknown): data is TeamConfigDefinition {
+	if (data === null || typeof data !== "object") return false;
+	const obj = data as Record<string, unknown>;
+	// agents is required and must be an array
+	if (!Array.isArray(obj.agents)) return false;
+	// Optional fields must be correct types if present
+	if (obj.description !== undefined && typeof obj.description !== "string") return false;
+	if (obj.strategy !== undefined && typeof obj.strategy !== "string") return false;
+	return true;
 }
 
 function loadConfigFile(filePath: string): TeamsConfigFile | null {
 	try {
 		const content = fs.readFileSync(filePath, "utf-8");
-		return parseYaml(content) as TeamsConfigFile;
+		const parsed = parseYaml(content);
+
+		// Validate structure
+		if (!isValidTeamsConfig(parsed)) {
+			return null;
+		}
+
+		return parsed;
 	} catch {
 		return null;
 	}
@@ -326,11 +389,24 @@ export interface LoadTeamsResult {
 }
 
 /**
+ * Helper to add an error with limit checking.
+ */
+function addError(errors: string[], error: string): void {
+	if (errors.length < MAX_CONFIG_ERRORS) {
+		errors.push(error);
+	} else if (errors.length === MAX_CONFIG_ERRORS) {
+		errors.push(`... (truncated, ${MAX_CONFIG_ERRORS}+ errors)`);
+	}
+}
+
+/**
  * Load all custom teams from config files.
  */
 export function loadCustomTeams(cwd: string): LoadTeamsResult {
-	const teams: ResolvedTeam[] = [];
 	const errors: string[] = [];
+
+	// Use Map for O(1) lookup when checking for duplicates
+	const teamsByName = new Map<string, ResolvedTeam>();
 
 	// Load user global config
 	const userConfigPath = getUserConfig();
@@ -338,11 +414,19 @@ export function loadCustomTeams(cwd: string): LoadTeamsResult {
 		const userConfig = loadConfigFile(userConfigPath);
 		if (userConfig?.teams) {
 			for (const [name, def] of Object.entries(userConfig.teams)) {
+				// Validate team config structure
+				if (!isValidTeamConfig(def)) {
+					addError(errors, `Team "${name}" in user config has invalid structure`);
+					continue;
+				}
+
 				const result = resolveTeam(name, def, "user");
 				if (result.team) {
-					teams.push(result.team);
+					teamsByName.set(name, result.team);
 				}
-				errors.push(...result.errors);
+				for (const err of result.errors) {
+					addError(errors, err);
+				}
 			}
 		}
 	}
@@ -353,22 +437,25 @@ export function loadCustomTeams(cwd: string): LoadTeamsResult {
 		const projectConfig = loadConfigFile(projectConfigPath);
 		if (projectConfig?.teams) {
 			for (const [name, def] of Object.entries(projectConfig.teams)) {
-				// Remove user team with same name
-				const existingIndex = teams.findIndex((t) => t.name === name);
-				if (existingIndex >= 0) {
-					teams.splice(existingIndex, 1);
+				// Validate team config structure
+				if (!isValidTeamConfig(def)) {
+					addError(errors, `Team "${name}" in project config has invalid structure`);
+					continue;
 				}
 
 				const result = resolveTeam(name, def, "project");
 				if (result.team) {
-					teams.push(result.team);
+					// O(1) override of existing team
+					teamsByName.set(name, result.team);
 				}
-				errors.push(...result.errors);
+				for (const err of result.errors) {
+					addError(errors, err);
+				}
 			}
 		}
 	}
 
-	return { teams, errors };
+	return { teams: Array.from(teamsByName.values()), errors };
 }
 
 /**

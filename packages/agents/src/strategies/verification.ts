@@ -52,16 +52,23 @@ async function verifyWithAgent(
 	const { mergeAgent, tools, signal, getApiKey, onEvent } = options;
 	if (!mergeAgent) return clusters;
 
-	// Build verification prompt with all findings
-	const findingsJson = JSON.stringify(allFindings, null, 2);
+	// Build verification prompt with findings (compact JSON to save tokens)
+	// Only include essential fields for verification
+	const compactFindings = allFindings.map((f) => ({
+		id: f.id,
+		severity: f.severity,
+		file: f.file,
+		line: f.line,
+		title: f.title,
+		description: f.description.slice(0, 500), // Truncate long descriptions
+	}));
+	const findingsJson = JSON.stringify(compactFindings);
 	const clustersJson = JSON.stringify(
 		clusters.map((c) => ({
 			primary: c.primary.id,
 			related: c.related.map((r) => r.id),
 			agreementCount: c.agreementCount,
 		})),
-		null,
-		2,
 	);
 
 	const verificationPrompt: AgentMessage = {

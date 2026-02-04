@@ -512,22 +512,52 @@ export class Team {
 		const lines = block.split("\n");
 		const title = lines[0]?.trim() || `Finding ${index}`;
 
-		const severityMatch = block.match(/\*\*Severity:\*\*\s*(\w+)/i);
-		const categoryMatch = block.match(/\*\*Category:\*\*\s*(\w+)/i);
-		const fileMatch = block.match(/\*\*File:\*\*\s*(.+)/i);
-		const lineMatch = block.match(/\*\*Line:\*\*\s*(\d+)(?:\s*[-–]\s*(\d+))?/i);
-		const confidenceMatch = block.match(/\*\*Confidence:\*\*\s*([\d.]+)/i);
-		const cweMatch = block.match(/\*\*CWE:\*\*\s*(CWE-\d+)/i);
+		// More flexible patterns that handle variations in formatting
+		// Support both **Label:** and **label:** (case insensitive), with optional spaces
+		const severityMatch = block.match(/\*{0,2}severity\*{0,2}[:\s]+(\w+)/i);
+		const categoryMatch = block.match(/\*{0,2}category\*{0,2}[:\s]+(\w+)/i);
+		const fileMatch = block.match(/\*{0,2}file\*{0,2}[:\s]+([^\n*]+)/i);
+		const lineMatch = block.match(/\*{0,2}line(?:s)?\*{0,2}[:\s]+(\d+)(?:\s*[-–]\s*(\d+))?/i);
+		const confidenceMatch = block.match(/\*{0,2}confidence\*{0,2}[:\s]+([\d.]+)/i);
+		// Support multiple CWE formats
+		const cweMatches = block.matchAll(/\b(CWE-\d+)\b/gi);
 
-		const descMatch = block.match(/\*\*Description:\*\*\s*([\s\S]*?)(?=\*\*|```|$)/i);
-		const suggestionMatch = block.match(/\*\*Suggestion:\*\*\s*([\s\S]*?)(?=\*\*|```|$)/i);
-		const codeMatch = block.match(/```[\w]*\n([\s\S]*?)```/);
+		const descMatch = block.match(
+			/\*{0,2}description\*{0,2}[:\s]+([\s\S]*?)(?=\*{0,2}(?:severity|category|file|line|suggestion|confidence)\*{0,2}[:\s]|```|$)/i,
+		);
+		const suggestionMatch = block.match(
+			/\*{0,2}(?:suggestion|fix|recommendation)\*{0,2}[:\s]+([\s\S]*?)(?=\*{0,2}(?:severity|category|file|line|description|confidence)\*{0,2}[:\s]|```|$)/i,
+		);
+		const codeMatch = block.match(/```[\w]*\n?([\s\S]*?)```/);
 
-		const severity = (severityMatch?.[1]?.toLowerCase() || "medium") as Finding["severity"];
-		const category = (categoryMatch?.[1]?.toLowerCase() || "other") as Finding["category"];
+		const rawSeverity = severityMatch?.[1]?.toLowerCase();
+		const severity = (
+			["critical", "high", "medium", "low", "info"].includes(rawSeverity ?? "") ? rawSeverity : "medium"
+		) as Finding["severity"];
+
+		const rawCategory = categoryMatch?.[1]?.toLowerCase();
+		const category = (
+			["security", "bug", "performance", "style", "maintainability", "other"].includes(rawCategory ?? "")
+				? rawCategory
+				: "other"
+		) as Finding["category"];
 
 		const references: string[] = [];
-		if (cweMatch) references.push(cweMatch[1]);
+		for (const match of cweMatches) {
+			if (!references.includes(match[1].toUpperCase())) {
+				references.push(match[1].toUpperCase());
+			}
+		}
+
+		// Log unparsed blocks for debugging (only in debug mode)
+		if (process.env.DEBUG_AGENTS && !severityMatch && !descMatch) {
+			debugLog("team", "Could not parse finding block", {
+				agentName,
+				index,
+				blockLength: block.length,
+				firstLine: lines[0]?.slice(0, 100),
+			});
+		}
 
 		return {
 			id: `${agentName}-${index}`,

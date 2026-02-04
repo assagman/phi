@@ -33,6 +33,11 @@ import { rawKeyHint } from "./keybinding-hints.js";
 
 type ViewMode = "list" | "detail";
 
+// ============ Pre-compiled Patterns ============
+
+// Combined regex for markdown detection (hoisted for performance)
+const MARKDOWN_PATTERN = /^#{1,6}\s+|^\s*[-*+]\s+|^\s*\d+\.\s+|```[\s\S]*```|\[.*?\]\(.*?\)|^\s*>/m;
+
 // ============ Icons & Colors ============
 
 const ICONS: Record<string, string> = {
@@ -178,8 +183,15 @@ class ToolHistoryHeader implements Component {
 
 // ============ List Component ============
 
+/** Pre-computed searchable text for an execution */
+interface SearchableExecution {
+	execution: ToolExecution;
+	searchText: string; // Pre-computed lowercased searchable text
+}
+
 class ToolHistoryList implements Component, Focusable {
 	private executions: ToolExecution[] = [];
+	private searchableExecutions: SearchableExecution[] = [];
 	private selectedIndex = 0;
 	private searchInput: Input;
 	private filteredExecutions: ToolExecution[] = [];
@@ -199,8 +211,7 @@ class ToolHistoryList implements Component, Focusable {
 	}
 
 	constructor(executions: ToolExecution[]) {
-		this.executions = executions;
-		this.filteredExecutions = executions;
+		this.setExecutions(executions);
 		this.searchInput = new Input();
 		this.searchInput.onSubmit = () => {
 			if (this.filteredExecutions[this.selectedIndex]) {
@@ -211,7 +222,12 @@ class ToolHistoryList implements Component, Focusable {
 
 	setExecutions(executions: ToolExecution[]): void {
 		this.executions = executions;
-		this.filterExecutions(this.searchInput.getValue());
+		// Pre-compute searchable text once on load
+		this.searchableExecutions = executions.map((e) => ({
+			execution: e,
+			searchText: [e.toolName, getSummary(e), getResultText(e)].join(" ").toLowerCase(),
+		}));
+		this.filterExecutions(this.searchInput?.getValue() ?? "");
 	}
 
 	private filterExecutions(query: string): void {
@@ -219,12 +235,10 @@ class ToolHistoryList implements Component, Focusable {
 			this.filteredExecutions = this.executions;
 		} else {
 			const q = query.toLowerCase();
-			this.filteredExecutions = this.executions.filter(
-				(e) =>
-					e.toolName.toLowerCase().includes(q) ||
-					getSummary(e).toLowerCase().includes(q) ||
-					getResultText(e).toLowerCase().includes(q),
-			);
+			// Use pre-computed searchable text for O(n) filtering with minimal work per item
+			this.filteredExecutions = this.searchableExecutions
+				.filter((se) => se.searchText.includes(q))
+				.map((se) => se.execution);
 		}
 		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredExecutions.length - 1));
 	}
@@ -418,18 +432,10 @@ class ToolHistoryDetail implements Component, Focusable {
 
 	/**
 	 * Check if content looks like markdown.
+	 * Uses pre-compiled combined regex for performance.
 	 */
 	private isMarkdownContent(text: string): boolean {
-		// Heuristic: check for common markdown patterns
-		const mdPatterns = [
-			/^#{1,6}\s+/m, // Headers
-			/^\s*[-*+]\s+/m, // Unordered lists
-			/^\s*\d+\.\s+/m, // Ordered lists
-			/```[\s\S]*```/, // Code blocks
-			/\[.*?\]\(.*?\)/, // Links
-			/^\s*>/m, // Blockquotes
-		];
-		return mdPatterns.some((p) => p.test(text));
+		return MARKDOWN_PATTERN.test(text);
 	}
 
 	/**

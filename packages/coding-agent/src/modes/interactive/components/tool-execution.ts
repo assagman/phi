@@ -283,9 +283,10 @@ export class ToolExecutionComponent extends Container {
 		if (!this.result?.isError) return [];
 		const out = this.output();
 		if (!out) return [];
-		const lines = out.split("\n").slice(0, MAX_ERROR_LINES);
-		if (out.split("\n").length > MAX_ERROR_LINES) {
-			lines.push(theme.fg("muted", `… ${out.split("\n").length - MAX_ERROR_LINES} more`));
+		const allLines = out.split("\n");
+		const lines = allLines.slice(0, MAX_ERROR_LINES);
+		if (allLines.length > MAX_ERROR_LINES) {
+			lines.push(theme.fg("muted", `… ${allLines.length - MAX_ERROR_LINES} more`));
 		}
 		return lines.map((l) => theme.fg("error", `   ${l}`));
 	}
