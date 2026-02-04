@@ -13,12 +13,13 @@ import type { ToolName } from "./tools/index.js";
 /** Tool descriptions for system prompt */
 const toolDescriptions: Record<ToolName, string> = {
 	read: "Read file contents",
-	bash: "Execute bash commands (ls, grep, find, etc.)",
+	bash: "Execute bash commands (ls, rg, fd, etc.)",
 	edit: "Make surgical edits to files (find exact text and replace)",
 	write: "Create or overwrite files",
 	grep: "Search file contents for patterns (respects .gitignore)",
 	find: "Find files by glob pattern (respects .gitignore)",
 	ls: "List directory contents",
+	ast_grep: "Search code using AST patterns (understands code structure, not just text)",
 };
 
 /** Resolve input as file path or literal string */
@@ -231,7 +232,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 
 	// File exploration guidelines
 	if (hasBash && !hasGrep && !hasFind && !hasLs) {
-		guidelinesList.push("Use bash for file operations like ls, grep, find");
+		guidelinesList.push("Use bash for file operations like ls, rg, fd");
 	} else if (hasBash && (hasGrep || hasFind || hasLs)) {
 		guidelinesList.push("Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)");
 	}

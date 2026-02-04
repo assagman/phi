@@ -32,6 +32,10 @@ export class BorderedLoader extends Container {
 		this.loader.onAbort = fn;
 	}
 
+	setText(text: string): void {
+		this.loader.setMessage(text);
+	}
+
 	handleInput(data: string): void {
 		this.loader.handleInput(data);
 	}

@@ -47,6 +47,13 @@ const ThemeJsonSchema = Type.Object({
 		toolErrorBg: ColorValueSchema,
 		toolTitle: ColorValueSchema,
 		toolOutput: ColorValueSchema,
+		// Tool-specific colors (for compact view)
+		toolRead: ColorValueSchema,
+		toolEdit: ColorValueSchema,
+		toolWrite: ColorValueSchema,
+		toolBash: ColorValueSchema,
+		toolGrep: ColorValueSchema,
+		toolFind: ColorValueSchema,
 		// Markdown (10 colors)
 		mdHeading: ColorValueSchema,
 		mdLink: ColorValueSchema,
@@ -112,6 +119,12 @@ export type ThemeColor =
 	| "customMessageLabel"
 	| "toolTitle"
 	| "toolOutput"
+	| "toolRead"
+	| "toolEdit"
+	| "toolWrite"
+	| "toolBash"
+	| "toolGrep"
+	| "toolFind"
 	| "mdHeading"
 	| "mdLink"
 	| "mdLinkUrl"
@@ -434,9 +447,11 @@ function getBuiltinThemes(): Record<string, ThemeJson> {
 		const themesDir = getThemesDir();
 		const darkPath = path.join(themesDir, "dark.json");
 		const lightPath = path.join(themesDir, "light.json");
+		const orangePath = path.join(themesDir, "orange.json");
 		BUILTIN_THEMES = {
 			dark: JSON.parse(fs.readFileSync(darkPath, "utf-8")) as ThemeJson,
 			light: JSON.parse(fs.readFileSync(lightPath, "utf-8")) as ThemeJson,
+			orange: JSON.parse(fs.readFileSync(orangePath, "utf-8")) as ThemeJson,
 		};
 	}
 	return BUILTIN_THEMES;

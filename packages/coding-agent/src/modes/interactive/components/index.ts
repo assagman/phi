@@ -23,7 +23,8 @@ export { type SettingsCallbacks, type SettingsConfig, SettingsSelectorComponent 
 export { ShowImagesSelectorComponent } from "./show-images-selector.js";
 export { ThemeSelectorComponent } from "./theme-selector.js";
 export { ThinkingSelectorComponent } from "./thinking-selector.js";
-export { ToolExecutionComponent, type ToolExecutionOptions } from "./tool-execution.js";
+export { ToolExecutionComponent, type ToolResult } from "./tool-execution.js";
+export { ToolHistorySelectorComponent } from "./tool-history-selector.js";
 export { TreeSelectorComponent } from "./tree-selector.js";
 export { UserMessageComponent } from "./user-message.js";
 export { UserMessageSelectorComponent } from "./user-message-selector.js";

@@ -270,7 +270,7 @@ export {
 	ThemeSelectorComponent,
 	ThinkingSelectorComponent,
 	ToolExecutionComponent,
-	type ToolExecutionOptions,
+	type ToolResult,
 	TreeSelectorComponent,
 	truncateToVisualLines,
 	UserMessageComponent,

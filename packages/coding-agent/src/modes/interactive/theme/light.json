@@ -32,7 +32,7 @@
 
 		"selectedBg": "selectedBg",
 		"userMessageBg": "userMsgBg",
-		"userMessageText": "",
+		"userMessageText": "#606080",
 		"customMessageBg": "customMsgBg",
 		"customMessageText": "",
 		"customMessageLabel": "#7e57c2",
@@ -41,6 +41,12 @@
 		"toolErrorBg": "toolErrorBg",
 		"toolTitle": "",
 		"toolOutput": "mediumGray",
+		"toolRead": "#0066cc",
+		"toolEdit": "#cc6600",
+		"toolWrite": "#997700",
+		"toolBash": "#008899",
+		"toolGrep": "#993399",
+		"toolFind": "#669933",
 
 		"mdHeading": "yellow",
 		"mdLink": "blue",

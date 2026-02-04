@@ -767,6 +767,11 @@ export function sliceWithWidth(
 	strict = false,
 ): { text: string; width: number } {
 	if (length <= 0) return { text: "", width: 0 };
+	// Expand tabs to spaces (consistent with visibleWidth)
+	// Must be done before slicing to ensure width calculations match
+	if (line.includes("\t")) {
+		line = line.replace(/\t/g, "   ");
+	}
 	const endCol = startCol + length;
 	let result = "",
 		resultWidth = 0,
@@ -822,6 +827,10 @@ export function extractSegments(
 	afterLen: number,
 	strictAfter = false,
 ): { before: string; beforeWidth: number; after: string; afterWidth: number } {
+	// Expand tabs to spaces (consistent with visibleWidth)
+	if (line.includes("\t")) {
+		line = line.replace(/\t/g, "   ");
+	}
 	let before = "",
 		beforeWidth = 0,
 		after = "",

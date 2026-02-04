@@ -770,15 +770,6 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Get a registered tool definition by name (for custom rendering).
-	 */
-	private getRegisteredToolDefinition(toolName: string) {
-		const tools = this.session.extensionRunner?.getAllRegisteredTools() ?? [];
-		const registeredTool = tools.find((t) => t.definition.name === toolName);
-		return registeredTool?.definition;
-	}
-
-	/**
 	 * Set up keyboard shortcuts registered by extensions.
 	 */
 	private setupExtensionShortcuts(extensionRunner: ExtensionRunner): void {
@@ -1677,15 +1668,7 @@ export class InteractiveMode {
 						if (content.type === "toolCall") {
 							if (!this.pendingTools.has(content.id)) {
 								this.addToChat(new Text("", 0, 0));
-								const component = new ToolExecutionComponent(
-									content.name,
-									content.arguments,
-									{
-										showImages: this.settingsManager.getShowImages(),
-									},
-									this.getRegisteredToolDefinition(content.name),
-									this.ui,
-								);
+								const component = new ToolExecutionComponent(content.name, content.arguments, this.ui);
 								component.setExpanded(this.toolOutputExpanded);
 								this.addToChat(component);
 								this.pendingTools.set(content.id, component);
@@ -1746,15 +1729,7 @@ export class InteractiveMode {
 
 			case "tool_execution_start": {
 				if (!this.pendingTools.has(event.toolCallId)) {
-					const component = new ToolExecutionComponent(
-						event.toolName,
-						event.args,
-						{
-							showImages: this.settingsManager.getShowImages(),
-						},
-						this.getRegisteredToolDefinition(event.toolName),
-						this.ui,
-					);
+					const component = new ToolExecutionComponent(event.toolName, event.args, this.ui);
 					component.setExpanded(this.toolOutputExpanded);
 					this.addToChat(component);
 					this.pendingTools.set(event.toolCallId, component);
@@ -2031,13 +2006,7 @@ export class InteractiveMode {
 				// Render tool call components
 				for (const content of message.content) {
 					if (content.type === "toolCall") {
-						const component = new ToolExecutionComponent(
-							content.name,
-							content.arguments,
-							{ showImages: this.settingsManager.getShowImages() },
-							this.getRegisteredToolDefinition(content.name),
-							this.ui,
-						);
+						const component = new ToolExecutionComponent(content.name, content.arguments, this.ui);
 						component.setExpanded(this.toolOutputExpanded);
 						this.addToChat(component);
 

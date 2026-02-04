@@ -145,6 +145,31 @@ export interface OverlayOptions {
 	 * Called each render cycle with current terminal dimensions.
 	 */
 	visible?: (termWidth: number, termHeight: number) => boolean;
+
+	// === Visual Effects ===
+	/**
+	 * Dim the background content when this overlay is visible.
+	 * Helps focus attention on the overlay by reducing contrast of underlying content.
+	 */
+	dimBackground?: boolean;
+
+	/**
+	 * Draw a border around the overlay content.
+	 * Can be true for default border, or an object with title and color options.
+	 */
+	border?: boolean | OverlayBorderOptions;
+}
+
+/**
+ * Options for overlay border styling
+ */
+export interface OverlayBorderOptions {
+	/** Title to display in the top border */
+	title?: string;
+	/** Function to colorize border characters */
+	borderColor?: (str: string) => string;
+	/** Function to colorize title text */
+	titleColor?: (str: string) => string;
 }
 
 /**
@@ -828,7 +853,15 @@ export class TUI extends Container {
 	/** Composite all overlays into content lines (in stack order, later = on top). */
 	private compositeOverlays(lines: string[], termWidth: number, termHeight: number): string[] {
 		if (this.overlayStack.length === 0) return lines;
-		const result = [...lines];
+		let result = [...lines];
+
+		// Check if any visible overlay requests background dimming
+		const shouldDim = this.overlayStack.some((entry) => this.isOverlayVisible(entry) && entry.options?.dimBackground);
+
+		// Apply dimming to background content if requested
+		if (shouldDim) {
+			result = this.applyDimToLines(result);
+		}
 
 		// Pre-render all visible overlays and calculate positions
 		const rendered: { overlayLines: string[]; row: number; col: number; w: number }[] = [];
@@ -844,12 +877,21 @@ export class TUI extends Container {
 			// (width and maxHeight don't depend on overlay height)
 			const { width, maxHeight } = this.resolveOverlayLayout(options, 0, termWidth, termHeight);
 
-			// Render component at calculated width
-			let overlayLines = component.render(width);
+			// Render component at calculated width (account for border if enabled)
+			const hasBorder = !!options?.border;
+			const contentWidth = hasBorder ? width - 2 : width; // -2 for left/right border chars
+			let overlayLines = component.render(contentWidth);
 
-			// Apply maxHeight if specified
-			if (maxHeight !== undefined && overlayLines.length > maxHeight) {
-				overlayLines = overlayLines.slice(0, maxHeight);
+			// Apply maxHeight if specified (account for border)
+			const borderHeightCost = hasBorder ? 2 : 0; // top + bottom border
+			const effectiveMaxHeight = maxHeight !== undefined ? maxHeight - borderHeightCost : undefined;
+			if (effectiveMaxHeight !== undefined && overlayLines.length > effectiveMaxHeight) {
+				overlayLines = overlayLines.slice(0, effectiveMaxHeight);
+			}
+
+			// Wrap with border if enabled
+			if (hasBorder && options?.border) {
+				overlayLines = this.wrapWithBorder(overlayLines, width, options.border);
 			}
 
 			// Get final row/col with actual overlay height
@@ -899,6 +941,78 @@ export class TUI extends Container {
 	}
 
 	private static readonly SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07";
+	// Dim + dark gray foreground (90) for stronger dimming effect
+	private static readonly DIM_START = "\x1b[2;38;5;242m";
+	private static readonly DIM_END = "\x1b[22;39m";
+
+	/**
+	 * Apply dim effect to all lines (used when overlays request background dimming).
+	 * Uses dim attribute + dark gray foreground for a pronounced modal backdrop effect.
+	 */
+	private applyDimToLines(lines: string[]): string[] {
+		const dimStart = TUI.DIM_START;
+		const dimEnd = TUI.DIM_END;
+		return lines.map((line) => {
+			// Skip image lines - don't modify them
+			if (this.containsImage(line)) return line;
+			// Wrap line with dim + dark gray, then reset both at end
+			return dimStart + line + dimEnd;
+		});
+	}
+
+	// Box-drawing characters for borders
+	private static readonly BORDER_TL = "┌";
+	private static readonly BORDER_TR = "┐";
+	private static readonly BORDER_BL = "└";
+	private static readonly BORDER_BR = "┘";
+	private static readonly BORDER_H = "─";
+	private static readonly BORDER_V = "│";
+
+	/**
+	 * Wrap content lines with a border box.
+	 */
+	private wrapWithBorder(lines: string[], totalWidth: number, borderOpts: boolean | OverlayBorderOptions): string[] {
+		const opts = typeof borderOpts === "object" ? borderOpts : {};
+		const bc = opts.borderColor ?? ((s: string) => s);
+		const tc = opts.titleColor ?? ((s: string) => s);
+		const title = opts.title;
+
+		const innerWidth = totalWidth - 2; // Width between vertical borders
+		const contentWidth = innerWidth; // Content fills inner width
+
+		// Build top border with optional title
+		let topBorder: string;
+		if (title) {
+			const titleText = ` ${title} `;
+			const titleLen = visibleWidth(titleText);
+			const availableForLine = innerWidth - titleLen - 1;
+			if (availableForLine > 0) {
+				topBorder =
+					bc(TUI.BORDER_TL + TUI.BORDER_H) +
+					tc(titleText) +
+					bc(TUI.BORDER_H.repeat(availableForLine) + TUI.BORDER_TR);
+			} else {
+				topBorder = bc(TUI.BORDER_TL + TUI.BORDER_H.repeat(innerWidth) + TUI.BORDER_TR);
+			}
+		} else {
+			topBorder = bc(TUI.BORDER_TL + TUI.BORDER_H.repeat(innerWidth) + TUI.BORDER_TR);
+		}
+
+		// Build bottom border
+		const bottomBorder = bc(TUI.BORDER_BL + TUI.BORDER_H.repeat(innerWidth) + TUI.BORDER_BR);
+
+		// Build content lines with vertical borders
+		const result: string[] = [topBorder];
+		for (const line of lines) {
+			const lineWidth = visibleWidth(line);
+			const rightPad = Math.max(0, contentWidth - lineWidth);
+			const safeLine = lineWidth > contentWidth ? sliceByColumn(line, 0, contentWidth, true) : line;
+			result.push(bc(TUI.BORDER_V) + safeLine + " ".repeat(rightPad) + bc(TUI.BORDER_V));
+		}
+		result.push(bottomBorder);
+
+		return result;
+	}
 
 	private applyLineResets(lines: string[]): string[] {
 		const reset = TUI.SEGMENT_RESET;
