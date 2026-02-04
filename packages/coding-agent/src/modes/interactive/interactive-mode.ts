@@ -198,9 +198,6 @@ export class InteractiveMode {
 	private retryLoader: Loader | undefined = undefined;
 	private retryEscapeHandler?: () => void;
 
-	// Rainbow border animation state (time-based, no separate timer)
-	private rainbowBorderStartTime: number | undefined = undefined;
-
 	// Messages queued while compaction is running
 	private compactionQueuedMessages: CompactionQueuedMessage[] = [];
 
@@ -1663,8 +1660,6 @@ export class InteractiveMode {
 					this.defaultWorkingMessage,
 				);
 				this.statusContainer.addChild(this.loadingAnimation);
-				// Start rainbow border animation while working
-				this.startRainbowBorder();
 				this.ui.requestRender();
 				break;
 
@@ -1807,8 +1802,6 @@ export class InteractiveMode {
 			}
 
 			case "agent_end":
-				// Stop rainbow border animation
-				this.stopRainbowBorder();
 				if (this.loadingAnimation) {
 					this.loadingAnimation.stop();
 					this.loadingAnimation = undefined;
@@ -2321,64 +2314,6 @@ export class InteractiveMode {
 			this.editor.borderColor = theme.getThinkingBorderColor(level);
 		}
 		this.ui.requestRender();
-	}
-
-	// Rainbow border animation colors (8 hues across spectrum)
-	private static readonly RAINBOW_COLORS: [number, number, number][] = [
-		[255, 107, 107], // red
-		[255, 159, 67], // orange
-		[255, 217, 61], // yellow
-		[111, 207, 151], // green
-		[72, 219, 251], // cyan
-		[108, 137, 227], // blue
-		[156, 109, 217], // purple
-		[243, 104, 185], // pink
-	];
-
-	private getRainbowColor(position: number): [number, number, number] {
-		const colors = InteractiveMode.RAINBOW_COLORS;
-		const scaled = position * colors.length;
-		const index = Math.floor(scaled) % colors.length;
-		const nextIndex = (index + 1) % colors.length;
-		const t = scaled - Math.floor(scaled);
-		// Linear interpolation between adjacent colors
-		const c1 = colors[index]!;
-		const c2 = colors[nextIndex]!;
-		return [
-			Math.round(c1[0] + (c2[0] - c1[0]) * t),
-			Math.round(c1[1] + (c2[1] - c1[1]) * t),
-			Math.round(c1[2] + (c2[2] - c1[2]) * t),
-		];
-	}
-
-	private startRainbowBorder(): void {
-		if (this.rainbowBorderStartTime !== undefined) return;
-
-		this.rainbowBorderStartTime = Date.now();
-		// Set borderColor to a function that calculates color based on elapsed time
-		// This piggybacks on existing Loader animation (80ms) - no extra timer needed
-		this.editor.borderColor = (str: string) => {
-			if (this.rainbowBorderStartTime === undefined) {
-				return str; // Fallback if stopped mid-render
-			}
-			const elapsed = Date.now() - this.rainbowBorderStartTime;
-			// 4 second cycle
-			const position = (elapsed % 4000) / 4000;
-			const [r, g, b] = this.getRainbowColor(position);
-			const colorCode = `\x1b[38;2;${r};${g};${b}m`;
-			const resetFg = "\x1b[39m";
-			return colorCode + str + resetFg;
-		};
-		// Set dark purple background while working (#0E031C)
-		this.editor.backgroundColor = [14, 3, 28];
-	}
-
-	private stopRainbowBorder(): void {
-		this.rainbowBorderStartTime = undefined;
-		// Restore normal border color based on current mode
-		this.updateEditorBorderColor();
-		// Clear background color
-		this.editor.backgroundColor = undefined;
 	}
 
 	private cycleThinkingLevel(): void {
