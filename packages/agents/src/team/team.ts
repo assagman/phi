@@ -1,5 +1,6 @@
 import { type AgentContext, type AgentEvent, type AgentMessage, type AgentTool, agentLoop } from "agent";
 import { type AssistantMessage, EventStream, type Message, streamSimple } from "ai";
+import { debugLog } from "../debug.js";
 import type { AgentPreset, AgentResult, Finding, TeamConfig, TeamEvent, TeamResult, TeamRunOptions } from "../types.js";
 
 /**
@@ -18,6 +19,15 @@ export class Team {
 	 * Returns an EventStream that emits TeamEvents and resolves to TeamResult.
 	 */
 	run(options: TeamRunOptions = {}): EventStream<TeamEvent, TeamResult> {
+		if (process.env.DEBUG_AGENTS) {
+			debugLog("team", "Team.run() called", {
+				teamName: this.config.name,
+				hasTask: !!options.task,
+				hasSignal: !!options.signal,
+				hasGetApiKey: !!options.getApiKey,
+			});
+		}
+
 		const stream = new EventStream<TeamEvent, TeamResult>(
 			(event) => event.type === "team_end",
 			(event) => (event as { type: "team_end"; result: TeamResult }).result,
@@ -52,6 +62,16 @@ export class Team {
 	private async executeInternal(stream: EventStream<TeamEvent, TeamResult>, options: TeamRunOptions): Promise<void> {
 		const startTime = Date.now();
 		const { agents, tools, strategy = "parallel", merge, maxRetries = 1, continueOnError = true } = this.config;
+
+		if (process.env.DEBUG_AGENTS) {
+			debugLog("team", "executeInternal starting", {
+				teamName: this.config.name,
+				agentCount: agents.length,
+				toolCount: tools.length,
+				strategy,
+				hasTask: !!options.task,
+			});
+		}
 
 		stream.push({
 			type: "team_start",
@@ -241,6 +261,37 @@ export class Team {
 		let inputTokens = 0;
 		let outputTokens = 0;
 
+		// Debug logging - only resolve API key and log when debugging enabled
+		if (process.env.DEBUG_AGENTS) {
+			let hasApiKey = false;
+			let apiKeyError: string | undefined;
+			try {
+				const testKey = options.getApiKey ? await options.getApiKey(preset.model.provider) : undefined;
+				hasApiKey = !!testKey;
+			} catch (e) {
+				// Sanitize error message to avoid leaking credentials
+				apiKeyError = e instanceof Error ? e.message.replace(/[a-zA-Z0-9_-]{20,}/g, "[REDACTED]") : "unknown error";
+			}
+
+			debugLog("team", `runSingleAgent starting`, {
+				agent: preset.name,
+				model: preset.model.id,
+				provider: preset.model.provider,
+				toolCount: tools.length,
+				toolNames: tools.map((t) => t.name),
+				taskLength: options.task?.length ?? 0,
+				hasApiKey,
+				apiKeyError,
+			});
+
+			if (!hasApiKey && !apiKeyError) {
+				debugLog("team", `WARNING: No API key for provider ${preset.model.provider}`, {
+					agent: preset.name,
+					hasGetApiKey: !!options.getApiKey,
+				});
+			}
+		}
+
 		const context: AgentContext = {
 			systemPrompt: preset.systemPrompt,
 			messages: options.initialMessages ? [...options.initialMessages] : [],
@@ -256,6 +307,16 @@ export class Team {
 				timestamp: Date.now(),
 			},
 		];
+
+		if (process.env.DEBUG_AGENTS) {
+			debugLog("team", `runSingleAgent calling agentLoop`, {
+				agent: preset.name,
+				signalAborted: options.signal?.aborted ?? false,
+				promptCount: prompts.length,
+				contextMessageCount: context.messages.length,
+				contextToolCount: context.tools?.length ?? 0,
+			});
+		}
 
 		const agentStream = agentLoop(
 			prompts,
@@ -274,8 +335,45 @@ export class Team {
 			streamSimple,
 		);
 
+		if (process.env.DEBUG_AGENTS) {
+			debugLog("team", `runSingleAgent agentLoop created, starting iteration`, {
+				agent: preset.name,
+			});
+		}
+
+		const isDebugEnabled = !!process.env.DEBUG_AGENTS;
+		let eventCount = 0;
 		// Forward agent events
 		for await (const event of agentStream) {
+			eventCount++;
+			if (isDebugEnabled) {
+				if (
+					eventCount <= 5 ||
+					event.type === "message_end" ||
+					event.type === "turn_end" ||
+					event.type === "agent_end"
+				) {
+					debugLog("team", `agent event ${eventCount}`, {
+						agent: preset.name,
+						eventType: event.type,
+						hasMessage: "message" in event,
+					});
+				}
+				// Log message details on message_end (content truncated for privacy)
+				if (event.type === "message_end") {
+					const msg = event.message as unknown as Record<string, unknown>;
+					const content = msg.content;
+					debugLog("team", `agent message_end`, {
+						agent: preset.name,
+						role: msg.role,
+						contentType: typeof content,
+						contentLength: Array.isArray(content) ? content.length : String(content || "").length,
+						stopReason: msg.stopReason,
+						usage: msg.usage,
+					});
+				}
+			}
+
 			stream.push({
 				type: "agent_event",
 				agentName: preset.name,
@@ -297,6 +395,17 @@ export class Team {
 
 		// Parse findings from assistant messages
 		const findings = this.parseFindings(preset.name, messages);
+
+		if (process.env.DEBUG_AGENTS) {
+			debugLog("team", `runSingleAgent completed`, {
+				agent: preset.name,
+				durationMs: Date.now() - startTime,
+				messageCount: messages.length,
+				findingCount: findings.length,
+				inputTokens,
+				outputTokens,
+			});
+		}
 
 		return {
 			agentName: preset.name,
