@@ -34,9 +34,22 @@ export class Team {
 		);
 		this.abortController = new AbortController();
 
-		const combinedSignal = options.signal
-			? AbortSignal.any([options.signal, this.abortController.signal])
-			: this.abortController.signal;
+		// Combine signals - use AbortSignal.any() if available (Node 20+), else fallback
+		let combinedSignal: AbortSignal;
+		if (options.signal) {
+			if (typeof AbortSignal.any === "function") {
+				combinedSignal = AbortSignal.any([options.signal, this.abortController.signal]);
+			} else {
+				// Fallback for older Node versions
+				const controller = new AbortController();
+				const abort = () => controller.abort();
+				options.signal.addEventListener("abort", abort);
+				this.abortController.signal.addEventListener("abort", abort);
+				combinedSignal = controller.signal;
+			}
+		} else {
+			combinedSignal = this.abortController.signal;
+		}
 
 		this.executeInternal(stream, { ...options, signal: combinedSignal });
 
@@ -117,7 +130,15 @@ export class Team {
 
 			stream.push({ type: "team_end", result });
 			stream.end(result);
-		} catch {
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			if (process.env.DEBUG_AGENTS) {
+				debugLog("team", "executeInternal error", {
+					teamName: this.config.name,
+					error: errorMessage,
+					stack: error instanceof Error ? error.stack : undefined,
+				});
+			}
 			const errorResult: TeamResult = {
 				teamName: this.config.name,
 				success: false,
@@ -125,6 +146,7 @@ export class Team {
 				findings: [],
 				clusters: [],
 				durationMs: Date.now() - startTime,
+				error: errorMessage,
 			};
 			stream.push({ type: "team_end", result: errorResult });
 			stream.end(errorResult);

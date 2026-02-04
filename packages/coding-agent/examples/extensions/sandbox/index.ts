@@ -6,10 +6,10 @@
  * bubblewrap on Linux).
  *
  * Config files (merged, project takes precedence):
- * - ~/.pi/agent/sandbox.json (global)
- * - <cwd>/.pi/sandbox.json (project-local)
+ * - ~/.phi/agent/sandbox.json (global)
+ * - <cwd>/.phi/sandbox.json (project-local)
  *
- * Example .pi/sandbox.json:
+ * Example .phi/sandbox.json:
  * ```json
  * {
  *   "enabled": true,
@@ -31,8 +31,8 @@
  * - `/sandbox` - show current sandbox configuration
  *
  * Setup:
- * 1. Copy sandbox/ directory to ~/.pi/agent/extensions/
- * 2. Run `npm install` in ~/.pi/agent/extensions/sandbox/
+ * 1. Copy sandbox/ directory to ~/.phi/agent/extensions/
+ * 2. Run `npm install` in ~/.phi/agent/extensions/sandbox/
  *
  * Linux also requires: bubblewrap, socat, ripgrep
  */

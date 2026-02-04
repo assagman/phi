@@ -7,7 +7,7 @@
 
 import { createAgentSession, discoverSkills, SessionManager, type Skill } from "coding-agent";
 
-// Discover all skills from cwd/.pi/skills, ~/.pi/agent/skills, etc.
+// Discover all skills from cwd/.phi/skills, ~/.phi/agent/skills, etc.
 const { skills: allSkills, warnings } = discoverSkills();
 console.log(
 	"Discovered skills:",

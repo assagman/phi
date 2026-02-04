@@ -2,8 +2,8 @@
  * Team configuration loader
  *
  * Loads custom team definitions from:
- * 1. .pi/teams.yaml (project-specific)
- * 2. ~/.pi/teams.yaml (user global)
+ * 1. .phi/teams.yaml (project-specific)
+ * 2. ~/.phi/teams.yaml (user global)
  *
  * Model string format: provider:model-id[:thinking]
  * Examples:
@@ -168,7 +168,7 @@ export function validateModelAgainstRegistry(
 function findProjectConfig(cwd: string): string | null {
 	let dir = cwd;
 	while (true) {
-		const candidate = path.join(dir, ".pi", "teams.yaml");
+		const candidate = path.join(dir, ".phi", "teams.yaml");
 		if (fs.existsSync(candidate)) return candidate;
 
 		const parent = path.dirname(dir);
@@ -178,7 +178,7 @@ function findProjectConfig(cwd: string): string | null {
 }
 
 function getUserConfig(): string | null {
-	const userConfig = path.join(os.homedir(), ".pi", "teams.yaml");
+	const userConfig = path.join(os.homedir(), ".phi", "teams.yaml");
 	return fs.existsSync(userConfig) ? userConfig : null;
 }
 

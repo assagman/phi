@@ -52,17 +52,15 @@ import {
 import { APP_NAME, getAuthPath, getDebugLogPath } from "../../config.js";
 import type { AgentSession, AgentSessionEvent } from "../../core/agent-session.js";
 import {
-	executeResolvedTeam,
-	executeTeam,
+	createResolvedTeamStream,
+	createTeamStream,
 	formatTeamDetailHelp,
 	formatTeamHelp,
 	formatTeamPresets,
-	formatTeamProgress,
 	formatTeamResults,
 	formatTeamSelectorOption,
 	loadAllTeams,
 	parseTeamSelectorOption,
-	type TeamExecutionState,
 	type TeamInfo,
 } from "../../core/commands/team.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
@@ -79,6 +77,7 @@ import { createCompactionSummaryMessage } from "../../core/messages.js";
 import { resolveModelScope } from "../../core/model-resolver.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { loadProjectContextFiles } from "../../core/system-prompt.js";
+import { ToolExecutionStorage } from "../../core/tool-execution-storage.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.js";
@@ -103,7 +102,9 @@ import { OAuthSelectorComponent } from "./components/oauth-selector.js";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.js";
 import { SessionSelectorComponent } from "./components/session-selector.js";
 import { SettingsSelectorComponent } from "./components/settings-selector.js";
+import { TeamExecutionComponent } from "./components/team-execution.js";
 import { ToolExecutionComponent } from "./components/tool-execution.js";
+import { ToolHistorySelectorComponent } from "./components/tool-history-selector.js";
 import { TreeSelectorComponent } from "./components/tree-selector.js";
 import { UserMessageComponent } from "./components/user-message.js";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.js";
@@ -120,15 +121,6 @@ import {
 	Theme,
 	theme,
 } from "./theme/theme.js";
-
-/** Interface for components that can be expanded/collapsed */
-interface Expandable {
-	setExpanded(expanded: boolean): void;
-}
-
-function isExpandable(obj: unknown): obj is Expandable {
-	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
-}
 
 type CompactionQueuedMessage = {
 	text: string;
@@ -184,6 +176,9 @@ export class InteractiveMode {
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 
+	// Tool execution storage (SQLite-backed history)
+	private toolExecutionStorage: ToolExecutionStorage | undefined = undefined;
+
 	// Tool output expansion state
 	private toolOutputExpanded = false;
 
@@ -232,6 +227,9 @@ export class InteractiveMode {
 	private extensionInputOverlay: OverlayHandle | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionEditorOverlay: OverlayHandle | undefined = undefined;
+
+	// Tool history popup overlay
+	private toolHistoryOverlay: OverlayHandle | undefined = undefined;
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -295,6 +293,9 @@ export class InteractiveMode {
 
 		// Initialize theme with watcher for interactive mode
 		initTheme(this.settingsManager.getTheme(), true);
+
+		// Initialize tool execution storage for history
+		this.toolExecutionStorage = new ToolExecutionStorage(session.sessionId);
 	}
 
 	private setupAutocomplete(fdPath: string | undefined): void {
@@ -1416,7 +1417,7 @@ export class InteractiveMode {
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
 		this.defaultEditor.onAction("selectModel", () => this.showModelSelector());
-		this.defaultEditor.onAction("expandTools", () => this.toggleToolOutputExpansion());
+		this.defaultEditor.onAction("expandTools", () => this.showToolHistory());
 		this.defaultEditor.onAction("toggleThinking", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("externalEditor", () => this.openExternalEditor());
 		this.defaultEditor.onAction("followUp", () => this.handleFollowUp());
@@ -1768,6 +1769,8 @@ export class InteractiveMode {
 					component.setExpanded(this.toolOutputExpanded);
 					this.addToChat(component);
 					this.pendingTools.set(event.toolCallId, component);
+					// Track start time for duration calculation
+					this.toolExecutionStorage?.startExecution(event.toolCallId);
 					this.ui.requestRender();
 				}
 				break;
@@ -1789,6 +1792,14 @@ export class InteractiveMode {
 				if (component) {
 					component.updateResult({ ...event.result, isError: event.isError });
 					this.pendingTools.delete(event.toolCallId);
+					// Record execution to storage for history popup
+					this.toolExecutionStorage?.recordExecution({
+						toolCallId: event.toolCallId,
+						toolName: event.toolName,
+						args: component.getArgs(),
+						resultContent: event.result.content ?? [],
+						isError: event.isError,
+					});
 					this.ui.requestRender();
 				}
 				break;
@@ -2376,14 +2387,41 @@ export class InteractiveMode {
 		}
 	}
 
-	private toggleToolOutputExpansion(): void {
-		this.toolOutputExpanded = !this.toolOutputExpanded;
-		for (const child of this.scrollableViewport.getItems()) {
-			if (isExpandable(child)) {
-				child.setExpanded(this.toolOutputExpanded);
-			}
+	private showToolHistory(): void {
+		if (!this.toolExecutionStorage) {
+			this.showWarning("Tool history not available");
+			return;
 		}
-		this.ui.requestRender();
+
+		const count = this.toolExecutionStorage.getCount();
+		if (count === 0) {
+			this.showStatus("No tool executions recorded yet");
+			return;
+		}
+
+		const selector = new ToolHistorySelectorComponent(this.toolExecutionStorage);
+		selector.onCancel = () => {
+			this.hideToolHistory();
+		};
+		selector.onCopy = (text) => {
+			copyToClipboard(text);
+			this.showStatus("Copied to clipboard");
+		};
+
+		this.toolHistoryOverlay = this.ui.showOverlay(selector, {
+			anchor: "center",
+			width: "90%",
+			maxHeight: "80%",
+			dimBackground: true,
+			border: true,
+		});
+		this.ui.setFocus(selector);
+	}
+
+	private hideToolHistory(): void {
+		this.toolHistoryOverlay?.hide();
+		this.toolHistoryOverlay = undefined;
+		this.ui.setFocus(this.editor);
 	}
 
 	private toggleThinkingBlockVisibility(): void {
@@ -3366,6 +3404,8 @@ export class InteractiveMode {
 			anchor: "center",
 			width: "60%",
 			maxHeight: "30%",
+			dimBackground: true,
+			border: true,
 		});
 		this.ui.setFocus(loader);
 		this.ui.requestRender();
@@ -3599,7 +3639,7 @@ export class InteractiveMode {
 | \`${suspend}\` | Suspend to background |
 | \`${cycleThinkingLevel}\` | Cycle thinking level |
 | \`${cycleModelForward}\` | Cycle models |
-| \`${expandTools}\` | Toggle tool output expansion |
+| \`${expandTools}\` | Show tool history |
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${followUp}\` | Queue follow-up message |
@@ -4018,111 +4058,176 @@ Which team is best suited for this task? Reply with ONLY the team name, nothing 
 	}
 
 	/**
-	 * Execute a team with progress UI
+	 * Execute a team inline in chat with live progress updates.
+	 * Results are injected into the session context for follow-up conversations.
 	 */
 	private async executeTeamWithProgress(team: TeamInfo, task: string): Promise<void> {
 		// Create abort controller
 		const abortController = new AbortController();
 
-		// Initialize execution state
-		const state: TeamExecutionState = {
-			phase: "starting",
-			teamName: team.name,
-			agentCount: team.agentCount,
-			agentResults: new Map(),
-		};
+		// Get current model and registry
+		const model = this.session.model;
+		if (!model) {
+			this.showError("No model configured. Use /model to select a model first.");
+			return;
+		}
+		const modelRegistry = this.session.modelRegistry;
+		const tools = this.session.getRegisteredTools();
 
-		// Create progress loader
-		const loader = new BorderedLoader(this.ui, theme, `Starting team: ${team.name}...`);
-		const loaderOverlay = this.ui.showOverlay(loader, {
-			anchor: "center",
-			width: "60%",
-			maxHeight: "50%",
-			dimBackground: true,
-			border: true,
-		});
-		this.ui.setFocus(loader);
+		// Get agent names for the progress component
+		const agentNames = team.resolved ? team.resolved.agents.map((a) => a.name) : this.getBuiltinTeamAgents(team.name);
+
+		// Add user message showing the team command
+		this.addToChat(new Spacer(1));
+		this.addToChat(new UserMessageComponent(`/team ${team.name}\n${task}`, this.getMarkdownThemeWithSettings()));
+
+		// Create and add inline progress component
+		const progressComponent = new TeamExecutionComponent(team.name, agentNames, this.ui, () =>
+			this.scrollableViewport.invalidateItemCache(progressComponent),
+		);
+		this.addToChat(progressComponent);
+		this.scrollableViewport.scrollToBottom();
 		this.ui.requestRender();
 
-		loader.onAbort = () => {
+		// Set up escape handler for abort
+		const originalOnEscape = this.defaultEditor.onEscape;
+		this.defaultEditor.onEscape = () => {
 			abortController.abort();
-		};
-
-		const cleanup = () => {
-			loader.dispose();
-			loaderOverlay.hide();
-			this.ui.setFocus(this.editor);
+			this.showStatus("Team execution cancelled");
 		};
 
 		try {
-			// Get current model and registry
-			const model = this.session.model;
-			if (!model) {
-				cleanup();
-				this.showError("No model configured. Use /model to select a model first.");
-				return;
-			}
-			const modelRegistry = this.session.modelRegistry;
-			const tools = this.session.getRegisteredTools();
-
-			// Progress callback
-			const onProgress = (updatedState: TeamExecutionState) => {
-				Object.assign(state, updatedState);
-				loader.setText(formatTeamProgress(state, theme));
-				this.ui.requestRender();
-			};
-
-			// Execute team based on type
 			debugLog("interactive", "executeTeamWithProgress calling team", {
 				teamName: team.name,
 				isResolved: !!team.resolved,
 				modelId: model.id,
 				modelProvider: model.provider,
 				toolCount: tools.length,
-				toolNames: tools.map((t) => t.name),
 				taskLength: task.length,
 			});
 
-			let result: TeamResult | null;
-			if (team.resolved) {
-				// Custom team from config
-				result = await executeResolvedTeam(team.resolved, {
-					model,
-					modelRegistry,
-					tools,
-					task,
-					signal: abortController.signal,
-					onProgress,
-				});
-			} else {
-				// Built-in team
-				result = await executeTeam(team.name, {
-					model,
-					modelRegistry,
-					tools,
-					task,
-					signal: abortController.signal,
-					onProgress,
-				});
+			// Create team stream based on type
+			const { stream } = team.resolved
+				? createResolvedTeamStream(team.resolved, {
+						model,
+						modelRegistry,
+						tools,
+						task,
+						signal: abortController.signal,
+					})
+				: createTeamStream(team.name, {
+						model,
+						modelRegistry,
+						tools,
+						task,
+						signal: abortController.signal,
+					});
+
+			// Process events and update progress component
+			for await (const event of stream) {
+				progressComponent.handleEvent(event);
+				this.scrollableViewport.invalidateItemCache(progressComponent);
+				this.ui.requestRender();
 			}
 
-			cleanup();
+			// Get final result
+			const result = await stream.result();
+
+			debugLog("interactive", "executeTeamWithProgress completed", {
+				teamName: team.name,
+				hasResult: !!result,
+				aborted: abortController.signal.aborted,
+				resultSummary: result
+					? {
+							success: result.success,
+							findingCount: result.findings.length,
+							durationMs: result.durationMs,
+							inputTokens: result.totalUsage?.inputTokens ?? 0,
+							outputTokens: result.totalUsage?.outputTokens ?? 0,
+						}
+					: null,
+			});
+
+			// Mark progress complete
+			progressComponent.complete();
+			this.scrollableViewport.invalidateItemCache(progressComponent);
 
 			if (result) {
-				// Show results in chat
+				// Show formatted results in chat
 				const formatted = formatTeamResults(result);
 				this.addToChat(new Spacer(1));
 				this.addToChat(new Markdown(formatted, 1, 1, this.getMarkdownThemeWithSettings()));
+
+				// Inject results into session context as an assistant message
+				// This allows the user to continue the conversation with findings in context
+				this.injectTeamResultsIntoSession(team.name, task, result);
+
+				this.scrollableViewport.scrollToBottom();
 				this.ui.requestRender();
 			} else if (!abortController.signal.aborted) {
 				this.showError("Team execution failed");
 			}
 		} catch (error) {
-			cleanup();
+			debugLog("interactive", "executeTeamWithProgress error", {
+				teamName: team.name,
+				aborted: abortController.signal.aborted,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			progressComponent.complete();
+			this.scrollableViewport.invalidateItemCache(progressComponent);
 			if (!abortController.signal.aborted) {
 				this.showError(`Team execution failed: ${error instanceof Error ? error.message : String(error)}`);
 			}
+		} finally {
+			this.defaultEditor.onEscape = originalOnEscape;
 		}
+	}
+
+	/**
+	 * Get agent names for a built-in team
+	 */
+	private getBuiltinTeamAgents(teamName: string): string[] {
+		const builtinTeams: Record<string, string[]> = {
+			"code-review": ["code-reviewer", "security-auditor", "perf-analyzer"],
+			"security-audit": ["security-auditor"],
+			performance: ["perf-analyzer"],
+		};
+		return builtinTeams[teamName] ?? [];
+	}
+
+	/**
+	 * Inject team results into the session context.
+	 * This adds user messages with the team request and results so the main agent
+	 * can reference the team's findings in follow-up conversations.
+	 */
+	private injectTeamResultsIntoSession(teamName: string, task: string, result: TeamResult): void {
+		// Create user messages that will be included in context
+		// Using user messages ensures they pass through convertToLlm unchanged
+		const requestMessage: AgentMessage = {
+			role: "user",
+			content: `[Team Analysis: ${teamName}]\nTask: ${task}`,
+			timestamp: Date.now() - 1, // Slightly earlier timestamp
+		};
+
+		const formatted = formatTeamResults(result);
+		const resultsMessage: AgentMessage = {
+			role: "user",
+			content: `[Team Results]\n\n${formatted}\n\n---\nThe above findings are from a multi-agent team analysis. You can reference these findings in your responses.`,
+			timestamp: Date.now(),
+		};
+
+		// Append to agent's message history (this makes it available for context)
+		const currentMessages = this.session.messages;
+		const newMessages = [...currentMessages, requestMessage, resultsMessage];
+
+		// Replace messages to include team results
+		this.session.agent.replaceMessages(newMessages);
+
+		debugLog("interactive", "Injected team results into session", {
+			teamName,
+			findingCount: result.findings.length,
+			messageCount: newMessages.length,
+		});
 	}
 
 	stop(): void {
@@ -4136,6 +4241,7 @@ Which team is best suited for this task? Reply with ONLY the team name, nothing 
 		}
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
+		this.toolExecutionStorage?.close();
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}

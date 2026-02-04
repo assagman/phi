@@ -49,7 +49,7 @@ See [examples/extensions/](../examples/extensions/) for working implementations.
 
 ## Quick Start
 
-Create `~/.pi/agent/extensions/my-extension.ts`:
+Create `~/.phi/agent/extensions/my-extension.ts`:
 
 ```typescript
 import type { ExtensionAPI } from "coding-agent";
@@ -106,10 +106,10 @@ Extensions are auto-discovered from:
 
 | Location | Scope |
 |----------|-------|
-| `~/.pi/agent/extensions/*.ts` | Global (all projects) |
-| `~/.pi/agent/extensions/*/index.ts` | Global (subdirectory) |
-| `.pi/extensions/*.ts` | Project-local |
-| `.pi/extensions/*/index.ts` | Project-local (subdirectory) |
+| `~/.phi/agent/extensions/*.ts` | Global (all projects) |
+| `~/.phi/agent/extensions/*/index.ts` | Global (subdirectory) |
+| `.phi/extensions/*.ts` | Project-local |
+| `.phi/extensions/*/index.ts` | Project-local (subdirectory) |
 
 Additional paths via `settings.json`:
 
@@ -126,7 +126,7 @@ Additional paths via `settings.json`:
 3. **Subdirectory with package.json:** `extensions/myext/package.json` with `"pi"` field → loads declared paths
 
 ```
-~/.pi/agent/extensions/
+~/.phi/agent/extensions/
 ├── simple.ts                      # Direct file (auto-discovered)
 ├── my-tool/
 │   └── index.ts                   # Subdirectory with index (auto-discovered)
@@ -202,14 +202,14 @@ Extensions are loaded via [jiti](https://github.com/unjs/jiti), so TypeScript wo
 **Single file** - simplest, for small extensions:
 
 ```
-~/.pi/agent/extensions/
+~/.phi/agent/extensions/
 └── my-extension.ts
 ```
 
 **Directory with index.ts** - for multi-file extensions:
 
 ```
-~/.pi/agent/extensions/
+~/.phi/agent/extensions/
 └── my-extension/
     ├── index.ts        # Entry point (exports default function)
     ├── tools.ts        # Helper module
@@ -219,7 +219,7 @@ Extensions are loaded via [jiti](https://github.com/unjs/jiti), so TypeScript wo
 **Package with dependencies** - for extensions that need npm packages:
 
 ```
-~/.pi/agent/extensions/
+~/.phi/agent/extensions/
 └── my-extension/
     ├── package.json    # Declares dependencies and entry points
     ├── package-lock.json

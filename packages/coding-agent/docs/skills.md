@@ -145,12 +145,12 @@ Skills are discovered from these locations (earlier wins on name collision):
 2. `~/.codex/skills/**/SKILL.md` (Codex CLI, recursive)
 3. `~/.claude/skills/*/SKILL.md` (Claude Code user, one level)
 4. `<cwd>/.claude/skills/*/SKILL.md` (Claude Code project, one level)
-5. `~/.pi/agent/skills/**/SKILL.md` (Pi user, recursive)
-6. `<cwd>/.pi/skills/**/SKILL.md` (Pi project, recursive)
+5. `~/.phi/agent/skills/**/SKILL.md` (Pi user, recursive)
+6. `<cwd>/.phi/skills/**/SKILL.md` (Pi project, recursive)
 
 ## Configuration
 
-Configure skill loading in `~/.pi/agent/settings.json`:
+Configure skill loading in `~/.phi/agent/settings.json`:
 
 ```json
 {
@@ -175,8 +175,8 @@ Configure skill loading in `~/.pi/agent/settings.json`:
 | `enableCodexUser` | `true` | Load from `~/.codex/skills/` |
 | `enableClaudeUser` | `true` | Load from `~/.claude/skills/` |
 | `enableClaudeProject` | `true` | Load from `<cwd>/.claude/skills/` |
-| `enablePiUser` | `true` | Load from `~/.pi/agent/skills/` |
-| `enablePiProject` | `true` | Load from `<cwd>/.pi/skills/` |
+| `enablePiUser` | `true` | Load from `~/.phi/agent/skills/` |
+| `enablePiProject` | `true` | Load from `<cwd>/.phi/skills/` |
 | `enableSkillCommands` | `true` | Register skills as `/skill:name` commands |
 | `customDirectories` | `[]` | Additional directories to scan (supports `~` expansion) |
 | `ignoredSkills` | `[]` | Glob patterns to exclude (e.g., `["deprecated-*", "test-skill"]`) |
@@ -306,7 +306,7 @@ CLI:
 pi --no-skills
 ```
 
-Settings (`~/.pi/agent/settings.json`):
+Settings (`~/.phi/agent/settings.json`):
 ```json
 {
   "skills": {

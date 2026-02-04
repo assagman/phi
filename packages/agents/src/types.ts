@@ -170,6 +170,8 @@ export interface TeamResult {
 		inputTokens: number;
 		outputTokens: number;
 	};
+	/** Error message if team execution failed */
+	error?: string;
 }
 
 /**

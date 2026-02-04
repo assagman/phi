@@ -455,6 +455,8 @@ function buildParams(
 			type: "enabled",
 			budget_tokens: options.thinkingBudgetTokens || 1024,
 		};
+		// Anthropic requires temperature=1 when thinking is enabled
+		params.temperature = 1;
 	}
 
 	if (options?.toolChoice) {

@@ -12,7 +12,7 @@ import {
 } from "../../../core/tools/truncate.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
-import { editorKey, keyHint } from "./keybinding-hints.js";
+import { editorKey } from "./keybinding-hints.js";
 import { truncateToVisualLines } from "./visual-truncate.js";
 
 // Preview line limit when not expanded (matches tool execution behavior)
@@ -166,14 +166,8 @@ export class BashExecutionComponent extends Container {
 			const statusParts: string[] = [];
 
 			// Show how many lines are hidden (collapsed preview)
-			if (hiddenLineCount > 0) {
-				if (this.expanded) {
-					statusParts.push(`(${keyHint("expandTools", "to collapse")})`);
-				} else {
-					statusParts.push(
-						`${theme.fg("muted", `... ${hiddenLineCount} more lines`)} (${keyHint("expandTools", "to expand")})`,
-					);
-				}
+			if (hiddenLineCount > 0 && !this.expanded) {
+				statusParts.push(theme.fg("muted", `... ${hiddenLineCount} more lines`));
 			}
 
 			if (this.status === "cancelled") {

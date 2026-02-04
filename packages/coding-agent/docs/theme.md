@@ -230,18 +230,18 @@ On first run, Pi detects your terminal's background and sets a sensible default 
 
 ### Theme Locations
 
-Custom themes are loaded from `~/.pi/agent/themes/*.json`.
+Custom themes are loaded from `~/.phi/agent/themes/*.json`.
 
 ### Creating a Custom Theme
 
 1. **Create theme directory:**
    ```bash
-   mkdir -p ~/.pi/agent/themes
+   mkdir -p ~/.phi/agent/themes
    ```
 
 2. **Create theme file:**
    ```bash
-   vim ~/.pi/agent/themes/my-theme.json
+   vim ~/.phi/agent/themes/my-theme.json
    ```
 
 3. **Define all colors:**

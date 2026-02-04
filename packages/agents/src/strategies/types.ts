@@ -93,6 +93,7 @@ export function calculateSimilarity(a: Finding, b: Finding): number {
 
 /**
  * Cluster findings by similarity.
+ * Optimized to pre-group by file path first (O(n)), then compare within groups.
  */
 export function clusterFindings(findings: Finding[], similarityThreshold = 0.6): FindingCluster[] {
 	const clusters: FindingCluster[] = [];
@@ -101,6 +102,18 @@ export function clusterFindings(findings: Finding[], similarityThreshold = 0.6):
 	// Sort by severity for primary selection
 	const severityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 	const sorted = [...findings].sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+
+	// Pre-group findings by file path for O(n) initial grouping
+	const byFile = new Map<string, Finding[]>();
+	for (const finding of findings) {
+		const key = finding.file ?? "__no_file__";
+		const group = byFile.get(key);
+		if (group) {
+			group.push(finding);
+		} else {
+			byFile.set(key, [finding]);
+		}
+	}
 
 	for (const finding of sorted) {
 		if (assigned.has(finding.id)) continue;
@@ -112,8 +125,11 @@ export function clusterFindings(findings: Finding[], similarityThreshold = 0.6):
 		};
 		assigned.add(finding.id);
 
-		// Find related findings
-		for (const other of findings) {
+		// Only compare with findings in the same file (much smaller set)
+		const fileKey = finding.file ?? "__no_file__";
+		const sameFileFindings = byFile.get(fileKey) ?? [];
+
+		for (const other of sameFileFindings) {
 			if (assigned.has(other.id)) continue;
 			if (other.agentName === finding.agentName) continue; // Different agents only
 

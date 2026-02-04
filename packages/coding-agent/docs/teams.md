@@ -32,8 +32,8 @@ Define custom teams in YAML config files:
 
 | Location | Scope |
 |----------|-------|
-| `.pi/teams.yaml` | Project-specific (overrides user config) |
-| `~/.pi/teams.yaml` | User global |
+| `.phi/teams.yaml` | Project-specific (overrides user config) |
+| `~/.phi/teams.yaml` | User global |
 
 ### Config Schema
 

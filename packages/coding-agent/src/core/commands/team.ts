@@ -399,6 +399,138 @@ export async function executeCustomTeam(
 	return executeTeamWithAgents(`custom: ${taskDescription.slice(0, 30)}...`, agentNames, strategy, options);
 }
 
+// ============================================================================
+// Streaming Team Execution (returns EventStream for real-time UI updates)
+// ============================================================================
+
+export interface TeamStreamOptions {
+	model: Model<any>;
+	modelRegistry: ModelRegistry;
+	tools?: AgentTool[];
+	task: string;
+	signal?: AbortSignal;
+}
+
+export interface TeamStreamResult {
+	team: Team;
+	stream: ReturnType<Team["run"]>;
+	agentNames: string[];
+}
+
+/**
+ * Create a team stream for a built-in team.
+ * Returns the Team instance and its event stream for real-time UI updates.
+ */
+export function createTeamStream(teamName: string, options: TeamStreamOptions): TeamStreamResult {
+	const builtinTeam = BUILTIN_TEAMS.find((t) => t.name === teamName);
+	if (!builtinTeam) {
+		throw new Error(`Unknown team: ${teamName}. Available: ${BUILTIN_TEAMS.map((t) => t.name).join(", ")}`);
+	}
+
+	return createTeamStreamInternal(builtinTeam.name, builtinTeam.agents, builtinTeam.strategy, options);
+}
+
+/**
+ * Create a team stream for a resolved (custom) team.
+ * Returns the Team instance and its event stream for real-time UI updates.
+ */
+export function createResolvedTeamStream(team: ResolvedTeam, options: TeamStreamOptions): TeamStreamResult {
+	const { model, modelRegistry, tools = [], task, signal } = options;
+
+	// Validate models against registry
+	const modelErrors = validateTeamModels(team, modelRegistry);
+	if (modelErrors.length > 0) {
+		throw new Error(`Team model validation failed:\n${modelErrors.join("\n")}`);
+	}
+
+	// Create agent presets from resolved agents
+	const agentPresets: AgentPreset[] = team.agents.map((agent) => {
+		let agentModel: Model<Api> = model;
+		if (agent.parsedModel) {
+			const resolved = resolveModelFromParsed(agent.parsedModel, modelRegistry);
+			if (resolved) {
+				agentModel = resolved;
+			}
+		}
+
+		return {
+			name: agent.name,
+			description: `Custom agent: ${agent.name}`,
+			model: agentModel,
+			systemPrompt: agent.systemPrompt,
+			thinkingLevel: agent.thinkingLevel,
+			temperature: agent.temperature,
+		};
+	});
+
+	const mergeAgent = team.strategy === "verification" ? createPreset(mergeSynthesizerTemplate, model) : undefined;
+
+	const teamConfig: TeamConfig = {
+		name: team.name,
+		description: team.description,
+		agents: agentPresets,
+		tools,
+		strategy: "parallel",
+		merge: {
+			strategy: team.strategy,
+			mergeAgent,
+		},
+		maxRetries: 1,
+		continueOnError: true,
+	};
+
+	const teamInstance = new Team(teamConfig);
+	const stream = teamInstance.run({
+		task,
+		signal,
+		getApiKey: async (provider: string) => {
+			return modelRegistry.getApiKey({ provider } as Model<Api>);
+		},
+	});
+
+	return {
+		team: teamInstance,
+		stream,
+		agentNames: team.agents.map((a) => a.name),
+	};
+}
+
+function createTeamStreamInternal(
+	teamName: string,
+	agentNames: string[],
+	strategy: MergeStrategyType,
+	options: TeamStreamOptions,
+): TeamStreamResult {
+	const { model, modelRegistry, tools = [], task, signal } = options;
+
+	const agentPresets = createAgentPresets(agentNames, model);
+	const mergeAgent = strategy === "verification" ? createPreset(mergeSynthesizerTemplate, model) : undefined;
+
+	const teamConfig: TeamConfig = {
+		name: teamName,
+		agents: agentPresets,
+		tools,
+		strategy: "parallel",
+		merge: {
+			strategy,
+			mergeAgent,
+		},
+		maxRetries: 1,
+		continueOnError: true,
+	};
+
+	const team = new Team(teamConfig);
+	const stream = team.run({
+		task,
+		signal,
+		getApiKey: async (provider: string) => {
+			return modelRegistry.getApiKey({ provider } as Model<any>);
+		},
+	});
+
+	return { team, stream, agentNames };
+}
+
 /**
  * Internal: Execute team with given agents.
  */
@@ -489,7 +621,7 @@ export function formatTeamHelp(cwd: string): string {
 	}
 
 	if (projectTeams.length > 0) {
-		lines.push("### Project Teams (.pi/teams.yaml)\n");
+		lines.push("### Project Teams (.phi/teams.yaml)\n");
 		for (const t of projectTeams) {
 			lines.push(`- **${t.name}** (${t.agentCount} agents): ${t.description}`);
 		}
@@ -497,7 +629,7 @@ export function formatTeamHelp(cwd: string): string {
 	}
 
 	if (userTeams.length > 0) {
-		lines.push("### User Teams (~/.pi/teams.yaml)\n");
+		lines.push("### User Teams (~/.phi/teams.yaml)\n");
 		for (const t of userTeams) {
 			lines.push(`- **${t.name}** (${t.agentCount} agents): ${t.description}`);
 		}

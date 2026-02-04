@@ -5,7 +5,7 @@
  *
  * Test with: bun src/cli.ts [args...]
  */
-process.title = "pi";
+process.title = "phi";
 
 import { main } from "./main.js";
 

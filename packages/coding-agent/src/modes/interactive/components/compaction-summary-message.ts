@@ -1,7 +1,6 @@
 import { Box, Markdown, type MarkdownTheme, Spacer, Text } from "tui";
 import type { CompactionSummaryMessage } from "../../../core/messages.js";
 import { getMarkdownTheme, theme } from "../theme/theme.js";
-import { editorKey } from "./keybinding-hints.js";
 
 /**
  * Component that renders a compaction message with collapsed/expanded state.
@@ -45,15 +44,7 @@ export class CompactionSummaryMessageComponent extends Box {
 				}),
 			);
 		} else {
-			this.addChild(
-				new Text(
-					theme.fg("customMessageText", `Compacted from ${tokenStr} tokens (`) +
-						theme.fg("dim", editorKey("expandTools")) +
-						theme.fg("customMessageText", " to expand)"),
-					0,
-					0,
-				),
-			);
+			this.addChild(new Text(theme.fg("customMessageText", `Compacted from ${tokenStr} tokens`), 0, 0));
 		}
 	}
 }
