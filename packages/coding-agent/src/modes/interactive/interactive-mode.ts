@@ -3897,14 +3897,21 @@ export class InteractiveMode {
 			if (!selectedTeam) return;
 		}
 
+		// Prompt for task description
+		const task = await this.showExtensionInput(
+			"Describe what you want the team to analyze",
+			"e.g., Check auth code for vulnerabilities, Review error handling...",
+		);
+		if (!task) return;
+
 		// Execute the team
-		await this.executeTeamWithProgress(selectedTeam);
+		await this.executeTeamWithProgress(selectedTeam, task);
 	}
 
 	/**
 	 * Execute a team with progress UI
 	 */
-	private async executeTeamWithProgress(team: TeamInfo): Promise<void> {
+	private async executeTeamWithProgress(team: TeamInfo, task: string): Promise<void> {
 		// Create abort controller
 		const abortController = new AbortController();
 
@@ -3964,6 +3971,7 @@ export class InteractiveMode {
 					model,
 					modelRegistry,
 					tools,
+					task,
 					signal: abortController.signal,
 					onProgress,
 				});
@@ -3973,6 +3981,7 @@ export class InteractiveMode {
 					model,
 					modelRegistry,
 					tools,
+					task,
 					signal: abortController.signal,
 					onProgress,
 				});

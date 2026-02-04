@@ -197,6 +197,8 @@ export type TeamEvent =
 export interface TeamRunOptions {
 	/** Abort signal for cancellation */
 	signal?: AbortSignal;
+	/** Task/prompt describing what the team should analyze or do */
+	task?: string;
 	/** Initial messages/context to provide to all agents */
 	initialMessages?: AgentMessage[];
 	/** API key resolver for dynamic keys */

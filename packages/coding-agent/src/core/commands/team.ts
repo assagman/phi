@@ -274,6 +274,7 @@ export interface TeamCommandOptions {
 	model: Model<any>;
 	modelRegistry: ModelRegistry;
 	tools?: AgentTool[];
+	task?: string;
 	signal?: AbortSignal;
 	onProgress?: (state: TeamExecutionState) => void;
 }
@@ -295,7 +296,7 @@ export async function executeTeam(teamName: string, options: TeamCommandOptions)
  * Execute a resolved team (from config file).
  */
 export async function executeResolvedTeam(team: ResolvedTeam, options: TeamCommandOptions): Promise<TeamResult | null> {
-	const { model, modelRegistry, tools = [], signal, onProgress } = options;
+	const { model, modelRegistry, tools = [], task, signal, onProgress } = options;
 
 	// Validate models against registry
 	const modelErrors = validateTeamModels(team, modelRegistry);
@@ -355,6 +356,7 @@ export async function executeResolvedTeam(team: ResolvedTeam, options: TeamComma
 
 	try {
 		const stream = teamInstance.run({
+			task,
 			signal,
 			getApiKey: async (provider: string) => {
 				return modelRegistry.getApiKey({ provider } as Model<Api>);
@@ -406,7 +408,7 @@ async function executeTeamWithAgents(
 	strategy: MergeStrategyType,
 	options: TeamCommandOptions,
 ): Promise<TeamResult | null> {
-	const { model, modelRegistry, tools = [], signal, onProgress } = options;
+	const { model, modelRegistry, tools = [], task, signal, onProgress } = options;
 
 	// Create agent presets
 	const agentPresets = createAgentPresets(agentNames, model);
@@ -440,6 +442,7 @@ async function executeTeamWithAgents(
 
 	try {
 		const stream = team.run({
+			task,
 			signal,
 			getApiKey: async (provider: string) => {
 				return modelRegistry.getApiKey({ provider } as Model<any>);

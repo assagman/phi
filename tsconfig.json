@@ -15,6 +15,8 @@
 
 			"tui": ["./packages/tui/src/index.ts"],
 			"tui/*": ["./packages/tui/src/*"],
+			"agents": ["./packages/agents/src/index.ts"],
+			"agents/*": ["./packages/agents/src/*"],
 		}
 	},
 	"include": ["packages/*/src/**/*", "packages/*/test/**/*"],

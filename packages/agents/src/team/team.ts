@@ -247,11 +247,12 @@ export class Team {
 			tools,
 		};
 
-		// Create a simple prompt to start the review
+		// Create prompt from task or use default
+		const taskPrompt = options.task || "Please analyze the code and provide your findings.";
 		const prompts: AgentMessage[] = [
 			{
 				role: "user",
-				content: "Please analyze the code and provide your findings.",
+				content: taskPrompt,
 				timestamp: Date.now(),
 			},
 		];
