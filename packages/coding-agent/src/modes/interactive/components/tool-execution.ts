@@ -28,16 +28,6 @@ const COLORS: Record<string, ThemeColor> = {
 	grep: "toolGrep",
 };
 
-// Base RGB values for tool colors (for pulse animation)
-const COLOR_RGB: Record<string, [number, number, number]> = {
-	read: [95, 135, 255],
-	edit: [255, 135, 0],
-	write: [215, 175, 0],
-	bash: [0, 215, 255],
-	grep: [232, 151, 228],
-	find: [187, 232, 151],
-};
-
 function shorten(path: string): string {
 	const home = os.homedir();
 	return path.startsWith(home) ? `~${path.slice(home.length)}` : path;
@@ -120,7 +110,8 @@ export class ToolExecutionComponent extends Container {
 			return theme.getFgAnsi(baseColor);
 		}
 
-		const rgb = COLOR_RGB[this.toolName];
+		// Get RGB from theme (single source of truth)
+		const rgb = theme.getFgRgb(baseColor);
 		if (!rgb) {
 			return theme.getFgAnsi(baseColor);
 		}
