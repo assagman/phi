@@ -186,8 +186,8 @@ export const MODELS = {
 			cost: {
 				input: 5,
 				output: 25,
-				cacheRead: 1.5,
-				cacheWrite: 18.75,
+				cacheRead: 0.5,
+				cacheWrite: 6.25,
 			},
 			contextWindow: 200000,
 			maxTokens: 64000,
@@ -226,6 +226,23 @@ export const MODELS = {
 			contextWindow: 200000,
 			maxTokens: 64000,
 		} satisfies Model<"bedrock-converse-stream">,
+		"global.amazon.nova-2-lite-v1:0": {
+			id: "global.amazon.nova-2-lite-v1:0",
+			name: "Nova 2 Lite",
+			api: "bedrock-converse-stream",
+			provider: "amazon-bedrock",
+			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+			reasoning: false,
+			input: ["text", "image"],
+			cost: {
+				input: 0.33,
+				output: 2.75,
+				cacheRead: 0,
+				cacheWrite: 0,
+			},
+			contextWindow: 128000,
+			maxTokens: 4096,
+		} satisfies Model<"bedrock-converse-stream">,
 		"global.anthropic.claude-haiku-4-5-20251001-v1:0": {
 			id: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
 			name: "Claude Haiku 4.5 (Global)",
@@ -245,7 +262,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"global.anthropic.claude-opus-4-5-20251101-v1:0": {
 			id: "global.anthropic.claude-opus-4-5-20251101-v1:0",
-			name: "Claude Opus 4.5 (Global)",
+			name: "Claude Opus 4.5",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -262,7 +279,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"global.anthropic.claude-sonnet-4-20250514-v1:0": {
 			id: "global.anthropic.claude-sonnet-4-20250514-v1:0",
-			name: "Claude Sonnet 4 (Global)",
+			name: "Claude Sonnet 4",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -685,23 +702,6 @@ export const MODELS = {
 			contextWindow: 262000,
 			maxTokens: 262000,
 		} satisfies Model<"bedrock-converse-stream">,
-		"us.amazon.nova-2-lite-v1:0": {
-			id: "us.amazon.nova-2-lite-v1:0",
-			name: "Nova 2 Lite (US)",
-			api: "bedrock-converse-stream",
-			provider: "amazon-bedrock",
-			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-			reasoning: false,
-			input: ["text", "image"],
-			cost: {
-				input: 0.33,
-				output: 2.75,
-				cacheRead: 0,
-				cacheWrite: 0,
-			},
-			contextWindow: 128000,
-			maxTokens: 4096,
-		} satisfies Model<"bedrock-converse-stream">,
 		"us.amazon.nova-lite-v1:0": {
 			id: "us.amazon.nova-lite-v1:0",
 			name: "Nova Lite",
@@ -738,7 +738,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"us.amazon.nova-premier-v1:0": {
 			id: "us.amazon.nova-premier-v1:0",
-			name: "Nova Premier (US)",
+			name: "Nova Premier",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -772,7 +772,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"us.anthropic.claude-3-7-sonnet-20250219-v1:0": {
 			id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-			name: "Claude Sonnet 3.7 (US)",
+			name: "Claude Sonnet 3.7",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -823,7 +823,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"us.anthropic.claude-opus-4-20250514-v1:0": {
 			id: "us.anthropic.claude-opus-4-20250514-v1:0",
-			name: "Claude Opus 4 (US)",
+			name: "Claude Opus 4",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -891,7 +891,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"us.deepseek.r1-v1:0": {
 			id: "us.deepseek.r1-v1:0",
-			name: "DeepSeek-R1 (US)",
+			name: "DeepSeek-R1",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -908,7 +908,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"us.meta.llama3-2-11b-instruct-v1:0": {
 			id: "us.meta.llama3-2-11b-instruct-v1:0",
-			name: "Llama 3.2 11B Instruct (US)",
+			name: "Llama 3.2 11B Instruct",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -925,7 +925,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"us.meta.llama3-2-1b-instruct-v1:0": {
 			id: "us.meta.llama3-2-1b-instruct-v1:0",
-			name: "Llama 3.2 1B Instruct (US)",
+			name: "Llama 3.2 1B Instruct",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -942,7 +942,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"us.meta.llama3-2-3b-instruct-v1:0": {
 			id: "us.meta.llama3-2-3b-instruct-v1:0",
-			name: "Llama 3.2 3B Instruct (US)",
+			name: "Llama 3.2 3B Instruct",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -959,7 +959,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"us.meta.llama3-2-90b-instruct-v1:0": {
 			id: "us.meta.llama3-2-90b-instruct-v1:0",
-			name: "Llama 3.2 90B Instruct (US)",
+			name: "Llama 3.2 90B Instruct",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -976,7 +976,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"us.meta.llama3-3-70b-instruct-v1:0": {
 			id: "us.meta.llama3-3-70b-instruct-v1:0",
-			name: "Llama 3.3 70B Instruct (US)",
+			name: "Llama 3.3 70B Instruct",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -993,7 +993,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"us.meta.llama4-maverick-17b-instruct-v1:0": {
 			id: "us.meta.llama4-maverick-17b-instruct-v1:0",
-			name: "Llama 4 Maverick 17B Instruct (US)",
+			name: "Llama 4 Maverick 17B Instruct",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -1010,7 +1010,7 @@ export const MODELS = {
 		} satisfies Model<"bedrock-converse-stream">,
 		"us.meta.llama4-scout-17b-instruct-v1:0": {
 			id: "us.meta.llama4-scout-17b-instruct-v1:0",
-			name: "Llama 4 Scout 17B Instruct (US)",
+			name: "Llama 4 Scout 17B Instruct",
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -5668,12 +5668,12 @@ export const MODELS = {
 			input: ["text"],
 			cost: {
 				input: 0.27,
-				output: 1.1,
-				cacheRead: 0,
+				output: 0.95,
+				cacheRead: 0.0299999997,
 				cacheWrite: 0,
 			},
 			contextWindow: 196608,
-			maxTokens: 196608,
+			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"mistralai/codestral-2508": {
 			id: "mistralai/codestral-2508",
@@ -7811,7 +7811,7 @@ export const MODELS = {
 			cost: {
 				input: 0.19999999999999998,
 				output: 1.2,
-				cacheRead: 0,
+				cacheRead: 0.11,
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,

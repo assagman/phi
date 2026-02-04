@@ -283,26 +283,13 @@ Pi documentation (only when the user asks about pi itself, its SDK, extensions, 
 - When asked to create: custom models/providers (README.md), extensions (docs/extensions.md, examples/extensions/), themes (docs/theme.md), skills (docs/skills.md), TUI components (docs/tui.md - has copy-paste patterns)
 - When working on pi topics, read the docs and examples, and follow .md cross-references before implementing
 
-Team Cooperation (coop tool) — USE FOR NON-TRIVIAL WORK:
-For complex, large, or multi-step tasks, USE the coop tool to coordinate specialized agent teams.
-Do NOT attempt complex work alone — delegate to teams for better results.
+Multi-file and complex tasks:
+For features touching multiple files, security-sensitive changes, refactoring, or architectural work,
+break down the task into clear steps and validate each change carefully before proceeding.
 
-ALWAYS use coop for:
-- Features touching 3+ files or multiple concerns
-- Security-sensitive changes (auth, crypto, input handling)
-- Refactoring, migrations, or architectural changes
-- Pre-commit/PR reviews and audits
-- Any task where mistakes would be costly
-
-Available teams:
-- UNDERSTAND: requirements analysis, research, context gathering
-- DESIGN: architecture, API contracts, data modeling
-- IMPLEMENT: planning, code generation, refactoring
-- VALIDATE: code-review, security-audit, performance, quality, testing, architecture
-- VERIFY: test strategy, acceptance criteria, regression analysis
-- DELIVER: changelog, deployment validation, release coordination
-
-Just describe your intent — optimal teams are selected automatically.`;
+Agent delegation:
+When committing changes, ALWAYS use the committer agent via the subagent tool. Never commit directly.
+Example: subagent({ agent: "committer", task: "Commit the current session changes" })`;
 
 	if (appendSection) {
 		prompt += appendSection;

@@ -1,38 +1,183 @@
 /**
- * Epsilon — Task management builtin for Pi coding agent.
+ * Epsilon — Task management lifecycle for Pi coding agent.
  *
- * Provides task CRUD with subtasks, priorities, statuses, and tags.
+ * Uses phi_epsilon shell script for all operations.
+ * Lifecycle injects task context into system prompt.
  */
 
-export { buildTasksPrompt, closeDb, getTaskSummary } from "./db.js";
-export { epsilonTools } from "./tools.js";
+import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
-import { buildTasksPrompt, closeDb, getTaskSummary } from "./db.js";
+// ============ Constants ============
 
-// ============ Lifecycle Management ============
+/** Cached help text (loaded once from shell script) */
+let cachedHelp: string | null = null;
+
+// ============ Shell Script Path ============
+
+function getPhiEpsilonPath(): string {
+	const locations = [
+		join(process.env.HOME || "", ".local/bin/phi_epsilon"),
+		join(__dirname, "../../../../skills/epsilon/phi_epsilon"),
+		"phi_epsilon",
+	];
+
+	for (const loc of locations) {
+		if (loc === "phi_epsilon" || existsSync(loc)) {
+			return loc;
+		}
+	}
+
+	return "phi_epsilon";
+}
+
+function runEpsilon(args: string): string {
+	try {
+		const cmd = `${getPhiEpsilonPath()} ${args}`;
+		return execSync(cmd, { encoding: "utf-8", timeout: 5000 }).trim();
+	} catch {
+		return "";
+	}
+}
+
+function getHelp(): string {
+	if (cachedHelp === null) {
+		cachedHelp = runEpsilon("help");
+	}
+	return cachedHelp;
+}
+
+// ============ Task Context ============
+
+interface TaskSummary {
+	total: number;
+	todo: number;
+	inProgress: number;
+	blocked: number;
+	done: number;
+	cancelled: number;
+	active: Array<{ id: number; title: string; priority: string; tags: string }>;
+}
+
+function getTaskSummary(): TaskSummary {
+	const summary: TaskSummary = {
+		total: 0,
+		todo: 0,
+		inProgress: 0,
+		blocked: 0,
+		done: 0,
+		cancelled: 0,
+		active: [],
+	};
+
+	// Get counts from info
+	const info = runEpsilon("info");
+	const countMatch = info.match(
+		/total\s+todo\s+in_progress\s+blocked\s+done\s+cancelled\s*\n[-\s]+\n(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/,
+	);
+	if (countMatch) {
+		summary.total = parseInt(countMatch[1], 10);
+		summary.todo = parseInt(countMatch[2], 10);
+		summary.inProgress = parseInt(countMatch[3], 10);
+		summary.blocked = parseInt(countMatch[4], 10);
+		summary.done = parseInt(countMatch[5], 10);
+		summary.cancelled = parseInt(countMatch[6], 10);
+	}
+
+	// Get active tasks (todo, in_progress, blocked)
+	const active = runEpsilon("list --limit 20");
+	const lines = active.split("\n").slice(2); // Skip header and separator
+
+	for (const line of lines) {
+		// Parse: id  title  priority  tags  created_at
+		const match = line.match(/^(\d+)\s+([○◐⊘✓✗]\s+.+?)\s{2,}(\w+)\s+([\w,\s]*)\s+\d{4}-/);
+		if (match) {
+			summary.active.push({
+				id: parseInt(match[1], 10),
+				title: match[2].trim(),
+				priority: match[3].trim(),
+				tags: match[4].trim(),
+			});
+		}
+	}
+
+	return summary;
+}
+
+// ============ Prompt Building ============
+
+function buildTasksPrompt(summary: TaskSummary): string {
+	const lines: string[] = ["<epsilon_tasks>", ""];
+
+	lines.push("## Task Tracking");
+	lines.push(
+		"Non-trivial changes (2+ files, features, refactors, bug fixes, schema/API) → create task first, set in_progress, mark done when finished.",
+	);
+	lines.push(
+		"Trivial changes (single-file typo, formatting, comment) → no task needed. If it grows to 2+ files, create a task then continue.",
+	);
+	lines.push("");
+
+	// CLI Reference
+	const help = getHelp();
+	if (help) {
+		lines.push("## CLI Reference");
+		lines.push("```");
+		lines.push(help);
+		lines.push("```");
+		lines.push("");
+	}
+
+	// Overview
+	lines.push("## Overview");
+	lines.push(
+		`Status: ${summary.todo} todo, ${summary.inProgress} in progress, ${summary.blocked} blocked, ${summary.done} done`,
+	);
+	lines.push("");
+
+	// Active tasks
+	if (summary.active.length > 0) {
+		lines.push("## Active Tasks");
+		for (const task of summary.active) {
+			const tagStr = task.tags ? ` [${task.tags}]` : "";
+			lines.push(`  ${task.title}${tagStr}`);
+		}
+		lines.push("");
+	}
+
+	lines.push("</epsilon_tasks>");
+
+	return lines.join("\n");
+}
+
+// ============ Lifecycle ============
 
 export interface EpsilonLifecycle {
-	/** Call on session shutdown to close DB */
 	onSessionShutdown(): void;
-	/** Call before agent starts to get system prompt addition */
 	onBeforeAgentStart(systemPrompt: string): { systemPrompt: string };
 }
 
-/**
- * Create the epsilon lifecycle manager.
- */
 export function createEpsilonLifecycle(): EpsilonLifecycle {
 	return {
 		onSessionShutdown() {
-			closeDb();
+			// No-op - shell script handles DB
 		},
 
 		onBeforeAgentStart(systemPrompt) {
 			const summary = getTaskSummary();
-			const addition = buildTasksPrompt({ summary });
+			const addition = buildTasksPrompt(summary);
 			return {
 				systemPrompt: `${systemPrompt}\n\n${addition}`,
 			};
 		},
 	};
 }
+
+// ============ Exports for backward compatibility ============
+
+export function closeDb(): void {
+	// No-op
+}
+
+export { getTaskSummary, buildTasksPrompt };

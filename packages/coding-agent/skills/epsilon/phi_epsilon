@@ -1,0 +1,497 @@
+#!/usr/bin/env bash
+#
+# phi_epsilon - Task management CLI for AI agents
+# Compatible with existing phi epsilon.db schema (TEXT columns)
+#
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────
+# Configuration
+# ─────────────────────────────────────────────────────────────────
+if [[ -n "${PHI_EPSILON_DATA_DIR:-}" ]]; then
+    DATA_DIR="$PHI_EPSILON_DATA_DIR"
+else
+    # Project-specific storage: ~/.local/share/phi/projects/<project-root-dir>/
+    # Use git common dir for worktree support, fallback to pwd
+    if GIT_ROOT="$(git rev-parse --git-common-dir 2>/dev/null)" && [[ "$GIT_ROOT" != ".git" ]]; then
+        PROJECT_ROOT_DIR="$(cd "$GIT_ROOT" && pwd | sed 's|^/||; s|/|_|g')"
+    else
+        PROJECT_ROOT_DIR="$(pwd | sed 's|^/||; s|/|_|g')"
+    fi
+    DATA_DIR="$HOME/.local/share/phi/projects/${PROJECT_ROOT_DIR}"
+fi
+DB_FILE="${DATA_DIR}/epsilon.db"
+
+EXIT_OK=0
+EXIT_INVALID_ARGS=1
+EXIT_NOT_FOUND=2
+EXIT_DB_ERROR=3
+
+# Status: 1=todo, 2=in_progress, 3=blocked, 4=done, 5=cancelled
+STATUS_NAMES=("" "todo" "in_progress" "blocked" "done" "cancelled")
+STATUS_ICONS=("" "○" "◐" "⊘" "✓" "✗")
+
+# Priority: 1=low, 2=medium, 3=high, 4=critical
+PRIORITY_NAMES=("" "low" "medium" "high" "critical")
+
+# ─────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────
+die() { echo "error: $1" >&2; exit "${2:-$EXIT_INVALID_ARGS}"; }
+
+ensure_db() {
+    mkdir -p "$DATA_DIR"
+    if [[ ! -f "$DB_FILE" ]]; then
+        init_db
+        echo "Initialized: $DB_FILE"
+    fi
+}
+
+# SQLite with WAL mode and busy timeout for concurrent access
+# PRAGMAs output suppressed via .output, then restored for actual query
+sql() { sqlite3 -batch -noheader -cmd ".output /dev/null" -cmd "PRAGMA busy_timeout = 5000;" -cmd "PRAGMA journal_mode = WAL;" -cmd ".output stdout" "$DB_FILE" "$@"; }
+sql_pretty() { sqlite3 -batch -header -column -cmd ".output /dev/null" -cmd "PRAGMA busy_timeout = 5000;" -cmd "PRAGMA journal_mode = WAL;" -cmd ".output stdout" "$DB_FILE" "$@"; }
+
+status_name() { echo "${STATUS_NAMES[$1]:-}"; }
+status_icon() { echo "${STATUS_ICONS[$1]:-}"; }
+priority_name() { echo "${PRIORITY_NAMES[$1]:-}"; }
+
+status_num() {
+    case "$1" in
+        todo|1) echo 1 ;; in_progress|2) echo 2 ;; blocked|3) echo 3 ;;
+        done|4) echo 4 ;; cancelled|5) echo 5 ;; *) echo "" ;;
+    esac
+}
+
+priority_num() {
+    case "$1" in
+        low|1) echo 1 ;; medium|2) echo 2 ;; high|3) echo 3 ;; critical|4) echo 4 ;; *) echo "" ;;
+    esac
+}
+
+validate_status() {
+    [[ "$1" =~ ^[1-5]$ ]] || die "invalid status '$1' (1=todo, 2=in_progress, 3=blocked, 4=done, 5=cancelled)"
+}
+
+validate_priority() {
+    [[ "$1" =~ ^[1-4]$ ]] || die "invalid priority '$1' (1=low, 2=medium, 3=high, 4=critical)"
+}
+
+escape() { printf '%s' "$1" | sed "s/'/''/g"; }
+
+now() { date +%s; }
+
+# ─────────────────────────────────────────────────────────────────
+# Database (compatible with existing schema)
+# ─────────────────────────────────────────────────────────────────
+init_db() {
+    sql <<'SQL'
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'todo',
+    priority TEXT DEFAULT 'medium',
+    tags TEXT,
+    parent_id INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    FOREIGN KEY (parent_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+SQL
+}
+
+# ─────────────────────────────────────────────────────────────────
+# Commands
+# ─────────────────────────────────────────────────────────────────
+
+cmd_create() {
+    local title="" status="todo" priority="medium" description="" parent_id=""
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --status) shift; validate_status "$1"; status="${STATUS_NAMES[$1]}" ;;
+            --priority) shift; validate_priority "$1"; priority="${PRIORITY_NAMES[$1]}" ;;
+            --description) shift; description="$1" ;;
+            --parent) shift; parent_id="$1" ;;
+            -*) die "unknown option: $1" ;;
+            *) [[ -z "$title" ]] && title="$1" || die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+    
+    [[ -n "$title" ]] || die "usage: phi_epsilon create <title> [--status N] [--priority N] [--description TEXT] [--parent ID]"
+    
+    local ts; ts=$(now)
+    local sql_desc="NULL"
+    local sql_parent="NULL"
+    [[ -n "$description" ]] && sql_desc="'$(escape "$description")'"
+    [[ -n "$parent_id" ]] && sql_parent="$parent_id"
+    
+    local id
+    id=$(sql "INSERT INTO tasks (title, description, status, priority, parent_id, created_at, updated_at)
+              VALUES ('$(escape "$title")', $sql_desc, '$status', '$priority', $sql_parent, $ts, $ts)
+              RETURNING id;")
+    
+    local icon; icon=$(status_icon "$(status_num "$status")")
+    echo "created #${id}: ${icon} [${priority}] ${title}"
+}
+
+cmd_list() {
+    local statuses=() priority="" tag="" parent="" limit=50 show_all=false
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --status) shift; validate_status "$1"; statuses+=("${STATUS_NAMES[$1]}") ;;
+            --filter) 
+                shift
+                # Parse comma-separated status numbers: --filter 1,2,4
+                IFS=',' read -ra nums <<< "$1"
+                for n in "${nums[@]}"; do
+                    validate_status "$n"
+                    statuses+=("${STATUS_NAMES[$n]}")
+                done
+                ;;
+            --priority) shift; validate_priority "$1"; priority="${PRIORITY_NAMES[$1]}" ;;
+            --tag) shift; tag="$1" ;;
+            --parent) shift; parent="$1" ;;
+            --limit) shift; limit="$1" ;;
+            --all) show_all=true ;;
+            -*) die "unknown option: $1" ;;
+            *) die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+    
+    # Default: active tasks only
+    if [[ ${#statuses[@]} -eq 0 ]] && [[ "$show_all" == false ]]; then
+        statuses=("todo" "in_progress" "blocked")
+    fi
+    
+    local where="1=1"
+    if [[ ${#statuses[@]} -gt 0 ]]; then
+        local status_list=""
+        for s in "${statuses[@]}"; do status_list+="'$s',"; done
+        status_list="${status_list%,}"
+        where="$where AND status IN ($status_list)"
+    fi
+    [[ -n "$priority" ]] && where="$where AND priority = '$priority'"
+    [[ -n "$tag" ]] && where="$where AND (',' || tags || ',' LIKE '%,$tag,%')"
+    [[ -n "$parent" ]] && where="$where AND parent_id = $parent"
+    
+    sql "SELECT id, status, priority, title, tags FROM tasks WHERE $where ORDER BY 
+         CASE status WHEN 'in_progress' THEN 1 WHEN 'blocked' THEN 2 WHEN 'todo' THEN 3 WHEN 'done' THEN 4 ELSE 5 END,
+         CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
+         id DESC LIMIT $limit;" | while IFS='|' read -r id status priority title tags; do
+        local snum; snum=$(status_num "$status")
+        local icon; icon=$(status_icon "$snum")
+        local tag_str=""
+        [[ -n "$tags" ]] && tag_str=" [${tags}]"
+        echo "${icon} #${id} [${priority}] ${title}${tag_str}"
+    done
+}
+
+cmd_get() {
+    local id="${1:-}"
+    [[ -n "$id" ]] || die "usage: phi_epsilon get <id>"
+    
+    local row
+    row=$(sql "SELECT id, title, description, status, priority, tags, parent_id, created_at, updated_at, completed_at
+               FROM tasks WHERE id = $id;")
+    [[ -n "$row" ]] || die "task #$id not found" $EXIT_NOT_FOUND
+    
+    IFS='|' read -r id title desc status priority tags parent_id created updated completed <<< "$row"
+    
+    local snum; snum=$(status_num "$status")
+    local icon; icon=$(status_icon "$snum")
+    
+    echo "${icon} #${id} [${priority}] ${title}"
+    echo "  status | $(date -r "$updated" '+%Y-%m-%d %H:%M')"
+    [[ -n "$desc" ]] && echo "  $desc"
+    [[ -n "$tags" ]] && echo "  tags: $tags"
+    [[ -n "$parent_id" ]] && echo "  parent: #$parent_id"
+    
+    # Show subtasks
+    local subtasks
+    subtasks=$(sql "SELECT id, status, priority, title FROM tasks WHERE parent_id = $id ORDER BY id;")
+    if [[ -n "$subtasks" ]]; then
+        echo "  subtasks:"
+        echo "$subtasks" | while IFS='|' read -r sid sstatus spri stitle; do
+            local ssnum; ssnum=$(status_num "$sstatus")
+            local sicon; sicon=$(status_icon "$ssnum")
+            echo "    ${sicon} #${sid} ${stitle}"
+        done
+    fi
+}
+
+cmd_update() {
+    local id="" status="" priority="" title="" description=""
+    
+    [[ $# -gt 0 ]] && { id="$1"; shift; }
+    [[ -n "$id" ]] || die "usage: phi_epsilon update <id> [--status N] [--priority N] [--title TEXT] [--description TEXT]"
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --status) shift; validate_status "$1"; status="${STATUS_NAMES[$1]}" ;;
+            --priority) shift; validate_priority "$1"; priority="${PRIORITY_NAMES[$1]}" ;;
+            --title) shift; title="$1" ;;
+            --description) shift; description="$1" ;;
+            -*) die "unknown option: $1" ;;
+            *) die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+    
+    local sets="updated_at = $(now)"
+    [[ -n "$status" ]] && sets="$sets, status = '$status'"
+    [[ -n "$priority" ]] && sets="$sets, priority = '$priority'"
+    [[ -n "$title" ]] && sets="$sets, title = '$(escape "$title")'"
+    [[ -n "$description" ]] && sets="$sets, description = '$(escape "$description")'"
+    
+    # Set completed_at when marking done
+    [[ "$status" == "done" ]] && sets="$sets, completed_at = $(now)"
+    
+    local result
+    result=$(sql "UPDATE tasks SET $sets WHERE id = $id RETURNING id, status, priority, title;")
+    [[ -n "$result" ]] || die "task #$id not found" $EXIT_NOT_FOUND
+    
+    IFS='|' read -r rid rstatus rpri rtitle <<< "$result"
+    local rnum; rnum=$(status_num "$rstatus")
+    local icon; icon=$(status_icon "$rnum")
+    echo "updated ${icon} #${rid} [${rpri}] ${rtitle}"
+}
+
+cmd_done() {
+    local id="${1:-}"
+    [[ -n "$id" ]] || die "usage: phi_epsilon done <id>"
+    
+    local ts; ts=$(now)
+    local result
+    result=$(sql "UPDATE tasks SET status = 'done', completed_at = $ts, updated_at = $ts 
+                  WHERE id = $id RETURNING id, priority, title;")
+    [[ -n "$result" ]] || die "task #$id not found" $EXIT_NOT_FOUND
+    
+    IFS='|' read -r rid rpri rtitle <<< "$result"
+    echo "updated ✓ #${rid} [${rpri}] ${rtitle}"
+}
+
+cmd_delete() {
+    local id="${1:-}"
+    [[ -n "$id" ]] || die "usage: phi_epsilon delete <id>"
+    
+    local title
+    title=$(sql "SELECT title FROM tasks WHERE id = $id;")
+    [[ -n "$title" ]] || die "task #$id not found" $EXIT_NOT_FOUND
+    
+    sql "DELETE FROM tasks WHERE id = $id;"
+    echo "deleted #${id}: ${title}"
+}
+
+cmd_tag() {
+    local id="${1:-}" tag="${2:-}"
+    [[ -n "$id" && -n "$tag" ]] || die "usage: phi_epsilon tag <id> <tag>"
+    
+    local current
+    current=$(sql "SELECT tags FROM tasks WHERE id = $id;")
+    [[ -n "$current" || $? -eq 0 ]] || die "task #$id not found" $EXIT_NOT_FOUND
+    
+    # Check if tag already exists
+    if [[ ",$current," == *",$tag,"* ]]; then
+        echo "task #$id already has tag '$tag'"
+        return 0
+    fi
+    
+    local new_tags
+    [[ -n "$current" ]] && new_tags="${current},${tag}" || new_tags="$tag"
+    
+    sql "UPDATE tasks SET tags = '$new_tags', updated_at = $(now) WHERE id = $id;"
+    echo "tagged #$id with '$tag'"
+}
+
+cmd_untag() {
+    local id="${1:-}" tag="${2:-}"
+    [[ -n "$id" && -n "$tag" ]] || die "usage: phi_epsilon untag <id> <tag>"
+    
+    local current
+    current=$(sql "SELECT tags FROM tasks WHERE id = $id;")
+    
+    # Remove tag from comma-separated list
+    local new_tags
+    new_tags=$(echo "$current" | tr ',' '\n' | grep -v "^${tag}$" | tr '\n' ',' | sed 's/,$//')
+    
+    sql "UPDATE tasks SET tags = '$new_tags', updated_at = $(now) WHERE id = $id;"
+    echo "removed tag '$tag' from #$id"
+}
+
+cmd_tags() {
+    sql "SELECT DISTINCT value FROM tasks, json_each('[\'' || replace(tags, ',', ''\'','\''') || ''\'']') 
+         WHERE tags IS NOT NULL AND tags != '' ORDER BY value;" 2>/dev/null || \
+    sql "SELECT tags FROM tasks WHERE tags IS NOT NULL AND tags != '';" | tr ',' '\n' | sort -u
+}
+
+cmd_info() {
+    echo "Database: $DB_FILE"
+    echo ""
+    sql_pretty "SELECT 
+        COUNT(*) AS total,
+        SUM(CASE WHEN status='todo' THEN 1 ELSE 0 END) AS todo,
+        SUM(CASE WHEN status='in_progress' THEN 1 ELSE 0 END) AS in_progress,
+        SUM(CASE WHEN status='blocked' THEN 1 ELSE 0 END) AS blocked,
+        SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,
+        SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) AS cancelled
+    FROM tasks;"
+    echo ""
+    echo "Status:   1=○todo  2=◐in_progress  3=⊘blocked  4=✓done  5=✗cancelled"
+    echo "Priority: 1=low  2=medium  3=high  4=critical"
+}
+
+cmd_help() {
+    cat <<'EOF'
+phi_epsilon - Task management CLI
+
+USAGE: phi_epsilon <command> [args] [options]
+
+STATUS: 1=○todo 2=◐wip 3=⊘blocked 4=✓done 5=✗drop
+PRIORITY: 1=low 2=medium 3=high 4=critical
+
+COMMANDS (status commands: no ID=list, with ID=transition):
+  todo [ID]       List todo tasks OR mark ID as todo
+  wip [ID]        List wip tasks OR mark ID as wip      (alias: start)
+  done [ID]       List done tasks OR mark ID as done    (alias: finish)
+  drop [ID]       List dropped OR mark ID as dropped    (alias: x, cancel)
+
+  add <title>     Create task
+                  --priority N  --status N  --parent ID  --description TEXT
+  get <id>        Show task details                     (alias: show)
+  update <id>     Modify task                           (alias: set)
+                  --priority N  --status N  --title TEXT  --description TEXT
+  rm <id>         Delete task                           (alias: delete)
+
+  list            List tasks (default: active only)     (alias: ls)
+                  --status N  --filter N,N  --priority N  --tag TAG
+                  --parent ID  --limit N  --all
+  backlog [N]     wip + todo by priority (default 50)
+  next            Single highest-priority todo
+  active          todo + wip + blocked
+  all [N]         All tasks including done/dropped
+
+  tag <id> <t>    Add tag
+  untag <id> <t>  Remove tag
+  tags            List all tags
+  info            Database stats
+
+OUTPUT: {icon} #{id} [{priority}] {title} [{tags}]
+
+EXAMPLES:
+  phi_epsilon add "Fix bug" --priority 3
+  phi_epsilon wip 42 && phi_epsilon done 42
+  phi_epsilon list --tag backend --priority 4
+  phi_epsilon todo --limit 100
+
+ENV: PHI_EPSILON_DATA_DIR overrides ~/.local/share/phi/projects/<project>/
+EOF
+}
+
+# ─────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────
+# Unified status commands: list if no ID, transition if ID given
+cmd_todo() {
+    if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+        cmd_update "$1" --status 1
+    else
+        cmd_list --status 1 "$@"
+    fi
+}
+
+cmd_wip() {
+    if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+        cmd_update "$1" --status 2
+    else
+        cmd_list --status 2 "$@"
+    fi
+}
+
+cmd_done_or_list() {
+    if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+        cmd_done "$1"
+    else
+        cmd_list --status 4 "$@"
+    fi
+}
+
+cmd_drop() {
+    if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+        cmd_update "$1" --status 5
+    else
+        cmd_list --status 5 "$@"
+    fi
+}
+
+cmd_next() {
+    # Show highest priority todo task
+    sql "SELECT id, status, priority, title FROM tasks 
+         WHERE status = 'todo'
+         ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
+                  id ASC
+         LIMIT 1;" | while IFS='|' read -r id status priority title; do
+        echo "○ #${id} [${priority}] ${title}"
+    done
+}
+
+cmd_backlog() {
+    local limit="${1:-50}"
+    # Show wip first, then todo, ordered by priority within each status
+    sql "SELECT id, status, priority, title, tags FROM tasks 
+         WHERE status IN ('in_progress', 'todo')
+         ORDER BY 
+           CASE status WHEN 'in_progress' THEN 1 WHEN 'todo' THEN 2 END,
+           CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
+           id DESC
+         LIMIT $limit;" | while IFS='|' read -r id status priority title tags; do
+        local snum; snum=$(status_num "$status")
+        local icon; icon=$(status_icon "$snum")
+        local tag_str=""
+        [[ -n "$tags" ]] && tag_str=" [${tags}]"
+        echo "${icon} #${id} [${priority}] ${title}${tag_str}"
+    done
+}
+
+main() {
+    local cmd="${1:-help}"
+    [[ $# -gt 0 ]] && shift
+    
+    case "$cmd" in
+        # Core commands
+        create|add|new) ensure_db; cmd_create "$@" ;;
+        list|ls) ensure_db; cmd_list "$@" ;;
+        get|show) ensure_db; cmd_get "$@" ;;
+        update|set) ensure_db; cmd_update "$@" ;;
+        delete|rm) ensure_db; cmd_delete "$@" ;;
+        tag) ensure_db; cmd_tag "$@" ;;
+        untag) ensure_db; cmd_untag "$@" ;;
+        tags) ensure_db; cmd_tags ;;
+        info) ensure_db; cmd_info ;;
+        help|--help|-h) cmd_help ;;
+        
+        # 4 main status commands: list OR transition
+        todo) ensure_db; cmd_todo "$@" ;;            # list todo OR mark as todo
+        wip|start) ensure_db; cmd_wip "$@" ;;        # list wip OR mark as wip
+        done|finish) ensure_db; cmd_done_or_list "$@" ;;  # list done OR mark as done
+        drop|x|cancel) ensure_db; cmd_drop "$@" ;;   # list cancelled OR cancel
+        
+        # Extra list shortcuts
+        active) ensure_db; cmd_list --filter 1,2,3 "$@" ;;
+        all) ensure_db; cmd_list --all "$@" ;;
+        next) ensure_db; cmd_next ;;
+        backlog) ensure_db; cmd_backlog "$@" ;;
+        
+        *) die "unknown command: $cmd" ;;
+    esac
+}
+
+main "$@"

@@ -2,22 +2,23 @@
  * Builtin tools — Core functionality for Pi coding agent.
  *
  * Exports:
- * - Delta: Persistent memory system
- * - Epsilon: Task management
- * - Sigma: Interactive questionnaire
- * - Handoff: Context transfer to new sessions
+ * - Delta: Persistent memory lifecycle (shell-based)
+ * - Epsilon: Task management lifecycle (shell-based)
+ * - Sigma: Interactive questionnaire (tool)
+ * - Handoff: Context transfer to new sessions (tool)
+ *
+ * Note: Delta and epsilon now use shell scripts (phi_delta, phi_epsilon).
+ * The lifecycles inject context into system prompt but don't register tools.
  */
 
 // ─── Delta (Memory) ─────────────────────────────────────────────────────────
 export {
-	buildMemoryPrompt,
 	closeDb as closeDeltaDb,
 	createDeltaLifecycle,
 	type DeltaLifecycle,
-	getMemoryContext,
 	resetSession as resetDeltaSession,
 } from "./delta/index.js";
-export { deltaForget, deltaRemember, deltaSearch, deltaTools } from "./delta/tools.js";
+
 // ─── Epsilon (Tasks) ─────────────────────────────────────────────────────────
 export {
 	buildTasksPrompt,
@@ -26,16 +27,17 @@ export {
 	type EpsilonLifecycle,
 	getTaskSummary,
 } from "./epsilon/index.js";
-export { epsilonTools } from "./epsilon/tools.js";
 export type { HandoffToolContext, HandoffUIContext } from "./handoff/index.js";
 // ─── Handoff (Context Transfer) ──────────────────────────────────────────────
 export { createHandoffTool, HandoffCommand } from "./handoff/index.js";
 export type { Answer, AskResult, Question, QuestionOption, SigmaUIContext } from "./sigma/index.js";
 // ─── Sigma (Questionnaire) ───────────────────────────────────────────────────
 export { createSigmaTool, createSigmaUI, SIGMA_SYSTEM_PROMPT } from "./sigma/index.js";
-
 // ─── Storage ─────────────────────────────────────────────────────────────────
 export { getBuiltinDbPath, getDataDir, getRepoIdentifier } from "./storage.js";
+export type { SubagentToolContext, SubagentUIContext } from "./subagent/index.js";
+// ─── Subagent (Agent Delegation) ─────────────────────────────────────────────
+export { type AgentDefinition, type AgentRegistry, createAgentRegistry, createSubagentTool } from "./subagent/index.js";
 
 // ─── Combined Lifecycle ──────────────────────────────────────────────────────
 
@@ -43,11 +45,10 @@ import type { AgentTool } from "agent";
 import type { Component, OverlayOptions, TUI } from "tui";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { createDeltaLifecycle } from "./delta/index.js";
-import { deltaTools } from "./delta/tools.js";
 import { createEpsilonLifecycle } from "./epsilon/index.js";
-import { epsilonTools } from "./epsilon/tools.js";
 import { createHandoffTool, type HandoffToolContext } from "./handoff/index.js";
 import { createSigmaTool, SIGMA_SYSTEM_PROMPT } from "./sigma/index.js";
+import { createSubagentTool, type SubagentToolContext } from "./subagent/index.js";
 
 /**
  * Minimal UI context needed by builtin tools.
@@ -97,13 +98,17 @@ export interface BuiltinToolsConfig {
 	ui: BuiltinToolUIContext;
 	/** Handoff tool context */
 	handoffContext: HandoffToolContext;
+	/** Subagent tool context */
+	subagentContext: SubagentToolContext;
 }
 
 export interface BuiltinToolsLifecycle {
-	/** All builtin tools */
+	/** All builtin tools (sigma, handoff only - delta/epsilon use shell scripts) */
 	tools: AgentTool<any>[];
 	/** The mutable UI context (for interactive mode to populate) */
 	ui: BuiltinToolUIContext;
+	/** The mutable handoff context (for interactive mode to populate) */
+	handoff: HandoffToolContext;
 	/** Call on session start */
 	onSessionStart(): void;
 	/** Call on session shutdown */
@@ -121,20 +126,27 @@ export interface BuiltinToolsLifecycle {
 
 /**
  * Create the combined lifecycle manager for all builtin tools.
+ *
+ * Tools registered: sigma, handoff, subagent
+ * Lifecycles (no tools, just prompt injection): delta, epsilon
  */
 export function createBuiltinToolsLifecycle(config: BuiltinToolsConfig): BuiltinToolsLifecycle {
 	const deltaLifecycle = createDeltaLifecycle();
 	const epsilonLifecycle = createEpsilonLifecycle();
 
-	// Create tools - pass UI context via closure (tools check hasUI at runtime)
+	// Create tools
 	const sigmaTool = createSigmaTool(config.getSessionBranch, config.ui);
 	const handoffTool = createHandoffTool(config.handoffContext, config.ui);
+	const subagentTool = createSubagentTool(config.subagentContext, config.ui);
 
-	const tools: AgentTool<any>[] = [...deltaTools, ...epsilonTools, sigmaTool, handoffTool];
+	// Registered tools: sigma, handoff, subagent
+	// Delta and epsilon are accessed via bash: phi_delta, phi_epsilon
+	const tools: AgentTool<any>[] = [sigmaTool, handoffTool, subagentTool];
 
 	return {
 		tools,
 		ui: config.ui,
+		handoff: config.handoffContext,
 
 		onSessionStart() {
 			deltaLifecycle.onSessionStart();

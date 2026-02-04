@@ -35,10 +35,8 @@
     "packages/agents": {
       "name": "agents",
       "dependencies": {
-        "@sinclair/typebox": "^0.34.48",
         "agent": "*",
         "ai": "*",
-        "events": "*",
       },
       "devDependencies": {
         "@types/node": "^24.3.0",
@@ -71,12 +69,13 @@
       "name": "coding-agent",
       "bin": {
         "phi": "dist/cli.js",
+        "phi_delta": "skills/delta/phi_delta",
+        "phi_epsilon": "skills/epsilon/phi_epsilon",
       },
       "dependencies": {
         "@silvia-odwyer/photon-node": "^0.3.4",
         "@sinclair/typebox": "^0.34.48",
         "agent": "*",
-        "agents": "*",
         "ai": "*",
         "ajv": "^8.17.1",
         "chalk": "^5.5.0",

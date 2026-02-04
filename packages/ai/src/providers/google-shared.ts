@@ -232,6 +232,9 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 
 /**
  * Convert tools to Gemini function declarations format.
+ *
+ * Note: Google APIs don't support the JSON Schema `const` keyword.
+ * We convert `const: value` to `enum: [value]` for compatibility.
  */
 export function convertTools(
 	tools: Tool[],
@@ -242,10 +245,47 @@ export function convertTools(
 			functionDeclarations: tools.map((tool) => ({
 				name: tool.name,
 				description: tool.description,
-				parameters: tool.parameters as Schema,
+				parameters: convertSchema(tool.parameters) as Schema,
 			})),
 		},
 	];
+}
+
+/**
+ * Recursively convert JSON Schema to be compatible with Google APIs.
+ * Replaces `const` with `enum` since Google doesn't support `const`.
+ */
+function convertSchema(schema: unknown): unknown {
+	if (schema === null || typeof schema !== "object") {
+		return schema;
+	}
+
+	if (Array.isArray(schema)) {
+		return schema.map(convertSchema);
+	}
+
+	const obj = schema as Record<string, unknown>;
+	const result: Record<string, unknown> = {};
+
+	for (const [key, value] of Object.entries(obj)) {
+		if (key === "const") {
+			// Convert const to enum with single value
+			result.enum = [value];
+		} else if (key === "anyOf" || key === "oneOf" || key === "allOf") {
+			// Recursively process subschemas in combiners
+			result[key] = convertSchema(value);
+		} else if (key === "properties" || key === "additionalProperties") {
+			// Recursively process properties
+			result[key] = convertSchema(value);
+		} else if (key === "items") {
+			// Recursively process array items
+			result[key] = convertSchema(value);
+		} else {
+			result[key] = value;
+		}
+	}
+
+	return result;
 }
 
 /**

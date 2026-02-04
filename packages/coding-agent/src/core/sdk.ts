@@ -33,7 +33,7 @@ import {
 	createBuiltinUIContext,
 } from "./builtin-tools/index.js";
 import { serializeConversation } from "./compaction/utils.js";
-import { createEventBus, createPersistentEventBus, type EventBus } from "./event-bus.js";
+import { createEventBus, type EventBus } from "./event-bus.js";
 import {
 	createExtensionRuntime,
 	discoverAndLoadExtensions,
@@ -354,10 +354,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	time("settingsManager");
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd);
 	time("sessionManager");
-
-	// Create persistent event bus for SQLite-backed event storage
-	const persistentEventBus = createPersistentEventBus(sessionManager.getSessionId());
-	time("createPersistentEventBus");
 
 	// Check if session has existing data to restore
 	const existingSession = sessionManager.buildSessionContext();
@@ -691,13 +687,25 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			},
 			getCurrentSessionFile: () => sessionManager.getSessionFile(),
 			createNewSession: async (_opts) => {
-				// This will be implemented by the session/interactive mode
-				// For now, return cancelled - the interactive mode will override this
+				// This will be overridden by the interactive mode
+				// Stub returns cancelled since non-interactive modes don't support handoff
 				return { cancelled: true };
 			},
 			setEditorText: (_text) => {
-				// This will be implemented by the interactive mode
+				// This will be overridden by the interactive mode
 			},
+			sendMessage: async (_text) => {
+				// This will be overridden by the interactive mode
+			},
+		},
+		subagentContext: {
+			getModel: () => agent.state.model,
+			getApiKey: async (m) => {
+				const key = await modelRegistry.getApiKey(m);
+				if (!key) throw new Error(`No API key for ${m.provider}`);
+				return key;
+			},
+			getWorkingDir: () => cwd,
 		},
 	});
 
@@ -742,7 +750,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolRegistry: wrappedToolRegistry ?? toolRegistry,
 		rebuildSystemPrompt,
 		builtinToolsLifecycle,
-		persistentEventBus,
 	});
 	time("createAgentSession");
 

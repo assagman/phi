@@ -83,6 +83,8 @@ export interface HandoffToolContext {
 	getCurrentSessionFile(): string | undefined;
 	createNewSession(opts: { parentSession?: string }): Promise<{ cancelled: boolean }>;
 	setEditorText(text: string): void;
+	/** Send message to start agent loop (for auto-submit in tool mode) */
+	sendMessage(text: string): Promise<void>;
 }
 
 // ─── Result Details ─────────────────────────────────────────────────────────
@@ -203,16 +205,6 @@ export function createHandoffTool(context: HandoffToolContext, ui: HandoffUICont
 				};
 			}
 
-			// Let user edit the generated prompt
-			const editedPrompt = await ui.editor("Edit handoff prompt", result);
-
-			if (editedPrompt === undefined) {
-				return {
-					content: [{ type: "text", text: "Handoff cancelled" }],
-					details: { cancelled: true },
-				};
-			}
-
 			// Create new session with parent tracking
 			const newSessionResult = await context.createNewSession({
 				parentSession: currentSessionFile,
@@ -225,12 +217,12 @@ export function createHandoffTool(context: HandoffToolContext, ui: HandoffUICont
 				};
 			}
 
-			// Set the edited prompt in the main editor for submission
-			context.setEditorText(editedPrompt);
+			// Auto-submit the handoff prompt to start the new session
+			await context.sendMessage(result);
 
 			return {
-				content: [{ type: "text", text: "Handoff ready. Submit when ready." }],
-				details: { prompt: editedPrompt },
+				content: [{ type: "text", text: "Handoff complete. New session started." }],
+				details: { prompt: result },
 			};
 		},
 	};

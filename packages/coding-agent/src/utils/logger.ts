@@ -2,16 +2,16 @@
  * Centralized logging utility for Pi coding agent.
  *
  * Logs to ~/.local/share/phi/logs/ with separate files per category:
- * - coop.log - coop tool and lead analyzer
- * - team.log - team execution
  * - agent.log - agent loop events
  * - tools.log - tool executions
  * - session.log - session lifecycle
  * - ui.log - TUI events
+ * - config.log - configuration loading
+ * - extensions.log - extension loading
  *
  * Control via environment:
  * - DEBUG_PHI=1 - Enable all debug logging
- * - DEBUG_PHI=coop,team - Enable specific categories
+ * - DEBUG_PHI=agent,tools - Enable specific categories
  * - Errors are always logged
  */
 
@@ -20,7 +20,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 // Log categories
-export type LogCategory = "coop" | "team" | "agent" | "tools" | "session" | "ui" | "config" | "extensions";
+export type LogCategory = "agent" | "tools" | "session" | "ui" | "config" | "extensions";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -97,8 +97,6 @@ export function createLogger(category: LogCategory) {
 }
 
 // Pre-created loggers for convenience
-export const coopLog = createLogger("coop");
-export const teamLog = createLogger("team");
 export const agentLog = createLogger("agent");
 export const toolsLog = createLogger("tools");
 export const sessionLog = createLogger("session");

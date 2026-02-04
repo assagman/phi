@@ -48,10 +48,6 @@ Users legitimately need to:
 
 The agent operates with user permissions; restricting paths would reduce utility without adding security (user can just change cwd).
 
-## Multi-agent Team Execution
-
-Pi no longer ships multi-agent team execution (`/team`, `coop`, workflow templates). Older documentation may mention it; those features were removed as part of simplifying the architecture.
-
 ## API Key Handling
 
 API keys are:

@@ -287,6 +287,16 @@ export class InteractiveMode {
 			lifecycle.ui.hasUI = true;
 			lifecycle.ui.custom = (factory, opts) => this.showExtensionCustom(factory, opts);
 			lifecycle.ui.editor = (title, prefill) => this.showExtensionEditor(title, prefill);
+
+			// Populate handoff context (createNewSession, setEditorText, sendMessage)
+			lifecycle.handoff.createNewSession = async (opts) => {
+				const success = await this.session.newSession({ parentSession: opts?.parentSession });
+				return { cancelled: !success };
+			};
+			lifecycle.handoff.setEditorText = (text) => this.editor.setText(text);
+			lifecycle.handoff.sendMessage = async (text) => {
+				await this.session.sendUserMessage(text);
+			};
 		}
 	}
 

@@ -1,28 +1,62 @@
 /**
- * Delta — Persistent memory builtin for Pi coding agent.
+ * Delta — Persistent memory lifecycle for Pi coding agent.
  *
- * Features:
- * - Unified memory with tags, importance, FTS5 full-text search
- * - Idle nudge after N turns without memory writes
- * - Auto-capture git commits as memories
- * - Session write stats in system prompt
+ * Uses phi_delta shell script for all operations.
+ * Lifecycle injects memory context into system prompt.
  */
 
-export { buildMemoryPrompt, closeDb, getMemoryContext, logEpisode, resetSession } from "./db.js";
-export { deltaTools } from "./tools.js";
-
-import { buildMemoryPrompt, closeDb, getMemoryContext, logEpisode, resetSession } from "./db.js";
+import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 // ============ Constants ============
 
-/** Delta write tools that count toward session activity */
-const DELTA_WRITE_TOOLS = new Set(["delta_remember", "delta_remember_bulk"]);
+/** Delta write tools (shell script calls via bash) */
+const DELTA_WRITE_PATTERNS = ["phi_delta remember", "phi_delta tag"];
 
 /** Turns of inactivity before injecting a nudge message */
 const IDLE_THRESHOLD = 4;
 
 /** Minimum turns between consecutive nudge messages */
 const NUDGE_COOLDOWN = 4;
+
+/** Cached help text (loaded once from shell script) */
+let cachedHelp: string | null = null;
+
+// ============ Shell Script Path ============
+
+function getPhiDeltaPath(): string {
+	// Check common locations
+	const locations = [
+		join(process.env.HOME || "", ".local/bin/phi_delta"),
+		join(__dirname, "../../../../skills/delta/phi_delta"),
+		"phi_delta", // In PATH
+	];
+
+	for (const loc of locations) {
+		if (loc === "phi_delta" || existsSync(loc)) {
+			return loc;
+		}
+	}
+
+	return "phi_delta"; // Fallback to PATH
+}
+
+function runDelta(args: string): string {
+	try {
+		const cmd = `${getPhiDeltaPath()} ${args}`;
+		return execSync(cmd, { encoding: "utf-8", timeout: 5000 }).trim();
+	} catch {
+		return "";
+	}
+}
+
+function getHelp(): string {
+	if (cachedHelp === null) {
+		cachedHelp = runDelta("help");
+	}
+	return cachedHelp;
+}
 
 // ============ Session State ============
 
@@ -69,68 +103,168 @@ function extractCommitInfo(output: string): string | null {
 	return `Commit ${hash} on ${branch}: ${message}${statsStr}`;
 }
 
-// ============ Helper Functions ============
+// ============ Memory Context ============
 
-function isBashToolResult(event: {
-	toolName: string;
-	input: unknown;
-}): event is { toolName: string; input: { command?: string }; content: Array<{ type: string; text?: string }> } {
-	return event.toolName === "Bash" || event.toolName === "bash";
+interface MemoryContext {
+	total: number;
+	critical: Array<{ id: number; content: string; tags: string; importance: string }>;
+	categories: Map<string, number>;
 }
 
-// ============ Lifecycle Management ============
+function getMemoryContext(): MemoryContext {
+	const ctx: MemoryContext = {
+		total: 0,
+		critical: [],
+		categories: new Map(),
+	};
+
+	// Get info for total count
+	const info = runDelta("info");
+	const memMatch = info.match(/memories\s+tags\s+tag_links\s*\n[-\s]+\n(\d+)/);
+	if (memMatch) {
+		ctx.total = parseInt(memMatch[1], 10);
+	}
+
+	// Get critical/high importance memories
+	const critical = runDelta("search --importance 4 --limit 20");
+	const high = runDelta("search --importance 3 --limit 30");
+
+	// Parse search output (table format)
+	const parseSearchOutput = (output: string, importance: string) => {
+		const lines = output.split("\n").slice(2); // Skip header and separator
+		for (const line of lines) {
+			const match = line.match(/^(\d+)\s+\w+\s+([\w,\s]*)\s+(.+?)\s+\d{4}-/);
+			if (match) {
+				ctx.critical.push({
+					id: parseInt(match[1], 10),
+					importance,
+					tags: match[2].trim(),
+					content: match[3].trim(),
+				});
+			}
+		}
+	};
+
+	parseSearchOutput(critical, "critical");
+	parseSearchOutput(high, "high");
+
+	// Get tag categories
+	const tags = runDelta("tags");
+	const tagLines = tags.split("\n").slice(2);
+	for (const line of tagLines) {
+		const match = line.match(/^\d+\s+(\w+)\s+(\d+)/);
+		if (match) {
+			ctx.categories.set(match[1], parseInt(match[2], 10));
+		}
+	}
+
+	return ctx;
+}
+
+// ============ Prompt Building ============
+
+function buildMemoryPrompt(ctx: MemoryContext, sessionWrites: number, idle: number): string {
+	const lines: string[] = ["<delta_memory>", ""];
+
+	// Header
+	lines.push("## Memory (mandatory)");
+	lines.push('- **BEFORE** work: `phi_delta search "query"` to check past context');
+	lines.push('- **AFTER** decisions, bugs, patterns: `phi_delta remember "content" --importance N` to persist');
+	lines.push(`- Status: ${sessionWrites} writes this session · ${idle} turns idle`);
+	lines.push("");
+
+	// CLI Reference
+	const help = getHelp();
+	if (help) {
+		lines.push("## CLI Reference");
+		lines.push("```");
+		lines.push(help);
+		lines.push("```");
+		lines.push("");
+	}
+
+	// Critical memories
+	if (ctx.critical.length > 0) {
+		lines.push("## Critical Knowledge (auto-loaded)");
+		lines.push("");
+		for (const mem of ctx.critical.slice(0, 15)) {
+			const tagStr = mem.tags ? ` {${mem.tags}}` : "";
+			lines.push(`### Memory #${mem.id} [${mem.importance.toUpperCase()}]${tagStr}`);
+			lines.push(mem.content);
+			lines.push("");
+		}
+	}
+
+	// Memory map
+	if (ctx.categories.size > 0) {
+		lines.push("## Memory Map");
+		const cats: string[] = [];
+		for (const [tag, count] of ctx.categories) {
+			cats.push(`  ${tag}: ${count}`);
+		}
+		lines.push(cats.slice(0, 10).join("\n"));
+		lines.push("");
+	}
+
+	lines.push("</delta_memory>");
+
+	return lines.join("\n");
+}
+
+// ============ Lifecycle ============
 
 export interface DeltaLifecycle {
-	/** Call on session start to reset state */
 	onSessionStart(): void;
-	/** Call on session shutdown to close DB */
 	onSessionShutdown(): void;
-	/** Call on tool_call event to track writes */
 	onToolCall(event: { toolName: string }): void;
-	/** Call on tool_result event to detect git commits */
 	onToolResult(event: { toolName: string; input: unknown; content: Array<{ type: string; text?: string }> }): void;
-	/** Call before agent starts to get system prompt addition and optional message */
 	onBeforeAgentStart(systemPrompt: string): {
 		systemPrompt: string;
 		message?: { customType: string; content: string; display: boolean };
 	};
 }
 
-/**
- * Create the delta lifecycle manager.
- */
 export function createDeltaLifecycle(): DeltaLifecycle {
 	return {
 		onSessionStart() {
 			resetState();
-			resetSession();
 		},
 
 		onSessionShutdown() {
-			closeDb();
+			// No DB to close - shell script handles it
 		},
 
 		onToolCall(event) {
-			if (DELTA_WRITE_TOOLS.has(event.toolName)) {
-				trackWrite();
+			// Track bash calls that use phi_delta write commands
+			if (event.toolName === "Bash" || event.toolName === "bash") {
+				// Will check command in onToolResult
 			}
 		},
 
 		onToolResult(event) {
-			if (!isBashToolResult(event)) return;
+			// Check for phi_delta writes via bash
+			if (event.toolName === "Bash" || event.toolName === "bash") {
+				const input = event.input as { command?: string } | undefined;
+				const command = String(input?.command ?? "");
 
-			const command = String(event.input.command ?? "");
-			if (!GIT_COMMIT_RE.test(command)) return;
+				// Track delta writes
+				if (DELTA_WRITE_PATTERNS.some((p) => command.includes(p))) {
+					trackWrite();
+				}
 
-			const output = event.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text" && typeof c.text === "string")
-				.map((c) => c.text)
-				.join("");
+				// Auto-capture git commits
+				if (GIT_COMMIT_RE.test(command)) {
+					const output = event.content
+						.filter((c): c is { type: "text"; text: string } => c.type === "text" && typeof c.text === "string")
+						.map((c) => c.text)
+						.join("");
 
-			const info = extractCommitInfo(output);
-			if (info) {
-				logEpisode(info, "git", ["commit", "auto-captured"]);
-				trackWrite();
+					const info = extractCommitInfo(output);
+					if (info) {
+						runDelta(`remember "${info.replace(/"/g, '\\"')}" --importance 2 --context "auto-captured"`);
+						trackWrite();
+					}
+				}
 			}
 		},
 
@@ -138,13 +272,7 @@ export function createDeltaLifecycle(): DeltaLifecycle {
 			turnCount++;
 
 			const ctx = getMemoryContext();
-
-			// Build memory prompt
-			const prompt = buildMemoryPrompt({
-				ctx,
-				sessionWrites: sessionWriteCount,
-				turnsIdle: turnsIdle(),
-			});
+			const prompt = buildMemoryPrompt(ctx, sessionWriteCount, turnsIdle());
 
 			const result: {
 				systemPrompt: string;
@@ -153,21 +281,22 @@ export function createDeltaLifecycle(): DeltaLifecycle {
 				systemPrompt: `${systemPrompt}\n\n${prompt}`,
 			};
 
-			// First turn: hidden welcome message
+			// First turn: welcome message
 			if (!firstTurnDone) {
 				firstTurnDone = true;
+				const memInfo = ctx.total > 0 ? `${ctx.total} memories (${ctx.critical.length} high/critical)` : "empty";
 				result.message = {
 					customType: "delta-memory",
-					content: buildWelcomeMessage(ctx),
+					content: `🧠 Delta memory loaded. Memory: ${memInfo}\nUse \`phi_delta search "query"\` to find relevant memories.`,
 					display: false,
 				};
 			}
-			// Idle nudge: hidden reminder after sustained inactivity
+			// Idle nudge
 			else if (shouldNudge()) {
 				lastNudgeTurn = turnCount;
 				result.message = {
 					customType: "delta-nudge",
-					content: `⚠ No memory writes in ${turnsIdle()} turns. If you've made decisions, found bugs, or learned patterns — use delta_remember(content, tags) to persist them.`,
+					content: `⚠ No memory writes in ${turnsIdle()} turns. If you've made decisions, found bugs, or learned patterns — use \`phi_delta remember "content" --importance N\` to persist them.`,
 					display: false,
 				};
 			}
@@ -177,20 +306,27 @@ export function createDeltaLifecycle(): DeltaLifecycle {
 	};
 }
 
-// ============ Helpers ============
+// ============ Exports for backward compatibility ============
 
-function buildWelcomeMessage(ctx: ReturnType<typeof getMemoryContext>): string {
-	const lines: string[] = [];
-
-	lines.push("🧠 Delta memory loaded. Use delta_remember() to persist knowledge, delta_search() to recall.");
-	lines.push("");
-
-	if (ctx.total > 0) {
-		lines.push(`Memory: ${ctx.total} memories (${ctx.important.length} high/critical)`);
-		lines.push("Use delta_search(query) to find relevant memories.");
-	} else {
-		lines.push("Memory is empty — start logging discoveries and decisions.");
-	}
-
-	return lines.join("\n");
+export function closeDb(): void {
+	// No-op - shell script handles DB
 }
+
+export function resetSession(): void {
+	resetState();
+}
+
+export function getMemoryContext_compat(): MemoryContext {
+	return getMemoryContext();
+}
+
+export function buildMemoryPrompt_compat(opts: {
+	ctx: MemoryContext;
+	sessionWrites: number;
+	turnsIdle: number;
+}): string {
+	return buildMemoryPrompt(opts.ctx, opts.sessionWrites, opts.turnsIdle);
+}
+
+// Re-export with original names for compatibility
+export { getMemoryContext_compat as getMemoryContextFn, buildMemoryPrompt_compat as buildMemoryPromptFn };
