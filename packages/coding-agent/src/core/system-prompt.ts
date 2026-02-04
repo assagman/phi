@@ -16,8 +16,6 @@ const toolDescriptions: Record<ToolName, string> = {
 	bash: "Execute bash commands (ls, rg, fd, etc.)",
 	edit: "Make surgical edits to files (find exact text and replace)",
 	write: "Create or overwrite files",
-	grep: "Search file contents for patterns (respects .gitignore)",
-	find: "Find files by glob pattern (respects .gitignore)",
 	ls: "List directory contents",
 	ast_grep: "Search code using AST patterns (understands code structure, not just text)",
 };
@@ -218,9 +216,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	const hasBash = tools.includes("bash");
 	const hasEdit = tools.includes("edit");
 	const hasWrite = tools.includes("write");
-	const hasGrep = tools.includes("grep");
-	const hasFind = tools.includes("find");
-	const hasLs = tools.includes("ls");
 	const hasRead = tools.includes("read");
 
 	// Bash without edit/write = read-only bash mode
@@ -231,10 +226,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	}
 
 	// File exploration guidelines
-	if (hasBash && !hasGrep && !hasFind && !hasLs) {
+	if (hasBash) {
 		guidelinesList.push("Use bash for file operations like ls, rg, fd");
-	} else if (hasBash && (hasGrep || hasFind || hasLs)) {
-		guidelinesList.push("Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)");
 	}
 
 	// Read before edit guideline
@@ -282,13 +275,16 @@ Pi documentation (only when the user asks about pi itself, its SDK, extensions, 
 - When asked to create: custom models/providers (README.md), extensions (docs/extensions.md, examples/extensions/), themes (docs/theme.md), skills (docs/skills.md), TUI components (docs/tui.md - has copy-paste patterns)
 - When working on pi topics, read the docs and examples, and follow .md cross-references before implementing
 
-Team Capabilities (use request_team_review tool):
-You can request specialized multi-agent team reviews. Describe your intent and optimal teams are selected automatically.
-- VALIDATION: code-review, full-audit, security-audit, quality-gate, quality, types, testing, architecture
-- SECURITY: security-deep, dependencies
-- RELEASE: pre-release, deliver, release-prep
-- WORKFLOW: before-coding, after-coding, quick-fix, feature
-Use for: security audits, code reviews before commits/PRs, performance analysis, pre-release checks, architecture reviews.`;
+Team Cooperation (use coop tool):
+Coordinate multi-agent teams for any coding task. Describe your intent and the system selects optimal teams automatically.
+- UNDERSTAND: understand, research, kickoff
+- DESIGN: design, deep-design
+- IMPLEMENT: plan, implement, refactor
+- VALIDATE: code-review, full-audit, security-audit, security-deep, performance, quality, types, testing, architecture, api-review, frontend, accessibility, docs, dependencies, quality-gate
+- VERIFY: verify, test-planning, acceptance
+- DELIVER: deliver, pre-release, release-prep
+- WORKFLOW: before-coding, after-coding, quick-fix, feature, greenfield, maintenance
+Use for: implementation, refactoring, reviews, audits, testing, and any complex task benefiting from specialized agents.`;
 
 	if (appendSection) {
 		prompt += appendSection;

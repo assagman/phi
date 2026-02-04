@@ -73,7 +73,7 @@ const team = new Team({
     createPreset(codeReviewerTemplate, model),
     createPreset(securityAuditorTemplate, model),
   ],
-  tools: [readTool, grepTool],
+  tools: [readTool, bashTool],
   strategy: "parallel",  // or "sequential"
   merge: { strategy: "union" },
 });

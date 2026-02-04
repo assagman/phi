@@ -283,7 +283,7 @@ if (errors.length === 0) {
 const team = new Team({
   name: "verified-review",
   agents: [codeReviewer, securityAuditor, perfAnalyzer],
-  tools: [readTool, grepTool],
+  tools: [readTool, bashTool],
   merge: {
     strategy: "verification",
     mergeAgent: createPreset(mergeSynthesizerTemplate, model),

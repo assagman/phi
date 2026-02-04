@@ -379,9 +379,8 @@ const { session } = await createAgentSession({
 ```typescript
 import {
   codingTools,   // read, bash, edit, write (default)
-  readOnlyTools, // read, grep, find, ls
-  readTool, bashTool, editTool, writeTool,
-  grepTool, findTool, lsTool,
+  readOnlyTools, // read, ls, ast_grep
+  readTool, bashTool, editTool, writeTool, lsTool,
 } from "coding-agent";
 
 // Use built-in tool set
@@ -389,9 +388,9 @@ const { session } = await createAgentSession({
   tools: readOnlyTools,
 });
 
-// Pick specific tools
+// Pick specific tools (use bash with rg/fd for grep/find)
 const { session } = await createAgentSession({
-  tools: [readTool, bashTool, grepTool],
+  tools: [readTool, bashTool],
 });
 ```
 
@@ -402,13 +401,11 @@ const { session } = await createAgentSession({
 ```typescript
 import {
   createCodingTools,    // Creates [read, bash, edit, write] for specific cwd
-  createReadOnlyTools,  // Creates [read, grep, find, ls] for specific cwd
+  createReadOnlyTools,  // Creates [read, ls, ast_grep] for specific cwd
   createReadTool,
   createBashTool,
   createEditTool,
   createWriteTool,
-  createGrepTool,
-  createFindTool,
   createLsTool,
 } from "coding-agent";
 
@@ -423,7 +420,7 @@ const { session } = await createAgentSession({
 // Or pick specific tools
 const { session } = await createAgentSession({
   cwd,
-  tools: [createReadTool(cwd), createBashTool(cwd), createGrepTool(cwd)],
+  tools: [createReadTool(cwd), createBashTool(cwd)],
 });
 ```
 
@@ -999,14 +996,12 @@ SettingsManager
 // Built-in tools (use process.cwd())
 codingTools
 readOnlyTools
-readTool, bashTool, editTool, writeTool
-grepTool, findTool, lsTool
+readTool, bashTool, editTool, writeTool, lsTool
 
 // Tool factories (for custom cwd)
 createCodingTools
 createReadOnlyTools
-createReadTool, createBashTool, createEditTool, createWriteTool
-createGrepTool, createFindTool, createLsTool
+createReadTool, createBashTool, createEditTool, createWriteTool, createLsTool
 
 // Types
 type CreateAgentSessionOptions

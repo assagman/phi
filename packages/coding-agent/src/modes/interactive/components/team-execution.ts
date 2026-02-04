@@ -1,10 +1,15 @@
 /**
  * Team execution progress component for inline chat display.
  * Shows hierarchical tree of agents with epsilon task progress.
+ *
+ * Supports two modes:
+ * 1. Direct team execution (via /team command) - shows single team's agents
+ * 2. Team review tool - shows lead analyzer phase, then multiple teams
  */
 
 import type { AgentTaskInfo, TeamEvent } from "agents";
 import { Container, Text, type TUI } from "tui";
+import type { CoopPhase } from "../../../core/tools/index.js";
 import { theme } from "../theme/theme.js";
 
 const PULSE_PERIOD_MS = 1500;
@@ -63,6 +68,12 @@ export class TeamExecutionComponent extends Container {
 	private pulseTimer?: ReturnType<typeof setInterval>;
 	private ui?: TUI;
 	private onInvalidate?: () => void;
+
+	// Team review tool specific state
+	private reviewPhase: CoopPhase | undefined;
+	private selectedTeams: string[] = [];
+	private leadReasoning: string | undefined;
+	private leadError: string | undefined;
 
 	constructor(teamName: string, agentNames: string[], ui?: TUI, onInvalidate?: () => void) {
 		super();
@@ -183,6 +194,7 @@ export class TeamExecutionComponent extends Container {
 	 */
 	setComplete(isError: boolean): void {
 		this.running = false;
+		this.reviewPhase = "complete";
 		this.stopPulse();
 		// Mark any still-running agents as errored if isError
 		if (isError) {
@@ -191,6 +203,34 @@ export class TeamExecutionComponent extends Container {
 					agent.status = "error";
 				}
 			}
+		}
+		this.update();
+	}
+
+	/**
+	 * Update review phase (for team review tool multi-phase execution)
+	 */
+	setReviewPhase(
+		phase: CoopPhase,
+		options?: {
+			selectedTeams?: string[];
+			reasoning?: string;
+			errorMessage?: string;
+		},
+	): void {
+		this.reviewPhase = phase;
+		if (options?.selectedTeams) {
+			this.selectedTeams = options.selectedTeams;
+		}
+		if (options?.reasoning) {
+			this.leadReasoning = options.reasoning;
+		}
+		if (options?.errorMessage) {
+			this.leadError = options.errorMessage;
+		}
+		if (phase === "lead_failed" || phase === "complete") {
+			this.running = false;
+			this.stopPulse();
 		}
 		this.update();
 	}
@@ -230,19 +270,69 @@ export class TeamExecutionComponent extends Container {
 
 		// Header with team name
 		const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(1);
-		const status = this.running ? this.pulsed("running") : theme.fg("success", "complete");
-		lines.push(`${theme.fg("accent", `⚑ Team: ${this.teamName}`)} ${theme.fg("muted", `(${elapsed}s)`)} ${status}`);
+		const statusText = this.getStatusText();
+		lines.push(
+			`${theme.fg("accent", `⚑ Team: ${this.teamName}`)} ${theme.fg("muted", `(${elapsed}s)`)} ${statusText}`,
+		);
 		lines.push("");
 
+		// If in lead analyzer phase (team review tool), show that
+		if (this.reviewPhase === "lead_analyzing") {
+			lines.push(`${this.pulsed("◐")} ${theme.fg("muted", "Analyzing project and selecting teams...")}`);
+			lines.push("");
+			lines.push(theme.fg("muted", "  The lead analyzer is:"));
+			lines.push(theme.fg("muted", "  • Searching memory for past context"));
+			lines.push(theme.fg("muted", "  • Analyzing project structure"));
+			lines.push(theme.fg("muted", "  • Selecting optimal review teams"));
+			this.text.setText(lines.join("\n"));
+			return;
+		}
+
+		// If lead analyzer failed, show error
+		if (this.reviewPhase === "lead_failed") {
+			lines.push(`${theme.fg("error", "✗")} Lead analyzer failed`);
+			if (this.leadError) {
+				lines.push("");
+				lines.push(theme.fg("error", `  ${this.truncate(this.leadError, 60)}`));
+			}
+			this.text.setText(lines.join("\n"));
+			return;
+		}
+
+		// If lead analyzer completed, show selected teams (before agents show up)
+		if (this.reviewPhase === "lead_complete" && this.selectedTeams.length > 0 && this.agents.size === 0) {
+			lines.push(`${theme.fg("success", "✓")} Teams selected: ${this.selectedTeams.join(", ")}`);
+			if (this.leadReasoning) {
+				lines.push("");
+				lines.push(theme.fg("muted", `  ${this.truncate(this.leadReasoning, 80)}`));
+			}
+			lines.push("");
+			lines.push(`${this.pulsed("◐")} ${theme.fg("muted", "Starting team execution...")}`);
+			this.text.setText(lines.join("\n"));
+			return;
+		}
+
+		// Show selected teams header if we have them (team review tool mode)
+		if (this.selectedTeams.length > 0) {
+			lines.push(theme.fg("muted", `Teams: ${this.selectedTeams.join(", ")}`));
+			lines.push("");
+		}
+
 		// Agent tree with progress
-		lines.push(theme.fg("muted", "Agents:"));
-		const agentList = Array.from(this.agents.values());
-		for (let i = 0; i < agentList.length; i++) {
-			const agent = agentList[i];
-			const isLast = i === agentList.length - 1;
-			const treeBranch = isLast ? TREE.last : TREE.branch;
-			const agentLine = this.formatAgentLine(agent, treeBranch);
-			lines.push(agentLine);
+		if (this.agents.size > 0) {
+			lines.push(theme.fg("muted", "Agents:"));
+			const agentList = Array.from(this.agents.values());
+			for (let i = 0; i < agentList.length; i++) {
+				const agent = agentList[i];
+				const isLast = i === agentList.length - 1;
+				const treeBranch = isLast ? TREE.last : TREE.branch;
+				const agentLine = this.formatAgentLine(agent, treeBranch);
+				lines.push(agentLine);
+			}
+		} else if (!this.reviewPhase) {
+			// Direct team execution mode with no agents yet
+			lines.push(theme.fg("muted", "Agents:"));
+			lines.push(theme.fg("muted", "  (loading...)"));
 		}
 
 		// Team progress summary
@@ -265,6 +355,16 @@ export class TeamExecutionComponent extends Container {
 		}
 
 		this.text.setText(lines.join("\n"));
+	}
+
+	private getStatusText(): string {
+		if (this.reviewPhase === "lead_failed") {
+			return theme.fg("error", "failed");
+		}
+		if (!this.running) {
+			return theme.fg("success", "complete");
+		}
+		return this.pulsed("running");
 	}
 
 	private formatAgentLine(agent: AgentStatus, treeBranch: string): string {

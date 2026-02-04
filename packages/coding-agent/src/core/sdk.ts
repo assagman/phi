@@ -63,17 +63,13 @@ import {
 	createAllTools,
 	createBashTool,
 	createCodingTools,
+	createCoopTool,
 	createEditTool,
-	createFindTool,
-	createGrepTool,
 	createLsTool,
 	createReadOnlyTools,
 	createReadTool,
-	createTeamReviewTool,
 	createWriteTool,
 	editTool,
-	findTool,
-	grepTool,
 	lsTool,
 	readOnlyTools,
 	readTool,
@@ -168,8 +164,6 @@ export {
 	bashTool,
 	editTool,
 	writeTool,
-	grepTool,
-	findTool,
 	lsTool,
 	codingTools,
 	readOnlyTools,
@@ -181,8 +175,6 @@ export {
 	createBashTool,
 	createEditTool,
 	createWriteTool,
-	createGrepTool,
-	createFindTool,
 	createLsTool,
 };
 
@@ -673,8 +665,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	});
 	time("createAgent");
 
-	// Create and register team review tool (needs agent for dynamic model access)
-	const teamReviewTool = createTeamReviewTool({
+	// Create and register coop tool (team cooperation - needs agent for dynamic model access)
+	const coopTool = createCoopTool({
 		cwd,
 		getModel: () => agent.state.model,
 		modelRegistry,
@@ -682,13 +674,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	});
 	// Add to both registries (cast needed due to TypeScript generic variance)
 	// The tool is fully type-safe internally; cast is only for registry compatibility
-	toolRegistry.set(teamReviewTool.name, teamReviewTool as unknown as AgentTool);
+	toolRegistry.set(coopTool.name, coopTool as unknown as AgentTool);
 	if (wrappedToolRegistry) {
-		wrappedToolRegistry.set(teamReviewTool.name, teamReviewTool as unknown as AgentTool);
+		wrappedToolRegistry.set(coopTool.name, coopTool as unknown as AgentTool);
 	}
 	// Add to active tools array (it's always active)
-	activeToolsArray.push(teamReviewTool as unknown as Tool);
-	time("createTeamReviewTool");
+	activeToolsArray.push(coopTool as unknown as Tool);
+	time("createCoopTool");
 
 	// Create mutable UI context for builtin tools (sigma, handoff)
 	// Interactive mode will populate this with real implementations

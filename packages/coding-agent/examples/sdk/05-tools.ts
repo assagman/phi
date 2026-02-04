@@ -16,9 +16,7 @@ import {
 	createAgentSession,
 	createBashTool,
 	createCodingTools,
-	createGrepTool,
 	createReadTool,
-	grepTool,
 	readOnlyTools,
 	readTool,
 	SessionManager,
@@ -32,8 +30,9 @@ await createAgentSession({
 console.log("Read-only session created");
 
 // Custom tool selection - uses process.cwd()
+// Note: Use bash tool with rg/fd for grep/find functionality
 await createAgentSession({
-	tools: [readTool, bashTool, grepTool],
+	tools: [readTool, bashTool],
 	sessionManager: SessionManager.inMemory(),
 });
 console.log("Custom tools session created");
@@ -50,7 +49,7 @@ console.log("Custom cwd session created");
 // Or pick specific tools for custom cwd
 await createAgentSession({
 	cwd: customCwd,
-	tools: [createReadTool(customCwd), createBashTool(customCwd), createGrepTool(customCwd)],
+	tools: [createReadTool(customCwd), createBashTool(customCwd)],
 	sessionManager: SessionManager.inMemory(),
 });
 console.log("Specific tools with custom cwd session created");
