@@ -80,6 +80,49 @@ function formatTime(timestamp: number): string {
 	return date.toLocaleDateString();
 }
 
+function tryParseJsonString(value: string): unknown | null {
+	const trimmed = value.trim();
+	if (!trimmed) return null;
+	const first = trimmed[0];
+	const last = trimmed[trimmed.length - 1];
+	if (!((first === "{" && last === "}") || (first === "[" && last === "]"))) return null;
+	try {
+		return JSON.parse(trimmed) as unknown;
+	} catch {
+		return null;
+	}
+}
+
+function normalizeArgs(args: Record<string, unknown>): Record<string, unknown> {
+	let changed = false;
+	const normalized: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(args)) {
+		if (typeof value === "string") {
+			const parsed = tryParseJsonString(value);
+			if (parsed !== null) {
+				normalized[key] = parsed;
+				changed = true;
+				continue;
+			}
+		}
+		normalized[key] = value;
+	}
+	return changed ? normalized : args;
+}
+
+function formatArgsJson(args: Record<string, unknown>): string | null {
+	if (Object.keys(args).length === 0) return null;
+	const normalized = normalizeArgs(args);
+	const json = JSON.stringify(normalized, null, 2);
+	return json ?? null;
+}
+
+function formatArgsSummary(args: Record<string, unknown>): string {
+	const formatted = formatArgsJson(args);
+	if (!formatted) return "";
+	return formatted.replace(/\s+/g, " ").substring(0, 40);
+}
+
 function getResultText(execution: ToolExecution): string {
 	const texts = execution.resultContent
 		.filter((c) => c.type === "text" && c.text)
@@ -121,7 +164,7 @@ function getSummary(execution: ToolExecution): string {
 			return String(args.pattern ?? "");
 
 		default:
-			return Object.keys(args).length > 0 ? JSON.stringify(args).substring(0, 40) : "";
+			return formatArgsSummary(args);
 	}
 }
 
@@ -451,15 +494,17 @@ class ToolHistoryDetail implements Component, Focusable {
 		const exec = this.execution;
 		const contentWidth = Math.max(20, width - 4); // Leave margin
 
-		// ─── Arguments Section ───
-		lines.push(theme.fg("accent", `┌─ Arguments ─${"─".repeat(Math.max(0, contentWidth - 13))}`));
-		const argsJson = JSON.stringify(exec.args, null, 2);
-		const highlightedArgs = highlightCode(argsJson, "json");
-		for (const line of highlightedArgs) {
-			const wrapped = wrapTextWithAnsi(`  ${line}`, contentWidth);
-			lines.push(...wrapped);
+		const argsJson = formatArgsJson(exec.args);
+		if (argsJson) {
+			// ─── Arguments Section ───
+			lines.push(theme.fg("accent", `┌─ Arguments ─${"─".repeat(Math.max(0, contentWidth - 13))}`));
+			const highlightedArgs = highlightCode(argsJson, "json");
+			for (const line of highlightedArgs) {
+				const wrapped = wrapTextWithAnsi(`  ${line}`, contentWidth);
+				lines.push(...wrapped);
+			}
+			lines.push("");
 		}
-		lines.push("");
 
 		// ─── Output Section ───
 		const resultText = getResultText(exec);
@@ -620,8 +665,8 @@ class ToolHistoryDetail implements Component, Focusable {
 		// Copy to clipboard
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "y")) {
 			const resultText = getResultText(this.execution);
-			const argsJson = JSON.stringify(this.execution.args, null, 2);
-			this.onCopy?.(resultText || argsJson);
+			const argsJson = formatArgsJson(this.execution.args);
+			this.onCopy?.(resultText || argsJson || "");
 			return;
 		}
 

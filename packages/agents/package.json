@@ -16,10 +16,8 @@
 		"test": "vitest --run"
 	},
 	"dependencies": {
-		"@sinclair/typebox": "^0.34.48",
 		"agent": "*",
-		"ai": "*",
-		"events": "*"
+		"ai": "*"
 	},
 	"devDependencies": {
 		"@types/node": "^24.3.0",

@@ -21,7 +21,6 @@ export { type ModelsCallbacks, type ModelsConfig, ScopedModelsSelectorComponent 
 export { SessionSelectorComponent } from "./session-selector.js";
 export { type SettingsCallbacks, type SettingsConfig, SettingsSelectorComponent } from "./settings-selector.js";
 export { ShowImagesSelectorComponent } from "./show-images-selector.js";
-export { TeamSelectorComponent } from "./team-selector.js";
 export { ThemeSelectorComponent } from "./theme-selector.js";
 export { ThinkingSelectorComponent } from "./thinking-selector.js";
 export { ToolExecutionComponent, type ToolResult } from "./tool-execution.js";

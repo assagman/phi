@@ -34,7 +34,6 @@
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"@sinclair/typebox": "^0.34.48",
 		"agent": "*",
-		"agents": "*",
 		"ai": "*",
 		"events": "*",
 		"ajv": "^8.17.1",

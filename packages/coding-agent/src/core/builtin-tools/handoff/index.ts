@@ -17,6 +17,7 @@ import { complete, type Message } from "ai";
 import type { Component, OverlayOptions, TUI } from "tui";
 import { BorderedLoader } from "../../../modes/interactive/components/bordered-loader.js";
 import type { Theme } from "../../../modes/interactive/theme/theme.js";
+import { extensionsLog } from "../../../utils/logger.js";
 
 export { HandoffCommand } from "./command.js";
 
@@ -173,8 +174,11 @@ export function createHandoffTool(context: HandoffToolContext, ui: HandoffUICont
 
 					doGenerate()
 						.then(done)
-						.catch((err) => {
-							console.error("Handoff generation failed:", err);
+						.catch((err: unknown) => {
+							// Log error instead of console.error to avoid leaking implementation details (#379)
+							extensionsLog.error("Handoff generation failed", {
+								error: err instanceof Error ? err.message : String(err),
+							});
 							done(null);
 						});
 

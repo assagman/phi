@@ -8,6 +8,7 @@ import { complete, type Message, type Model } from "ai";
 import type { Component, TUI } from "tui";
 import { BorderedLoader } from "../../../modes/interactive/components/bordered-loader.js";
 import type { Theme } from "../../../modes/interactive/theme/theme.js";
+import { extensionsLog } from "../../../utils/logger.js";
 
 // ─── System Prompt ──────────────────────────────────────────────────────────
 
@@ -145,8 +146,11 @@ export const HandoffCommand = {
 
 				doGenerate()
 					.then(done)
-					.catch((err) => {
-						console.error("Handoff generation failed:", err);
+					.catch((err: unknown) => {
+						// Log error instead of console.error to avoid leaking implementation details (#379)
+						extensionsLog.error("Handoff generation failed", {
+							error: err instanceof Error ? err.message : String(err),
+						});
 						done(null);
 					});
 

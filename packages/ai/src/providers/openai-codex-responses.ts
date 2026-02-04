@@ -23,6 +23,9 @@ import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { transformMessages } from "./transform-messages.js";
 
+// WeakMap to track partial JSON for tool calls without mutating content objects (#179)
+const partialJsonMap = new WeakMap<ToolCall, string>();
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -399,7 +402,8 @@ async function processStream(
 	model: Model<"openai-codex-responses">,
 ): Promise<void> {
 	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | null = null;
-	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
+	// Use WeakMap for partial JSON tracking instead of extending ToolCall type (#179)
+	let currentBlock: ThinkingContent | TextContent | ToolCall | null = null;
 	const blockIndex = () => output.content.length - 1;
 
 	for await (const event of parseSSE(response)) {
@@ -425,9 +429,10 @@ async function processStream(
 						id: `${item.call_id}|${item.id}`,
 						name: item.name,
 						arguments: {},
-						partialJson: item.arguments || "",
 					};
 					output.content.push(currentBlock);
+					// Track partial JSON in WeakMap (#179)
+					partialJsonMap.set(currentBlock, item.arguments || "");
 					stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
 				}
 				break;
@@ -506,8 +511,11 @@ async function processStream(
 			case "response.function_call_arguments.delta": {
 				if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
 					const delta = (event as { delta?: string }).delta || "";
-					currentBlock.partialJson += delta;
-					currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+					// Use WeakMap for partial JSON tracking (#179)
+					const currentJson = partialJsonMap.get(currentBlock) ?? "";
+					const newJson = currentJson + delta;
+					partialJsonMap.set(currentBlock, newJson);
+					currentBlock.arguments = parseStreamingJson(newJson);
 					stream.push({ type: "toolcall_delta", contentIndex: blockIndex(), delta, partial: output });
 				}
 				break;

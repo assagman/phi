@@ -7,7 +7,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { createWriteStream, type WriteStream } from "node:fs";
+import { createWriteStream, unlinkSync, type WriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ChildProcess, spawn } from "child_process";
@@ -15,6 +15,61 @@ import stripAnsi from "strip-ansi";
 import { getShellConfig, killProcessTree, sanitizeBinaryOutput } from "../utils/shell.js";
 import type { BashOperations } from "./tools/bash.js";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.js";
+
+// ============================================================================
+// Temp File Cleanup (#176)
+// ============================================================================
+
+/** Track temp files for cleanup on process exit */
+const pendingTempFiles = new Set<string>();
+
+/**
+ * Register a temp file for cleanup.
+ * Files are cleaned up on process exit or can be cleaned manually.
+ */
+export function registerTempFile(filePath: string): void {
+	pendingTempFiles.add(filePath);
+}
+
+/**
+ * Clean up a specific temp file.
+ * Call this when the file is no longer needed.
+ */
+export function cleanupTempFile(filePath: string): void {
+	if (pendingTempFiles.has(filePath)) {
+		try {
+			unlinkSync(filePath);
+		} catch {
+			// File may already be deleted or inaccessible
+		}
+		pendingTempFiles.delete(filePath);
+	}
+}
+
+/**
+ * Clean up all tracked temp files.
+ */
+export function cleanupAllTempFiles(): void {
+	for (const filePath of pendingTempFiles) {
+		try {
+			unlinkSync(filePath);
+		} catch {
+			// File may already be deleted or inaccessible
+		}
+	}
+	pendingTempFiles.clear();
+}
+
+// Register cleanup on process exit
+process.on("exit", cleanupAllTempFiles);
+process.on("SIGINT", () => {
+	cleanupAllTempFiles();
+	process.exit(130);
+});
+process.on("SIGTERM", () => {
+	cleanupAllTempFiles();
+	process.exit(143);
+});
 
 // ============================================================================
 // Types
@@ -110,6 +165,8 @@ export function executeBash(command: string, options?: BashExecutorOptions): Pro
 			if (totalBytes > DEFAULT_MAX_BYTES && !tempFilePath) {
 				const id = randomBytes(8).toString("hex");
 				tempFilePath = join(tmpdir(), `pi-bash-${id}.log`);
+				// Register temp file for cleanup (#176)
+				registerTempFile(tempFilePath);
 				tempFileStream = createWriteStream(tempFilePath);
 				// Write already-buffered chunks to temp file
 				for (const chunk of outputChunks) {
@@ -209,6 +266,8 @@ export async function executeBashWithOperations(
 		if (totalBytes > DEFAULT_MAX_BYTES && !tempFilePath) {
 			const id = randomBytes(8).toString("hex");
 			tempFilePath = join(tmpdir(), `pi-bash-${id}.log`);
+			// Register temp file for cleanup (#176)
+			registerTempFile(tempFilePath);
 			tempFileStream = createWriteStream(tempFilePath);
 			for (const chunk of outputChunks) {
 				tempFileStream.write(chunk);

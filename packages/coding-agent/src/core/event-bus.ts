@@ -5,25 +5,16 @@
  * - SQLite persistence via packages/events
  * - Real-time subscriptions for UI
  * - Backward-compatible emit/on interface
- * - TeamEventEmitter interface for agents package integration
  */
 
 import { EventEmitter } from "node:events";
-import type { TeamEventEmitter } from "agents";
 // Note: Using relative path because "events" conflicts with Node.js built-in module
 // TODO: Rename packages/events to @phi/events or similar
 import type {
-	AgentEndPayload,
-	AgentStartPayload,
 	Event,
 	EventType,
-	FindingPayload,
-	LeadOutputPayload,
 	LlmResponsePayload,
-	MergePayload,
 	EventBus as SqliteEventBus,
-	TeamEndPayload,
-	TeamStartPayload,
 	ToolCallEndPayload,
 	ToolCallStartPayload,
 } from "../../../events/src/index.js";
@@ -32,16 +23,9 @@ import { createEventBus as createSqliteEventBus } from "../../../events/src/inde
 // ============ Re-export types from events package ============
 
 export type {
-	AgentEndPayload,
-	AgentStartPayload,
 	Event,
 	EventType,
-	FindingPayload,
-	LeadOutputPayload,
 	LlmResponsePayload,
-	MergePayload,
-	TeamEndPayload,
-	TeamStartPayload,
 	ToolCallEndPayload,
 	ToolCallStartPayload,
 } from "../../../events/src/index.js";
@@ -165,149 +149,6 @@ export class PersistentEventBus {
 			stopReason,
 		};
 		return this.emit("llm_response", "agent-session", payload);
-	}
-
-	/**
-	 * Emit a team_start event.
-	 */
-	emitTeamStart(teamName: string, agents: string[], task: string): number {
-		const payload: TeamStartPayload = { teamName, agents, task };
-		return this.emit("team_start", "coop", payload);
-	}
-
-	/**
-	 * Emit a team_end event.
-	 */
-	emitTeamEnd(
-		teamName: string,
-		success: boolean,
-		findingCount: number,
-		durationMs: number,
-		error?: string,
-		parentEventId?: number,
-	): number {
-		const payload: TeamEndPayload = { teamName, success, findingCount, durationMs, error };
-		return this.emit("team_end", "coop", payload, parentEventId);
-	}
-
-	/**
-	 * Emit a lead_output event.
-	 */
-	emitLeadOutput(selectedTeams: string[], executionWaves: string[][], intent: string, reasoning: string): number {
-		const payload: LeadOutputPayload = { selectedTeams, executionWaves, intent, reasoning };
-		return this.emit("lead_output", "coop", payload);
-	}
-
-	/**
-	 * Emit a finding event.
-	 */
-	emitFinding(
-		agentName: string,
-		category: string,
-		severity: "critical" | "high" | "medium" | "low" | "info",
-		title: string,
-		description: string,
-		file?: string,
-		line?: number,
-		suggestion?: string,
-		parentEventId?: number,
-	): number {
-		const payload: FindingPayload = {
-			agentName,
-			category,
-			severity,
-			title,
-			description,
-			file,
-			line,
-			suggestion,
-		};
-		return this.emit("finding", "coop", payload, parentEventId);
-	}
-
-	/**
-	 * Emit an agent_start event.
-	 */
-	emitAgentStart(agentName: string, teamName: string): number {
-		const payload: AgentStartPayload = { agentName, teamName };
-		return this.emit("agent_start", "team", payload);
-	}
-
-	/**
-	 * Emit an agent_end event.
-	 */
-	emitAgentEnd(
-		agentName: string,
-		teamName: string,
-		success: boolean,
-		findingCount: number,
-		durationMs: number,
-		error?: string,
-		parentEventId?: number,
-	): number {
-		const payload: AgentEndPayload = { agentName, teamName, success, findingCount, durationMs, error };
-		return this.emit("agent_end", "team", payload, parentEventId);
-	}
-
-	/**
-	 * Emit a merge_start event.
-	 */
-	emitMergeStart(strategy: string, inputFindingCount: number, parentEventId?: number): number {
-		const payload: MergePayload = { phase: "start", strategy, inputFindingCount };
-		return this.emit("merge_start", "team", payload, parentEventId);
-	}
-
-	/**
-	 * Emit a merge_end event.
-	 */
-	emitMergeEnd(outputFindingCount: number, parentEventId?: number): number {
-		const payload: MergePayload = { phase: "end", outputFindingCount };
-		return this.emit("merge_end", "team", payload, parentEventId);
-	}
-
-	/**
-	 * Create a TeamEventEmitter interface for use with the agents package.
-	 * This allows the agents package to emit events without depending on coding-agent.
-	 */
-	createTeamEventEmitter(): TeamEventEmitter {
-		return {
-			emitAgentStart: (agentName: string, teamName: string) => this.emitAgentStart(agentName, teamName),
-			emitAgentEnd: (
-				agentName: string,
-				teamName: string,
-				success: boolean,
-				findingCount: number,
-				durationMs: number,
-				error?: string,
-				parentEventId?: number,
-			) => this.emitAgentEnd(agentName, teamName, success, findingCount, durationMs, error, parentEventId),
-			emitFinding: (
-				agentName: string,
-				category: string,
-				severity: "critical" | "high" | "medium" | "low" | "info",
-				title: string,
-				description: string,
-				file?: string,
-				line?: number,
-				suggestion?: string,
-				parentEventId?: number,
-			) =>
-				this.emitFinding(agentName, category, severity, title, description, file, line, suggestion, parentEventId),
-			emitTeamStart: (teamName: string, agents: string[], task: string) =>
-				this.emitTeamStart(teamName, agents, task),
-			emitTeamEnd: (
-				teamName: string,
-				success: boolean,
-				findingCount: number,
-				durationMs: number,
-				error?: string,
-				parentEventId?: number,
-			) => this.emitTeamEnd(teamName, success, findingCount, durationMs, error, parentEventId),
-			emitMergeStart: (strategy: string, inputFindingCount: number, parentEventId?: number) =>
-				this.emitMergeStart(strategy, inputFindingCount, parentEventId),
-			emitMergeEnd: (outputFindingCount: number, parentEventId?: number) =>
-				this.emitMergeEnd(outputFindingCount, parentEventId),
-		};
 	}
 
 	/**

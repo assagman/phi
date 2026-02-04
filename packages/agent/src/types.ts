@@ -122,11 +122,22 @@ export interface CustomAgentMessages {
 }
 
 /**
+ * Helper type to safely extract custom message values.
+ * Returns `never` when CustomAgentMessages is empty, avoiding the never-in-union issue (#331).
+ */
+type CustomMessageValues = keyof CustomAgentMessages extends never
+	? never
+	: CustomAgentMessages[keyof CustomAgentMessages];
+
+/**
  * AgentMessage: Union of LLM messages + custom messages.
  * This abstraction allows apps to add custom message types while maintaining
  * type safety and compatibility with the base LLM messages.
+ *
+ * When CustomAgentMessages is empty (default), this is equivalent to just Message.
+ * When apps extend CustomAgentMessages, custom message types are included in the union.
  */
-export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessages];
+export type AgentMessage = Message | CustomMessageValues;
 
 /**
  * Agent state containing all configuration and conversation data.

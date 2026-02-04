@@ -28,6 +28,9 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
 import { transformMessages } from "./transform-messages.js";
 
+// WeakMap to track partial JSON for tool calls without mutating content objects (#179)
+const partialJsonMap = new WeakMap<ToolCall, string>();
+
 // Stealth mode: Mimic Claude Code's tool naming exactly
 const claudeCodeVersion = "2.1.2";
 
@@ -175,7 +178,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			const anthropicStream = client.messages.stream({ ...params, stream: true }, { signal: options?.signal });
 			stream.push({ type: "start", partial: output });
 
-			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
+			// Use WeakMap for partial JSON tracking instead of mutating content objects (#179)
+			type Block = (ThinkingContent | TextContent | ToolCall) & { index: number };
 			const blocks = output.content as Block[];
 
 			for await (const event of anthropicStream) {
@@ -216,10 +220,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								? fromClaudeCodeName(event.content_block.name, context.tools)
 								: event.content_block.name,
 							arguments: event.content_block.input as Record<string, any>,
-							partialJson: "",
 							index: event.index,
 						};
 						output.content.push(block);
+						// Track partial JSON in WeakMap (#179)
+						partialJsonMap.set(block, "");
 						stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
 					}
 				} else if (event.type === "content_block_delta") {
@@ -251,8 +256,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						const index = blocks.findIndex((b) => b.index === event.index);
 						const block = blocks[index];
 						if (block && block.type === "toolCall") {
-							block.partialJson += event.delta.partial_json;
-							block.arguments = parseStreamingJson(block.partialJson);
+							// Use WeakMap for partial JSON tracking (#179)
+							const currentJson = partialJsonMap.get(block) ?? "";
+							const newJson = currentJson + event.delta.partial_json;
+							partialJsonMap.set(block, newJson);
+							block.arguments = parseStreamingJson(newJson);
 							stream.push({
 								type: "toolcall_delta",
 								contentIndex: index,
@@ -288,8 +296,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								partial: output,
 							});
 						} else if (block.type === "toolCall") {
-							block.arguments = parseStreamingJson(block.partialJson);
-							delete (block as any).partialJson;
+							// Final parse using WeakMap - WeakMap auto-cleans when block is GC'd (#179)
+							const finalJson = partialJsonMap.get(block) ?? "";
+							block.arguments = parseStreamingJson(finalJson);
 							stream.push({
 								type: "toolcall_end",
 								contentIndex: index,

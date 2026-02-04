@@ -392,23 +392,20 @@ export class Agent {
 						this.appendMessage(event.message);
 						break;
 
-					case "tool_execution_start": {
-						const s = new Set(this._state.pendingToolCalls);
-						s.add(event.toolCallId);
-						this._state.pendingToolCalls = s;
+					case "tool_execution_start":
+						// Mutate directly - no need for immutable copy (#311)
+						this._state.pendingToolCalls.add(event.toolCallId);
 						break;
-					}
 
-					case "tool_execution_end": {
-						const s = new Set(this._state.pendingToolCalls);
-						s.delete(event.toolCallId);
-						this._state.pendingToolCalls = s;
+					case "tool_execution_end":
+						// Mutate directly - no need for immutable copy (#311)
+						this._state.pendingToolCalls.delete(event.toolCallId);
 						break;
-					}
 
 					case "turn_end":
-						if (event.message.role === "assistant" && (event.message as any).errorMessage) {
-							this._state.error = (event.message as any).errorMessage;
+						// Type-safe access to errorMessage (#183)
+						if (event.message.role === "assistant" && event.message.errorMessage) {
+							this._state.error = event.message.errorMessage;
 						}
 						break;
 
@@ -438,7 +435,9 @@ export class Agent {
 					}
 				}
 			}
-		} catch (err: any) {
+		} catch (err: unknown) {
+			// Type-safe error handling (#177)
+			const errorMessage = err instanceof Error ? err.message : String(err);
 			const errorMsg: AgentMessage = {
 				role: "assistant",
 				content: [{ type: "text", text: "" }],
@@ -454,12 +453,12 @@ export class Agent {
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 				},
 				stopReason: this.abortController?.signal.aborted ? "aborted" : "error",
-				errorMessage: err?.message || String(err),
+				errorMessage,
 				timestamp: Date.now(),
 			} as AgentMessage;
 
 			this.appendMessage(errorMsg);
-			this._state.error = err?.message || String(err);
+			this._state.error = errorMessage;
 			this.emit({ type: "agent_end", messages: [errorMsg] });
 		} finally {
 			this._state.isStreaming = false;

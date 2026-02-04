@@ -6,7 +6,10 @@ import { highlightCode, type ThemeColor, theme } from "../theme/theme.js";
 
 const MAX_ERROR_LINES = 10;
 const MAX_CMD_LINES = 10;
+const MAX_ARG_LINES = 12;
 const PULSE_PERIOD_MS = 1500; // Full pulse cycle duration
+
+const ARG_TOOL_PREFIXES = ["agentsbox_", "delta_", "epsilon_"];
 
 const ICONS: Record<string, string> = {
 	read: "\uf02d", // nf-fa-book
@@ -197,6 +200,66 @@ export class ToolExecutionComponent extends Container {
 		return `\x1b[3m${theme.fg("toolPath", path)}\x1b[23m`;
 	}
 
+	private hasArgs(): boolean {
+		return Object.keys(this.args).length > 0;
+	}
+
+	private shouldRenderArgs(): boolean {
+		return this.hasArgs() && ARG_TOOL_PREFIXES.some((prefix) => this.toolName.startsWith(prefix));
+	}
+
+	private tryParseJsonString(value: string): unknown | null {
+		const trimmed = value.trim();
+		if (!trimmed) return null;
+		const first = trimmed[0];
+		const last = trimmed[trimmed.length - 1];
+		if (!((first === "{" && last === "}") || (first === "[" && last === "]"))) return null;
+		try {
+			return JSON.parse(trimmed) as unknown;
+		} catch {
+			return null;
+		}
+	}
+
+	private normalizeArgs(): Record<string, unknown> {
+		let changed = false;
+		const normalized: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(this.args)) {
+			if (typeof value === "string") {
+				const parsed = this.tryParseJsonString(value);
+				if (parsed !== null) {
+					normalized[key] = parsed;
+					changed = true;
+					continue;
+				}
+			}
+			normalized[key] = value;
+		}
+		return changed ? normalized : this.args;
+	}
+
+	private formatArgsLines(): string[] {
+		if (!this.shouldRenderArgs()) return [];
+		const argsJson = JSON.stringify(this.normalizeArgs(), null, 2);
+		if (!argsJson) return [];
+		const highlighted = highlightCode(argsJson, "json");
+		if (highlighted.length === 0) return [];
+
+		const label = theme.fg("muted", "args:");
+		const indent = "   ";
+		const continuation = " ".repeat(6);
+
+		const maxLines = Math.min(highlighted.length, MAX_ARG_LINES);
+		const lines = [`${indent}${label} ${highlighted[0] ?? ""}`];
+		for (const line of highlighted.slice(1, maxLines)) {
+			lines.push(`${indent}${continuation}${line}`);
+		}
+		if (highlighted.length > MAX_ARG_LINES) {
+			lines.push(`${indent}${theme.fg("muted", `… ${highlighted.length - MAX_ARG_LINES} more lines`)}`);
+		}
+		return lines;
+	}
+
 	private formatLine(): string {
 		const i = theme.fg(this.iconColor(), this.icon());
 		const s = this.status();
@@ -300,8 +363,12 @@ export class ToolExecutionComponent extends Container {
 
 	private update(): void {
 		const main = this.formatLine();
+		const argsLines = this.formatArgsLines();
 		const errors = this.errorLines();
-		this.text.setText(errors.length ? `${main}\n${errors.join("\n")}` : main);
+		const sections = [main];
+		if (argsLines.length) sections.push(argsLines.join("\n"));
+		if (errors.length) sections.push(errors.join("\n"));
+		this.text.setText(sections.join("\n"));
 	}
 
 	// Compatibility stubs (no-op)

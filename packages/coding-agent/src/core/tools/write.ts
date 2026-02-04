@@ -95,14 +95,14 @@ export function createWriteTool(cwd: string, options?: WriteToolOptions): AgentT
 								content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
 								details: undefined,
 							});
-						} catch (error: any) {
+						} catch (error: unknown) {
 							// Clean up abort handler
 							if (signal) {
 								signal.removeEventListener("abort", onAbort);
 							}
 
 							if (!aborted) {
-								reject(error);
+								reject(error instanceof Error ? error : new Error(String(error)));
 							}
 						}
 					})();

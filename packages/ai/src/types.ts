@@ -174,7 +174,7 @@ export interface AssistantMessage {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
-export interface ToolResultMessage<TDetails = any> {
+export interface ToolResultMessage<TDetails = unknown> {
 	role: "toolResult";
 	toolCallId: string;
 	toolName: string;

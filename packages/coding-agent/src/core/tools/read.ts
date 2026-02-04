@@ -207,18 +207,20 @@ export function createReadTool(cwd: string, options?: ReadToolOptions): AgentToo
 								hasTruncation: !!details?.truncation,
 							});
 							resolve({ content, details });
-						} catch (error: any) {
+						} catch (error: unknown) {
 							// Clean up abort handler
 							if (signal) {
 								signal.removeEventListener("abort", onAbort);
 							}
 
 							if (!aborted) {
+								// Type-safe error handling (#177)
+								const errorMessage = error instanceof Error ? error.message : String(error);
 								toolsLog.debug("read execute error", {
 									path,
-									error: error.message || String(error),
+									error: errorMessage,
 								});
-								reject(error);
+								reject(error instanceof Error ? error : new Error(errorMessage));
 							}
 						}
 					})();
