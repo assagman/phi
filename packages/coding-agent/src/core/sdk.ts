@@ -24,8 +24,15 @@ import { Agent, type AgentMessage, type AgentTool, type ThinkingLevel } from "ag
 import type { Message, Model } from "ai";
 import { join } from "path";
 import { getAgentDir } from "../config.js";
+
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
+import {
+	type BuiltinToolsLifecycle,
+	createBuiltinToolsLifecycle,
+	createBuiltinUIContext,
+} from "./builtin-tools/index.js";
+import { serializeConversation } from "./compaction/utils.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
 import {
 	createExtensionRuntime,
@@ -38,7 +45,7 @@ import {
 	wrapRegisteredTools,
 	wrapToolsWithExtensions,
 } from "./extensions/index.js";
-import { convertToLlm } from "./messages.js";
+import { convertToLlm, convertToLlm as convertToLlmMessages } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./prompt-templates.js";
 import { SessionManager } from "./session-manager.js";
@@ -62,6 +69,7 @@ import {
 	createLsTool,
 	createReadOnlyTools,
 	createReadTool,
+	createTeamReviewTool,
 	createWriteTool,
 	editTool,
 	findTool,
@@ -136,6 +144,8 @@ export interface CreateAgentSessionResult {
 	extensionsResult: LoadExtensionsResult;
 	/** Warning if session was restored with a different model than saved */
 	modelFallbackMessage?: string;
+	/** Builtin tools lifecycle (for UI context setup in interactive mode) */
+	builtinToolsLifecycle: BuiltinToolsLifecycle;
 }
 
 // Re-exports
@@ -528,6 +538,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolRegistry.set(tool.name, tool);
 	}
 
+	// Create builtin tools lifecycle (delta, epsilon, sigma, handoff)
+	// This is declared with let so we can assign it after agent is created
+	let builtinToolsLifecycle: BuiltinToolsLifecycle | undefined;
+
 	// Initially active tools = active built-in + extension tools
 	// Extension tools can override built-in tools with the same name
 	const extensionToolNames = new Set(wrappedExtensionTools.map((t) => t.name));
@@ -659,6 +673,72 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	});
 	time("createAgent");
 
+	// Create and register team review tool (needs agent for dynamic model access)
+	const teamReviewTool = createTeamReviewTool({
+		cwd,
+		getModel: () => agent.state.model,
+		modelRegistry,
+		getSessionTools: () => Array.from((wrappedToolRegistry ?? toolRegistry).values()),
+	});
+	// Add to both registries (cast needed due to TypeScript generic variance)
+	// The tool is fully type-safe internally; cast is only for registry compatibility
+	toolRegistry.set(teamReviewTool.name, teamReviewTool as unknown as AgentTool);
+	if (wrappedToolRegistry) {
+		wrappedToolRegistry.set(teamReviewTool.name, teamReviewTool as unknown as AgentTool);
+	}
+	// Add to active tools array (it's always active)
+	activeToolsArray.push(teamReviewTool as unknown as Tool);
+	time("createTeamReviewTool");
+
+	// Create mutable UI context for builtin tools (sigma, handoff)
+	// Interactive mode will populate this with real implementations
+	const builtinUIContext = createBuiltinUIContext();
+
+	// Create builtin tools lifecycle (delta, epsilon, sigma, handoff)
+	// These need agent for dynamic model access
+	builtinToolsLifecycle = createBuiltinToolsLifecycle({
+		getSessionBranch: () => sessionManager.getBranch(),
+		ui: builtinUIContext,
+		handoffContext: {
+			getModel: () => agent.state.model,
+			getApiKey: async (m) => {
+				const key = await modelRegistry.getApiKey(m);
+				if (!key) throw new Error(`No API key for ${m.provider}`);
+				return key;
+			},
+			getConversationText: () => {
+				const messages = agent.state.messages;
+				const llmMessages = convertToLlmMessages(messages);
+				return serializeConversation(llmMessages);
+			},
+			getCurrentSessionFile: () => sessionManager.getSessionFile(),
+			createNewSession: async (_opts) => {
+				// This will be implemented by the session/interactive mode
+				// For now, return cancelled - the interactive mode will override this
+				return { cancelled: true };
+			},
+			setEditorText: (_text) => {
+				// This will be implemented by the interactive mode
+			},
+		},
+	});
+
+	// Add builtin tools to registries and active tools
+	// Filter out any extension tools with the same name (builtins take precedence)
+	const builtinToolNames = new Set(builtinToolsLifecycle.tools.map((t) => t.name));
+	activeToolsArray = activeToolsArray.filter((t) => !builtinToolNames.has(t.name));
+	for (const tool of builtinToolsLifecycle.tools) {
+		toolRegistry.set(tool.name, tool);
+		if (wrappedToolRegistry) {
+			wrappedToolRegistry.set(tool.name, tool);
+		}
+		activeToolsArray.push(tool as Tool);
+	}
+	time("createBuiltinTools");
+
+	// Update agent's tools
+	agent.setTools(activeToolsArray);
+
 	// Restore messages if session has existing data
 	if (hasExistingSession) {
 		agent.replaceMessages(existingSession.messages);
@@ -683,6 +763,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRegistry,
 		toolRegistry: wrappedToolRegistry ?? toolRegistry,
 		rebuildSystemPrompt,
+		builtinToolsLifecycle,
 	});
 	time("createAgentSession");
 
@@ -690,5 +771,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		session,
 		extensionsResult,
 		modelFallbackMessage,
+		builtinToolsLifecycle,
 	};
 }

@@ -280,7 +280,15 @@ Pi documentation (only when the user asks about pi itself, its SDK, extensions, 
 - Additional docs: ${docsPath}
 - Examples: ${examplesPath} (extensions, custom tools, SDK)
 - When asked to create: custom models/providers (README.md), extensions (docs/extensions.md, examples/extensions/), themes (docs/theme.md), skills (docs/skills.md), TUI components (docs/tui.md - has copy-paste patterns)
-- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing`;
+- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing
+
+Team Capabilities (use request_team_review tool):
+You can request specialized multi-agent team reviews. Describe your intent and optimal teams are selected automatically.
+- VALIDATION: code-review, full-audit, security-audit, quality-gate, quality, types, testing, architecture
+- SECURITY: security-deep, dependencies
+- RELEASE: pre-release, deliver, release-prep
+- WORKFLOW: before-coding, after-coding, quick-fix, feature
+Use for: security audits, code reviews before commits/PRs, performance analysis, pre-release checks, architecture reviews.`;
 
 	if (appendSection) {
 		prompt += appendSection;

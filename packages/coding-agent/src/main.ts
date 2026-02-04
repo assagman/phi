@@ -472,7 +472,7 @@ export async function main(args: string[]) {
 	}
 
 	time("buildSessionOptions");
-	const { session, modelFallbackMessage } = await createAgentSession(sessionOptions);
+	const { session, modelFallbackMessage, builtinToolsLifecycle } = await createAgentSession(sessionOptions);
 	time("createAgentSession");
 
 	if (!isInteractive && !session.model) {
@@ -516,6 +516,7 @@ export async function main(args: string[]) {
 			initialMessage,
 			initialImages,
 			initialMessages: parsed.messages,
+			builtinToolsLifecycle,
 		});
 		await mode.run();
 	} else {

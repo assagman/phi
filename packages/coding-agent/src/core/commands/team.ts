@@ -35,6 +35,7 @@ import {
 	Team,
 	type TeamConfig,
 	type TeamEvent,
+	type TeamExecutionStorageInterface,
 	type TeamResult,
 } from "agents";
 import type { Api, Model } from "ai";
@@ -61,7 +62,69 @@ export interface BuiltinTeam {
 }
 
 export const BUILTIN_TEAMS: BuiltinTeam[] = [
-	// Comprehensive reviews
+	// =========================================================================
+	// UNDERSTAND - Requirements & Research Teams
+	// =========================================================================
+	{
+		name: "understand",
+		description: "Full requirements analysis: elicit, analyze context, guard scope",
+		agents: ["requirements-elicitor", "context-analyzer", "scope-guardian"],
+		strategy: "verification",
+	},
+	{
+		name: "research",
+		description: "Technology research and best practice synthesis",
+		agents: ["research-synthesizer", "context-analyzer"],
+		strategy: "verification",
+	},
+	{
+		name: "kickoff",
+		description: "Quick project kickoff: requirements, scope, initial architecture",
+		agents: ["requirements-elicitor", "scope-guardian", "solution-architect"],
+		strategy: "verification",
+	},
+
+	// =========================================================================
+	// DESIGN - Architecture & Planning Teams
+	// =========================================================================
+	{
+		name: "design",
+		description: "Full design: architecture, API contracts, data modeling, integration",
+		agents: ["solution-architect", "api-contract-designer", "data-modeler", "system-integrator"],
+		strategy: "verification",
+	},
+	{
+		name: "deep-design",
+		description: "Deep design with context analysis",
+		agents: ["context-analyzer", "solution-architect", "api-contract-designer", "data-modeler"],
+		strategy: "verification",
+	},
+
+	// =========================================================================
+	// IMPLEMENT - Execution Planning Teams
+	// =========================================================================
+	{
+		name: "plan",
+		description: "Implementation planning: task breakdown and strategy",
+		agents: ["task-orchestrator", "implementation-strategist"],
+		strategy: "verification",
+	},
+	{
+		name: "implement",
+		description: "Implementation guidance: code generation and refactoring advice",
+		agents: ["code-generator", "refactoring-advisor"],
+		strategy: "verification",
+	},
+	{
+		name: "refactor",
+		description: "Refactoring analysis with context and validation",
+		agents: ["context-analyzer", "refactoring-advisor", "test-coverage-auditor"],
+		strategy: "verification",
+	},
+
+	// =========================================================================
+	// VALIDATE - Code Review & Audit Teams (existing + enhanced)
+	// =========================================================================
 	{
 		name: "code-review",
 		description: "Comprehensive code review with multiple perspectives",
@@ -80,7 +143,21 @@ export const BUILTIN_TEAMS: BuiltinTeam[] = [
 		],
 		strategy: "verification",
 	},
-	// Security focused
+	{
+		name: "validate",
+		description:
+			"Combined code review + full audit (code-reviewer, security, privacy, types, architecture, errors, perf)",
+		agents: [
+			"code-reviewer",
+			"security-auditor",
+			"privacy-auditor",
+			"type-safety-auditor",
+			"architecture-auditor",
+			"error-handling-auditor",
+			"perf-analyzer",
+		],
+		strategy: "verification",
+	},
 	{
 		name: "security-audit",
 		description: "Deep security and privacy analysis",
@@ -93,14 +170,12 @@ export const BUILTIN_TEAMS: BuiltinTeam[] = [
 		agents: ["security-auditor"],
 		strategy: "union",
 	},
-	// Performance & reliability
 	{
 		name: "performance",
 		description: "Performance, concurrency, and error handling analysis",
 		agents: ["perf-analyzer", "concurrency-auditor", "error-handling-auditor"],
 		strategy: "verification",
 	},
-	// Code quality
 	{
 		name: "quality",
 		description: "Code quality: types, testing, error handling",
@@ -119,7 +194,6 @@ export const BUILTIN_TEAMS: BuiltinTeam[] = [
 		agents: ["test-coverage-auditor"],
 		strategy: "union",
 	},
-	// Architecture & design
 	{
 		name: "architecture",
 		description: "Architecture, API design, and dependency analysis",
@@ -132,7 +206,6 @@ export const BUILTIN_TEAMS: BuiltinTeam[] = [
 		agents: ["api-design-auditor"],
 		strategy: "union",
 	},
-	// Frontend/UI focused
 	{
 		name: "frontend",
 		description: "Frontend review: accessibility, i18n, performance",
@@ -145,25 +218,119 @@ export const BUILTIN_TEAMS: BuiltinTeam[] = [
 		agents: ["accessibility-auditor"],
 		strategy: "union",
 	},
-	// Documentation
 	{
 		name: "docs",
 		description: "Documentation completeness review",
 		agents: ["docs-auditor"],
 		strategy: "union",
 	},
-	// Dependencies
 	{
 		name: "dependencies",
 		description: "Dependency health and security audit",
 		agents: ["dependency-auditor", "security-auditor"],
 		strategy: "verification",
 	},
-	// Pre-release
+	{
+		name: "quality-gate",
+		description: "Quality checkpoint: code review, security, types, tests",
+		agents: ["code-reviewer", "security-auditor", "type-safety-auditor", "test-coverage-auditor"],
+		strategy: "verification",
+	},
+
+	// =========================================================================
+	// VERIFY - Testing Teams
+	// =========================================================================
+	{
+		name: "verify",
+		description: "Full verification: test strategy, cases, acceptance, regression",
+		agents: ["test-strategist", "test-case-designer", "acceptance-verifier", "regression-analyst"],
+		strategy: "verification",
+	},
+	{
+		name: "test-planning",
+		description: "Test planning: strategy and case design",
+		agents: ["test-strategist", "test-case-designer"],
+		strategy: "verification",
+	},
+	{
+		name: "acceptance",
+		description: "Acceptance verification and regression analysis",
+		agents: ["acceptance-verifier", "regression-analyst"],
+		strategy: "verification",
+	},
+
+	// =========================================================================
+	// DELIVER - Release Teams
+	// =========================================================================
+	{
+		name: "deliver",
+		description: "Full delivery: changelog, deployment validation, release coordination",
+		agents: ["changelog-generator", "deployment-validator", "release-coordinator"],
+		strategy: "verification",
+	},
 	{
 		name: "pre-release",
-		description: "Pre-release checklist: security, testing, docs, dependencies",
-		agents: ["security-auditor", "test-coverage-auditor", "docs-auditor", "dependency-auditor"],
+		description: "Pre-release checklist: validation, verification, delivery readiness",
+		agents: ["security-auditor", "test-coverage-auditor", "acceptance-verifier", "deployment-validator"],
+		strategy: "verification",
+	},
+	{
+		name: "release-prep",
+		description: "Release preparation: changelog and deployment validation",
+		agents: ["changelog-generator", "deployment-validator"],
+		strategy: "verification",
+	},
+
+	// =========================================================================
+	// CROSS-PHASE Workflow Teams
+	// =========================================================================
+	{
+		name: "before-coding",
+		description: "Pre-implementation: requirements, design, planning",
+		agents: ["requirements-elicitor", "scope-guardian", "solution-architect", "task-orchestrator"],
+		strategy: "verification",
+	},
+	{
+		name: "after-coding",
+		description: "Post-implementation: validation, verification, delivery",
+		agents: ["code-reviewer", "security-auditor", "acceptance-verifier", "changelog-generator"],
+		strategy: "verification",
+	},
+	{
+		name: "quick-fix",
+		description: "Quick bug fix workflow: context analysis and code review",
+		agents: ["context-analyzer", "code-reviewer", "test-coverage-auditor"],
+		strategy: "verification",
+	},
+	{
+		name: "feature",
+		description: "Feature development: understand, design, validate",
+		agents: ["requirements-elicitor", "solution-architect", "code-reviewer", "test-strategist"],
+		strategy: "verification",
+	},
+	{
+		name: "greenfield",
+		description: "New project setup: full requirements, research, and design",
+		agents: ["requirements-elicitor", "research-synthesizer", "solution-architect", "api-contract-designer"],
+		strategy: "verification",
+	},
+	{
+		name: "maintenance",
+		description: "Maintenance workflow: dependencies, refactoring, tests, changelog",
+		agents: ["dependency-auditor", "refactoring-advisor", "test-coverage-auditor", "changelog-generator"],
+		strategy: "verification",
+	},
+	{
+		name: "full-cycle",
+		description: "Full SDLC: one key agent from each phase",
+		agents: [
+			"requirements-elicitor",
+			"solution-architect",
+			"task-orchestrator",
+			"code-reviewer",
+			"test-strategist",
+			"changelog-generator",
+		],
 		strategy: "verification",
 	},
 ];
@@ -534,6 +701,8 @@ export interface TeamStreamOptions {
 	tools?: AgentTool[];
 	task: string;
 	signal?: AbortSignal;
+	/** Optional storage for persisting execution state (SQLite-backed) */
+	storage?: TeamExecutionStorageInterface;
 }
 
 export interface TeamStreamResult {
@@ -560,7 +729,7 @@ export function createTeamStream(teamName: string, options: TeamStreamOptions): 
  * Returns the Team instance and its event stream for real-time UI updates.
  */
 export function createResolvedTeamStream(team: ResolvedTeam, options: TeamStreamOptions): TeamStreamResult {
-	const { model, modelRegistry, tools = [], task, signal } = options;
+	const { model, modelRegistry, tools = [], task, signal, storage } = options;
 
 	// Validate models against registry
 	const modelErrors = validateTeamModels(team, modelRegistry);
@@ -611,6 +780,7 @@ export function createResolvedTeamStream(team: ResolvedTeam, options: TeamStream
 	const stream = teamInstance.run({
 		task,
 		signal,
+		storage,
 		getApiKey: async (provider: string) => {
 			return modelRegistry.getApiKeyForProvider(provider);
 		},
@@ -629,7 +799,7 @@ function createTeamStreamInternal(
 	strategy: MergeStrategyType,
 	options: TeamStreamOptions,
 ): TeamStreamResult {
-	const { model, modelRegistry, tools = [], task, signal } = options;
+	const { model, modelRegistry, tools = [], task, signal, storage } = options;
 
 	// model cast is safe - we only care about provider for API key lookup
 	const agentPresets = createAgentPresets(agentNames, model as Model<Api>);
@@ -652,6 +822,7 @@ function createTeamStreamInternal(
 	const stream = team.run({
 		task,
 		signal,
+		storage,
 		getApiKey: async (provider: string) => {
 			return modelRegistry.getApiKeyForProvider(provider);
 		},

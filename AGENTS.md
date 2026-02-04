@@ -102,7 +102,8 @@ read README.md, then ask which module(s) to work on. Based on the answer, explor
 ## Commands
 - After code changes (not documentation changes): `bun run check` (get full output, no tail). Fix all errors, warnings, and infos before committing.
 - `bun run check` runs: `biome check --write . && tsgo --noEmit`
-- NEVER run: `bun run dev`, `bun run build`, `bun test` (without specific filter)
+- **After implementation complete**: Run both `bun run check` AND `bun run build` to verify full compilation
+- NEVER run: `bun run dev`, `bun test` (without specific filter)
 - Only run specific tests if user instructs: `bun test packages/ai/test/specific.test.ts`
 - NEVER commit unless user asks
 - Pre-commit hook (husky) automatically runs `bun run check`

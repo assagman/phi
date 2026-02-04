@@ -112,6 +112,10 @@ export class TeamExecutionComponent extends Container {
 					agent.status = event.result.success ? "success" : "error";
 					agent.error = event.result.error;
 					agent.findingCount = event.result.findings.length;
+					// Ensure progress bar shows 100% on completion
+					if (agent.status === "success" && agent.taskInfo.total > 0) {
+						agent.taskInfo.completed = agent.taskInfo.total;
+					}
 				}
 				break;
 			}
@@ -149,11 +153,45 @@ export class TeamExecutionComponent extends Container {
 	}
 
 	/**
+	 * Set agent names (for when component is created before agents are known)
+	 */
+	setAgentNames(names: string[]): void {
+		// Only set if we don't have agents yet
+		if (this.agents.size === 0) {
+			for (const name of names) {
+				this.agents.set(name, {
+					name,
+					status: "pending",
+					taskInfo: { total: 0, completed: 0 },
+				});
+			}
+			this.update();
+		}
+	}
+
+	/**
 	 * Mark execution as complete
 	 */
 	complete(): void {
 		this.running = false;
 		this.stopPulse();
+		this.update();
+	}
+
+	/**
+	 * Set completion state with optional error flag
+	 */
+	setComplete(isError: boolean): void {
+		this.running = false;
+		this.stopPulse();
+		// Mark any still-running agents as errored if isError
+		if (isError) {
+			for (const agent of this.agents.values()) {
+				if (agent.status === "running" || agent.status === "pending") {
+					agent.status = "error";
+				}
+			}
+		}
 		this.update();
 	}
 

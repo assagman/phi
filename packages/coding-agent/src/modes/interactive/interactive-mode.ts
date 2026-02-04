@@ -7,8 +7,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage } from "agent";
-import { debugLog, type TeamResult } from "agents";
+import type { AgentContext, AgentMessage, AgentTool } from "agent";
+import { debugLog, type Finding, type TeamEvent, TeamExecutionStorage, type TeamResult } from "agents";
 import {
 	type AssistantMessage,
 	getOAuthProviders,
@@ -52,6 +52,7 @@ import {
 import { APP_NAME, getAuthPath, getDebugLogPath } from "../../config.js";
 import type { AgentSession, AgentSessionEvent } from "../../core/agent-session.js";
 import {
+	BUILTIN_TEAMS,
 	createResolvedTeamStream,
 	createTeamStream,
 	formatTeamDetailHelp,
@@ -65,7 +66,6 @@ import {
 	type TeamInfo,
 } from "../../core/commands/team.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
-
 import type {
 	ExtensionContext,
 	ExtensionRunner,
@@ -76,10 +76,12 @@ import type {
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.js";
 import { type AppAction, KeybindingsManager } from "../../core/keybindings.js";
 import { createCompactionSummaryMessage } from "../../core/messages.js";
+import type { ModelRegistry } from "../../core/model-registry.js";
 import { resolveModelScope } from "../../core/model-resolver.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { loadProjectContextFiles } from "../../core/system-prompt.js";
 import { ToolExecutionStorage } from "../../core/tool-execution-storage.js";
+import { getProjectAnalyzerToolsArray } from "../../core/tools/project-analyzer.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.js";
@@ -105,6 +107,7 @@ import { ScopedModelsSelectorComponent } from "./components/scoped-models-select
 import { SessionSelectorComponent } from "./components/session-selector.js";
 import { SettingsSelectorComponent } from "./components/settings-selector.js";
 import { TeamExecutionComponent } from "./components/team-execution.js";
+import { TeamSelectorComponent } from "./components/team-selector.js";
 import { ToolExecutionComponent } from "./components/tool-execution.js";
 import { ToolHistorySelectorComponent } from "./components/tool-history-selector.js";
 import { TreeSelectorComponent } from "./components/tree-selector.js";
@@ -143,6 +146,26 @@ export interface InteractiveModeOptions {
 	initialImages?: ImageContent[];
 	/** Additional messages to send after the initial message */
 	initialMessages?: string[];
+	/** Builtin tools lifecycle for UI context setup */
+	builtinToolsLifecycle?: import("../../core/builtin-tools/index.js").BuiltinToolsLifecycle;
+}
+
+/**
+ * Result from the lead analyzer agent.
+ */
+interface LeadAnalyzerResult {
+	intent: string;
+	projectContext: {
+		type: string;
+		languages: string[];
+		frameworks: string[];
+		hasTests: boolean;
+		hasDocs: boolean;
+	};
+	selectedTeams: string[];
+	executionWaves: string[][];
+	reasoning: string;
+	memoryContext?: string;
 }
 
 export class InteractiveMode {
@@ -178,8 +201,15 @@ export class InteractiveMode {
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 
+	// Team review tool tracking: toolCallId -> TeamExecutionComponent
+	// Used when request_team_review tool is executed to show team progress
+	private pendingTeamTools = new Map<string, TeamExecutionComponent>();
+
 	// Tool execution storage (SQLite-backed history)
 	private toolExecutionStorage: ToolExecutionStorage | undefined = undefined;
+
+	// Team execution persistence
+	private teamExecutionStorage: TeamExecutionStorage | undefined = undefined;
 
 	// Tool output expansion state
 	private toolOutputExpanded = false;
@@ -298,6 +328,17 @@ export class InteractiveMode {
 
 		// Initialize tool execution storage for history
 		this.toolExecutionStorage = new ToolExecutionStorage(session.sessionId);
+
+		// Initialize team execution storage for persistence
+		this.teamExecutionStorage = new TeamExecutionStorage(session.sessionId);
+
+		// Populate builtin tools UI context (sigma, handoff need UI access)
+		if (options.builtinToolsLifecycle) {
+			const lifecycle = options.builtinToolsLifecycle;
+			lifecycle.ui.hasUI = true;
+			lifecycle.ui.custom = (factory, opts) => this.showExtensionCustom(factory, opts);
+			lifecycle.ui.editor = (title, prefill) => this.showExtensionEditor(title, prefill);
+		}
 	}
 
 	private setupAutocomplete(fdPath: string | undefined): void {
@@ -350,6 +391,7 @@ export class InteractiveMode {
 			{ name: "compact", description: "Manually compact the session context" },
 			{ name: "resume", description: "Resume a different session" },
 			{ name: "team", description: "Run multi-agent team (help, presets, <name>)" },
+			{ name: "handoff", description: "Transfer context to a new focused session" },
 		];
 
 		// Convert prompt templates to SlashCommand format for autocomplete
@@ -1573,6 +1615,12 @@ export class InteractiveMode {
 				await this.handleTeamCommand(arg);
 				return;
 			}
+			if (text === "/handoff" || text.startsWith("/handoff ")) {
+				const arg = text.startsWith("/handoff ") ? text.slice(9).trim() : undefined;
+				this.editor.setText("");
+				await this.handleHandoffCommand(arg);
+				return;
+			}
 			if (text === "/quit" || text === "/exit") {
 				this.editor.setText("");
 				await this.shutdown();
@@ -1764,6 +1812,25 @@ export class InteractiveMode {
 				break;
 
 			case "tool_execution_start": {
+				// Special handling for request_team_review tool - show TeamExecutionComponent
+				if (event.toolName === "request_team_review") {
+					if (!this.pendingTeamTools.has(event.toolCallId)) {
+						// Create TeamExecutionComponent with placeholder agent names
+						// Actual agent names will be provided via tool_execution_update events
+						const teamComponent = new TeamExecutionComponent(
+							"Team Review",
+							[], // Will be populated from first team_start event
+							this.ui,
+							() => this.scrollableViewport.invalidateItemCache(teamComponent),
+						);
+						this.addToChat(teamComponent);
+						this.pendingTeamTools.set(event.toolCallId, teamComponent);
+						this.ui.requestRender();
+					}
+					break;
+				}
+
+				// Standard tool handling
 				if (!this.pendingTools.has(event.toolCallId)) {
 					const component = new ToolExecutionComponent(event.toolName, event.args, this.ui, () =>
 						this.scrollableViewport.invalidateItemCache(component),
@@ -1779,6 +1846,27 @@ export class InteractiveMode {
 			}
 
 			case "tool_execution_update": {
+				// Check if this is a team review tool update
+				const teamComponent = this.pendingTeamTools.get(event.toolCallId);
+				if (teamComponent) {
+					// Extract team event from details
+					const details = event.partialResult?.details as
+						| { teamEvent?: TeamEvent; agentNames?: string[] }
+						| undefined;
+					if (details?.teamEvent) {
+						// Update agent names on first team_start event
+						if (details.teamEvent.type === "team_start" && details.agentNames) {
+							teamComponent.setAgentNames(details.agentNames);
+						}
+						// Feed event to component
+						teamComponent.handleEvent(details.teamEvent);
+						this.scrollableViewport.invalidateItemCache(teamComponent);
+						this.ui.requestRender();
+					}
+					break;
+				}
+
+				// Standard tool update handling
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.partialResult, isError: false }, true);
@@ -1790,6 +1878,18 @@ export class InteractiveMode {
 			}
 
 			case "tool_execution_end": {
+				// Check if this is a team review tool completion
+				const teamComponent = this.pendingTeamTools.get(event.toolCallId);
+				if (teamComponent) {
+					// Mark team execution as complete
+					teamComponent.setComplete(event.isError);
+					this.pendingTeamTools.delete(event.toolCallId);
+					this.scrollableViewport.invalidateItemCache(teamComponent);
+					this.ui.requestRender();
+					break;
+				}
+
+				// Standard tool end handling
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.result, isError: event.isError });
@@ -3901,6 +4001,13 @@ export class InteractiveMode {
 	 * Handle /team command - multi-agent team orchestration
 	 */
 	private async handleTeamCommand(arg?: string): Promise<void> {
+		// Handle /team lead - meta-orchestrator
+		if (arg === "lead" || arg?.startsWith("lead ")) {
+			const request = arg === "lead" ? undefined : arg.slice(5).trim();
+			await this.handleTeamLeadCommand(request);
+			return;
+		}
+
 		// Handle help subcommands
 		if (arg === "help") {
 			const help = formatTeamHelp(process.cwd());
@@ -3940,44 +4047,105 @@ export class InteractiveMode {
 			return;
 		}
 
-		// Determine team and task
-		let selectedTeam: TeamInfo | undefined;
+		// Determine teams and task
+		let selectedTeams: TeamInfo[] = [];
 		let task: string | undefined;
 
 		if (arg) {
-			// Check if arg matches a known team name
-			selectedTeam = teams.find((t) => t.name === arg);
+			// Check for comma-separated team names: /team code-review,full-audit
+			if (arg.includes(",")) {
+				const teamNames = arg.split(",").map((n) => n.trim());
+				for (const name of teamNames) {
+					const team = teams.find((t) => t.name === name);
+					if (team) {
+						selectedTeams.push(team);
+					} else {
+						this.showWarning(`Unknown team: ${name}`);
+					}
+				}
+				if (selectedTeams.length === 0) {
+					this.showError("No valid teams found");
+					return;
+				}
+			} else {
+				// Check if arg matches a known team name
+				const selectedTeam = teams.find((t) => t.name === arg);
 
-			if (!selectedTeam) {
-				// Not a team name - treat as free-text task, auto-select best team
-				task = arg;
-				selectedTeam = await this.autoSelectTeam(task, teams);
-				if (!selectedTeam) return;
+				if (selectedTeam) {
+					selectedTeams = [selectedTeam];
+				} else {
+					// Not a team name - treat as free-text task, auto-select best team
+					task = arg;
+					const autoSelected = await this.autoSelectTeam(task, teams);
+					if (!autoSelected) return;
+					selectedTeams = [autoSelected];
+				}
 			}
 		}
 
-		if (!selectedTeam) {
-			// No arg provided - show team selector
-			const options = teams.map(formatTeamSelectorOption);
-			const selected = await this.showExtensionSelector("Select a team", options);
-			if (!selected) return;
-
-			const teamName = parseTeamSelectorOption(selected);
-			selectedTeam = teams.find((t) => t.name === teamName);
-			if (!selectedTeam) return;
+		if (selectedTeams.length === 0) {
+			// No arg provided - show multi-select team selector
+			const selected = await this.showTeamSelector(teams);
+			if (!selected || selected.length === 0) return;
+			selectedTeams = selected;
 		}
 
 		// If no task yet (explicit team selection), prompt for it
 		if (!task) {
+			const teamList = selectedTeams.map((t) => t.name).join(", ");
 			task = await this.showExtensionInput(
-				"Describe what you want the team to analyze",
-				"e.g., Check auth code for vulnerabilities, Review error handling...",
+				`Describe what you want ${selectedTeams.length > 1 ? "the teams" : "the team"} to analyze`,
+				`Selected: ${teamList}`,
 			);
 			if (!task) return;
 		}
 
-		// Execute the team
-		await this.executeTeamWithProgress(selectedTeam, task);
+		// Execute teams sequentially
+		await this.executeTeamsWithProgress(selectedTeams, task);
+	}
+
+	/**
+	 * Show multi-select team selector
+	 */
+	private showTeamSelector(teams: TeamInfo[]): Promise<TeamInfo[] | undefined> {
+		return new Promise((resolve) => {
+			const selector = new TeamSelectorComponent(
+				"Select teams (space to toggle, enter to confirm)",
+				teams,
+				(selected) => {
+					overlay.hide();
+					this.ui.setFocus(this.editor);
+					this.ui.requestRender();
+					resolve(selected);
+				},
+				() => {
+					overlay.hide();
+					this.ui.setFocus(this.editor);
+					this.ui.requestRender();
+					resolve(undefined);
+				},
+				{ tui: this.ui },
+			);
+
+			const overlay = this.ui.showOverlay(selector, {
+				anchor: "center",
+				width: "80%",
+				maxHeight: "70%",
+				dimBackground: true,
+				border: true,
+			});
+			this.ui.setFocus(selector);
+			this.ui.requestRender();
+		});
+	}
+
+	/**
+	 * Execute multiple teams sequentially
+	 */
+	private async executeTeamsWithProgress(teams: TeamInfo[], task: string): Promise<void> {
+		for (const team of teams) {
+			await this.executeTeamWithProgress(team, task);
+		}
 	}
 
 	/**
@@ -4116,6 +4284,7 @@ Which team is best suited for this task? Reply with ONLY the team name, nothing 
 						tools,
 						task,
 						signal: abortController.signal,
+						storage: this.teamExecutionStorage,
 					})
 				: createTeamStream(team.name, {
 						model,
@@ -4123,6 +4292,7 @@ Which team is best suited for this task? Reply with ONLY the team name, nothing 
 						tools,
 						task,
 						signal: abortController.signal,
+						storage: this.teamExecutionStorage,
 					});
 
 			// Process events and update progress component
@@ -4228,6 +4398,587 @@ Which team is best suited for this task? Reply with ONLY the team name, nothing 
 		});
 	}
 
+	/**
+	 * Handle /handoff command - transfer context to a new focused session.
+	 */
+	private async handleHandoffCommand(goal?: string): Promise<void> {
+		const model = this.session.model;
+		if (!model) {
+			this.showError("No model configured. Use /model to select a model first.");
+			return;
+		}
+
+		// Get goal from argument or prompt
+		let userGoal = goal;
+		if (!userGoal) {
+			userGoal = await this.showExtensionInput(
+				"What's the goal for the new session?",
+				"e.g., Implement the API changes we discussed",
+			);
+			if (!userGoal) return;
+		}
+
+		// Import HandoffCommand dynamically to avoid circular imports
+		const { HandoffCommand } = await import("../../core/builtin-tools/handoff/index.js");
+
+		await HandoffCommand.handler(userGoal, {
+			hasUI: true,
+			getModel: () => this.session.model,
+			getApiKey: async (m) => {
+				const key = await this.session.modelRegistry.getApiKey(m);
+				if (!key) throw new Error(`No API key for ${m.provider}`);
+				return key;
+			},
+			getConversationText: () => {
+				const llmMessages = this.session.messages
+					.filter((m) => m.role === "user" || m.role === "assistant")
+					.map((m) => {
+						const content =
+							typeof m.content === "string"
+								? m.content
+								: m.content
+										.filter((c): c is { type: "text"; text: string } => c.type === "text")
+										.map((c) => c.text)
+										.join("\n");
+						return `${m.role === "user" ? "User" : "Assistant"}: ${content}`;
+					});
+				return llmMessages.join("\n\n");
+			},
+			getCurrentSessionFile: () => this.session.sessionManager.getSessionFile(),
+			createNewSession: async (opts) => {
+				const success = await this.session.newSession({ parentSession: opts?.parentSession });
+				return { cancelled: !success };
+			},
+			setEditorText: (text) => this.editor.setText(text),
+			notify: (message, type) => {
+				if (type === "error") {
+					this.showError(message);
+				} else if (type === "warning") {
+					this.showWarning(message);
+				} else {
+					this.showStatus(message);
+				}
+			},
+			showCustomUI: <T>(factory: Parameters<typeof this.showExtensionCustom<T>>[0], options?: unknown) =>
+				this.showExtensionCustom<T>(factory, options as Parameters<typeof this.showExtensionCustom>[1]),
+			showEditor: (title, initialValue) => this.showExtensionEditor(title, initialValue),
+		});
+	}
+
+	/**
+	 * Handle /team lead - adaptive meta-orchestrator
+	 * Uses a lead analyzer agent to select and execute appropriate teams.
+	 */
+	private async handleTeamLeadCommand(request?: string): Promise<void> {
+		// Get model
+		const model = this.session.model;
+		if (!model) {
+			this.showError("No model configured. Use /model to select a model first.");
+			return;
+		}
+
+		// Get or prompt for request
+		let userRequest = request;
+		if (!userRequest) {
+			userRequest = await this.showExtensionInput(
+				"What would you like the team to do?",
+				"e.g., Prepare for production, Security audit, Review architecture...",
+			);
+			if (!userRequest) return;
+		}
+
+		const cwd = process.cwd();
+		const modelRegistry = this.session.modelRegistry;
+		const sessionTools = this.session.getRegisteredTools();
+
+		// Show user message
+		this.addToChat(new Spacer(1));
+		this.addToChat(new UserMessageComponent(`/team lead ${userRequest}`, this.getMarkdownThemeWithSettings()));
+		this.scrollableViewport.scrollToBottom();
+		this.ui.requestRender();
+
+		// Show analyzing status
+		const loader = new BorderedLoader(this.ui, theme, "Lead: Analyzing project and request...");
+		const loaderOverlay = this.ui.showOverlay(loader, {
+			anchor: "center",
+			width: "50%",
+			maxHeight: "30%",
+			dimBackground: true,
+			border: true,
+		});
+		this.ui.requestRender();
+
+		try {
+			// Run lead analyzer to get team selection
+			const leadResult = await this.runLeadAnalyzer(userRequest, cwd, model, modelRegistry, sessionTools);
+			loaderOverlay.hide();
+
+			if (!leadResult) {
+				this.showError("Lead analyzer failed to produce team selection");
+				return;
+			}
+
+			// Display lead analysis results
+			this.addToChat(new Spacer(1));
+			this.addToChat(
+				new Markdown(
+					`## Lead Analysis
+
+**Intent:** ${leadResult.intent}
+
+**Project:** ${leadResult.projectContext.type} (${leadResult.projectContext.languages.join(", ")})
+
+**Selected Teams:** ${leadResult.selectedTeams.join(", ")}
+
+**Reasoning:** ${leadResult.reasoning}
+
+${leadResult.memoryContext ? `**Memory Context:** ${leadResult.memoryContext}` : ""}
+`,
+					1,
+					1,
+					this.getMarkdownThemeWithSettings(),
+				),
+			);
+			this.scrollableViewport.scrollToBottom();
+			this.ui.requestRender();
+
+			// Execute selected teams
+			await this.executeLeadTeams(leadResult, userRequest, cwd, model, modelRegistry, sessionTools);
+		} catch (error) {
+			loaderOverlay.hide();
+			this.showError(`Lead command failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * Run the lead analyzer agent to get team selection.
+	 */
+	private async runLeadAnalyzer(
+		request: string,
+		cwd: string,
+		model: Model<any>,
+		modelRegistry: ModelRegistry,
+		sessionTools: AgentTool[],
+	): Promise<LeadAnalyzerResult | null> {
+		// Import lead analyzer template
+		const { leadAnalyzerTemplate, createPreset: createAgentPreset } = await import("agents");
+		const { agentLoop } = await import("agent");
+
+		// Create lead agent preset
+		const leadPreset = createAgentPreset(leadAnalyzerTemplate, model, {
+			injectEpsilon: false, // Lead doesn't need epsilon
+		});
+
+		// Get project analyzer tools + delta tools from session
+		const projectTools = getProjectAnalyzerToolsArray(cwd);
+		const deltaTools = sessionTools.filter((t) => t.name.startsWith("delta_"));
+		const leadTools = [...projectTools, ...deltaTools];
+
+		// Build prompt
+		const prompt = `User request: "${request}"
+
+Please analyze this request and the project to determine which teams should be run.
+
+1. First, search your memory for past context about this project
+2. Analyze the project structure, dependencies, languages, and configs
+3. Select the appropriate teams based on the request and project
+4. Output your decision as JSON
+
+Remember to persist any valuable findings for future sessions.`;
+
+		// Create agent context
+		const context: AgentContext = {
+			systemPrompt: leadPreset.systemPrompt,
+			messages: [],
+			tools: leadTools,
+		};
+
+		const prompts: AgentMessage[] = [
+			{
+				role: "user",
+				content: prompt,
+				timestamp: Date.now(),
+			},
+		];
+
+		// Run agent loop
+		let lastAssistantContent = "";
+		const apiKey = await modelRegistry.getApiKey(model);
+
+		const agentStream = agentLoop(
+			prompts,
+			context,
+			{
+				model,
+				temperature: leadPreset.temperature,
+				reasoning: leadPreset.thinkingLevel === "off" ? undefined : leadPreset.thinkingLevel,
+				convertToLlm: (msgs) =>
+					msgs.filter((m): m is Message => m.role === "user" || m.role === "assistant" || m.role === "toolResult"),
+				getApiKey: async () => apiKey,
+			},
+			undefined,
+			streamSimple,
+		);
+
+		for await (const event of agentStream) {
+			if (event.type === "message_end" && event.message.role === "assistant") {
+				const content = event.message.content;
+				if (typeof content === "string") {
+					lastAssistantContent = content;
+				} else {
+					lastAssistantContent = content
+						.filter((c): c is { type: "text"; text: string } => c.type === "text")
+						.map((c) => c.text)
+						.join("\n");
+				}
+			}
+		}
+
+		// Parse JSON from response
+		return this.parseLeadAnalyzerOutput(lastAssistantContent);
+	}
+
+	/**
+	 * Parse the lead analyzer's JSON output.
+	 */
+	private parseLeadAnalyzerOutput(content: string): LeadAnalyzerResult | null {
+		// Extract JSON block
+		const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+		const jsonStr = jsonMatch ? jsonMatch[1].trim() : content;
+
+		try {
+			const parsed = JSON.parse(jsonStr);
+
+			// Validate required fields
+			if (!parsed.selectedTeams || !Array.isArray(parsed.selectedTeams)) {
+				debugLog("interactive", "Lead output missing selectedTeams", { parsed });
+				return null;
+			}
+
+			// Filter to valid teams
+			const validTeamNames = new Set(BUILTIN_TEAMS.map((t) => t.name));
+			const selectedTeams = parsed.selectedTeams.filter((t: string) => validTeamNames.has(t));
+
+			if (selectedTeams.length === 0) {
+				debugLog("interactive", "No valid teams in lead output", { parsed });
+				return null;
+			}
+
+			return {
+				intent: parsed.intent || "general review",
+				projectContext: parsed.projectContext || {
+					type: "unknown",
+					languages: [],
+					frameworks: [],
+					hasTests: false,
+					hasDocs: false,
+				},
+				selectedTeams,
+				executionWaves: parsed.executionWaves || [selectedTeams],
+				reasoning: parsed.reasoning || "No reasoning provided",
+				memoryContext: parsed.memoryContext,
+			};
+		} catch (error) {
+			debugLog("interactive", "Failed to parse lead output", { content, error });
+			return null;
+		}
+	}
+
+	/**
+	 * Execute teams selected by the lead analyzer.
+	 */
+	private async executeLeadTeams(
+		leadResult: LeadAnalyzerResult,
+		originalRequest: string,
+		_cwd: string,
+		model: Model<any>,
+		modelRegistry: ModelRegistry,
+		tools: AgentTool[],
+	): Promise<void> {
+		const { TeamDependencyGraph } = await import("agents");
+
+		// Build dependency graph from lead output
+		const graph = TeamDependencyGraph.fromLeadOutput(leadResult.selectedTeams, leadResult.executionWaves);
+		const waves = graph.getWaves();
+
+		// Display wave execution plan
+		this.addToChat(new Spacer(1));
+		const waveDisplay = waves.map((wave, i) => `**Wave ${i + 1}:** ${wave.join(", ")}`).join("\n");
+		this.addToChat(new Markdown(`## Execution Plan\n\n${waveDisplay}\n`, 1, 1, this.getMarkdownThemeWithSettings()));
+		this.scrollableViewport.scrollToBottom();
+		this.ui.requestRender();
+
+		const abortController = new AbortController();
+
+		// Set up escape handler
+		const originalOnEscape = this.defaultEditor.onEscape;
+		this.defaultEditor.onEscape = () => {
+			abortController.abort();
+			this.showStatus("Team execution cancelled");
+		};
+
+		try {
+			// Execute each wave
+			const allResults: TeamResult[] = [];
+			let previousContext = "";
+
+			for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
+				const wave = waves[waveIndex];
+
+				// Show wave progress
+				this.showStatus(`Executing Wave ${waveIndex + 1}/${waves.length}: ${wave.join(", ")}`);
+
+				// Execute teams in wave in parallel
+				const wavePromises = wave.map(async (teamName) => {
+					const builtinTeam = BUILTIN_TEAMS.find((t) => t.name === teamName);
+					if (!builtinTeam) {
+						this.showWarning(`Unknown team: ${teamName}`);
+						return null;
+					}
+
+					// Add progress component for this team
+					const agentNames = this.getBuiltinTeamAgents(teamName);
+					const progressComponent = new TeamExecutionComponent(teamName, agentNames, this.ui, () =>
+						this.scrollableViewport.invalidateItemCache(progressComponent),
+					);
+					this.addToChat(progressComponent);
+					this.scrollableViewport.scrollToBottom();
+					this.ui.requestRender();
+
+					try {
+						// Build task with previous context
+						const taskWithContext = previousContext
+							? `${originalRequest}\n\n## Context from Previous Teams\n\n${previousContext}`
+							: originalRequest;
+
+						const { stream } = createTeamStream(teamName, {
+							model,
+							modelRegistry,
+							tools,
+							task: taskWithContext,
+							signal: abortController.signal,
+							storage: this.teamExecutionStorage,
+						});
+
+						// Process events
+						for await (const event of stream) {
+							progressComponent.handleEvent(event);
+							this.scrollableViewport.invalidateItemCache(progressComponent);
+							this.ui.requestRender();
+						}
+
+						const result = await stream.result();
+						progressComponent.complete();
+						this.scrollableViewport.invalidateItemCache(progressComponent);
+						return result;
+					} catch (error) {
+						progressComponent.complete();
+						this.scrollableViewport.invalidateItemCache(progressComponent);
+						this.showWarning(
+							`Team ${teamName} failed: ${error instanceof Error ? error.message : String(error)}`,
+						);
+						return null;
+					}
+				});
+
+				const waveResults = await Promise.all(wavePromises);
+
+				// Collect successful results
+				for (const result of waveResults) {
+					if (result) allResults.push(result);
+				}
+
+				// Build context for next wave
+				previousContext = this.buildWaveContext(waveResults.filter((r): r is TeamResult => r !== null));
+
+				// Check for abort
+				if (abortController.signal.aborted) break;
+			}
+
+			// Aggregate all findings
+			const allFindings = allResults.flatMap((r) => r.findings);
+			const totalUsage = this.aggregateTeamUsage(allResults);
+
+			// Show summary
+			this.addToChat(new Spacer(1));
+			const summaryMd = `## Lead Summary
+
+**Teams Executed:** ${allResults.length}/${leadResult.selectedTeams.length}
+**Total Findings:** ${allFindings.length}
+**Duration:** ${allResults.reduce((sum, r) => sum + r.durationMs, 0) / 1000}s
+${totalUsage ? `**Tokens:** ↑${totalUsage.inputTokens} ↓${totalUsage.outputTokens}` : ""}
+
+### Findings by Severity
+${this.formatFindingsSummary(allFindings)}
+`;
+			this.addToChat(new Markdown(summaryMd, 1, 1, this.getMarkdownThemeWithSettings()));
+
+			// Show detailed findings
+			if (allFindings.length > 0) {
+				this.addToChat(new Spacer(1));
+				const detailedFindings = this.formatDetailedFindings(allFindings);
+				this.addToChat(new Markdown(detailedFindings, 1, 1, this.getMarkdownThemeWithSettings()));
+			}
+
+			this.scrollableViewport.scrollToBottom();
+			this.ui.requestRender();
+
+			// Inject results into session context
+			this.injectLeadResultsIntoSession(originalRequest, leadResult, allResults, allFindings);
+		} finally {
+			this.defaultEditor.onEscape = originalOnEscape;
+		}
+	}
+
+	/**
+	 * Build context string from wave results for next wave.
+	 */
+	private buildWaveContext(results: TeamResult[]): string {
+		if (results.length === 0) return "";
+
+		const sections: string[] = [];
+		for (const result of results) {
+			if (result.findings.length === 0) continue;
+
+			const summaries = result.findings.slice(0, 10).map((f) => {
+				const loc = f.file ? `${f.file}${f.line ? `:${f.line}` : ""}` : "";
+				return `- [${f.severity.toUpperCase()}] ${f.title}${loc ? ` (${loc})` : ""}`;
+			});
+
+			sections.push(`### ${result.teamName}\n${summaries.join("\n")}`);
+		}
+
+		return sections.join("\n\n");
+	}
+
+	/**
+	 * Aggregate token usage from multiple team results.
+	 */
+	private aggregateTeamUsage(results: TeamResult[]): { inputTokens: number; outputTokens: number } | undefined {
+		let inputTokens = 0;
+		let outputTokens = 0;
+		let hasUsage = false;
+
+		for (const result of results) {
+			if (result.totalUsage) {
+				hasUsage = true;
+				inputTokens += result.totalUsage.inputTokens;
+				outputTokens += result.totalUsage.outputTokens;
+			}
+		}
+
+		return hasUsage ? { inputTokens, outputTokens } : undefined;
+	}
+
+	/**
+	 * Format findings summary by severity.
+	 */
+	private formatFindingsSummary(findings: Finding[]): string {
+		const counts: Record<string, number> = {
+			critical: 0,
+			high: 0,
+			medium: 0,
+			low: 0,
+			info: 0,
+		};
+
+		for (const f of findings) {
+			counts[f.severity] = (counts[f.severity] || 0) + 1;
+		}
+
+		const lines: string[] = [];
+		if (counts.critical > 0) lines.push(`- 🔴 Critical: ${counts.critical}`);
+		if (counts.high > 0) lines.push(`- 🟠 High: ${counts.high}`);
+		if (counts.medium > 0) lines.push(`- 🟡 Medium: ${counts.medium}`);
+		if (counts.low > 0) lines.push(`- 🟢 Low: ${counts.low}`);
+		if (counts.info > 0) lines.push(`- ℹ️ Info: ${counts.info}`);
+
+		return lines.join("\n") || "No findings";
+	}
+
+	/**
+	 * Format detailed findings list.
+	 */
+	private formatDetailedFindings(findings: Finding[]): string {
+		const sections: string[] = ["### Detailed Findings\n"];
+
+		// Sort by severity
+		const severityOrder = ["critical", "high", "medium", "low", "info"];
+		const sorted = [...findings].sort(
+			(a, b) => severityOrder.indexOf(a.severity) - severityOrder.indexOf(b.severity),
+		);
+
+		for (const f of sorted.slice(0, 30)) {
+			// Limit to 30 findings
+			const icon =
+				f.severity === "critical"
+					? "🔴"
+					: f.severity === "high"
+						? "🟠"
+						: f.severity === "medium"
+							? "🟡"
+							: f.severity === "low"
+								? "🟢"
+								: "ℹ️";
+			const file = f.file ? `\`${f.file}\`` : "";
+			const line = f.line ? `:${Array.isArray(f.line) ? `${f.line[0]}-${f.line[1]}` : f.line}` : "";
+
+			sections.push(`#### ${icon} ${f.title}`);
+			sections.push(`**From:** ${f.agentName} | **Category:** ${f.category} | **File:** ${file}${line}`);
+			sections.push(f.description);
+			if (f.suggestion) {
+				sections.push(`**Fix:** ${f.suggestion}`);
+			}
+			sections.push("");
+		}
+
+		if (findings.length > 30) {
+			sections.push(`*... and ${findings.length - 30} more findings*`);
+		}
+
+		return sections.join("\n");
+	}
+
+	/**
+	 * Inject lead results into session context.
+	 */
+	private injectLeadResultsIntoSession(
+		request: string,
+		_leadResult: LeadAnalyzerResult,
+		teamResults: TeamResult[],
+		allFindings: Finding[],
+	): void {
+		// Build summary for context injection
+		const findingSummary = allFindings
+			.slice(0, 20)
+			.map((f) => `- [${f.severity}] ${f.title} (${f.agentName})`)
+			.join("\n");
+
+		const resultsMessage: AgentMessage = {
+			role: "user",
+			content: `[Lead Team Analysis]
+Request: ${request}
+Teams Executed: ${teamResults.map((r) => r.teamName).join(", ")}
+Total Findings: ${allFindings.length}
+
+Key Findings:
+${findingSummary}
+
+---
+The above is a summary from multi-agent team analysis. Reference these findings in responses.`,
+			timestamp: Date.now(),
+		};
+
+		const currentMessages = this.session.messages;
+		this.session.agent.replaceMessages([...currentMessages, resultsMessage]);
+
+		debugLog("interactive", "Injected lead results into session", {
+			request,
+			teamCount: teamResults.length,
+			findingCount: allFindings.length,
+		});
+	}
+
 	stop(): void {
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
@@ -4240,6 +4991,7 @@ Which team is best suited for this task? Reply with ONLY the team name, nothing 
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
 		this.toolExecutionStorage?.close();
+		this.teamExecutionStorage?.close();
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}

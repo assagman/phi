@@ -524,7 +524,79 @@ presets:
 
 teams:
   # ---------------------------------------------------------------------------
-  # Comprehensive Reviews
+  # UNDERSTAND - Requirements & Research
+  # ---------------------------------------------------------------------------
+  understand:
+    description: "Full requirements analysis: elicit, analyze context, guard scope"
+    strategy: verification
+    agents:
+      - requirements-elicitor
+      - context-analyzer
+      - scope-guardian
+
+  research:
+    description: "Technology research and best practice synthesis"
+    strategy: verification
+    agents:
+      - research-synthesizer
+      - context-analyzer
+
+  kickoff:
+    description: "Quick project kickoff: requirements, scope, initial architecture"
+    strategy: verification
+    agents:
+      - requirements-elicitor
+      - scope-guardian
+      - solution-architect
+
+  # ---------------------------------------------------------------------------
+  # DESIGN - Architecture & Planning
+  # ---------------------------------------------------------------------------
+  design:
+    description: "Full design: architecture, API contracts, data modeling, integration"
+    strategy: verification
+    agents:
+      - solution-architect
+      - api-contract-designer
+      - data-modeler
+      - system-integrator
+
+  deep-design:
+    description: "Deep design with context analysis"
+    strategy: verification
+    agents:
+      - context-analyzer
+      - solution-architect
+      - api-contract-designer
+      - data-modeler
+
+  # ---------------------------------------------------------------------------
+  # IMPLEMENT - Execution Planning
+  # ---------------------------------------------------------------------------
+  plan:
+    description: "Implementation planning: task breakdown and strategy"
+    strategy: verification
+    agents:
+      - task-orchestrator
+      - implementation-strategist
+
+  implement:
+    description: "Implementation guidance: code generation and refactoring advice"
+    strategy: verification
+    agents:
+      - code-generator
+      - refactoring-advisor
+
+  refactor:
+    description: "Refactoring analysis with context and validation"
+    strategy: verification
+    agents:
+      - context-analyzer
+      - refactoring-advisor
+      - test-coverage-auditor
+
+  # ---------------------------------------------------------------------------
+  # VALIDATE - Code Review & Audit
   # ---------------------------------------------------------------------------
   code-review:
     description: "Comprehensive code review with multiple perspectives"
@@ -544,9 +616,18 @@ teams:
       - architecture-auditor
       - error-handling-auditor
 
-  # ---------------------------------------------------------------------------
-  # Security Focused
-  # ---------------------------------------------------------------------------
+  validate:
+    description: "Combined code review + full audit (code-reviewer, security, privacy, types, architecture, errors, perf)"
+    strategy: verification
+    agents:
+      - code-reviewer
+      - security-auditor
+      - privacy-auditor
+      - type-safety-auditor
+      - architecture-auditor
+      - error-handling-auditor
+      - perf-analyzer
+
   security-audit:
     description: "Deep security and privacy analysis"
     strategy: verification
@@ -560,9 +641,6 @@ teams:
     agents:
       - security-auditor
 
-  # ---------------------------------------------------------------------------
-  # Performance & Reliability
-  # ---------------------------------------------------------------------------
   performance:
     description: "Performance, concurrency, and error handling analysis"
     strategy: verification
@@ -571,9 +649,6 @@ teams:
       - concurrency-auditor
       - error-handling-auditor
 
-  # ---------------------------------------------------------------------------
-  # Code Quality
-  # ---------------------------------------------------------------------------
   quality:
     description: "Code quality: types, testing, error handling"
     strategy: verification
@@ -594,9 +669,6 @@ teams:
     agents:
       - test-coverage-auditor
 
-  # ---------------------------------------------------------------------------
-  # Architecture & Design
-  # ---------------------------------------------------------------------------
   architecture:
     description: "Architecture, API design, and dependency analysis"
     strategy: verification
@@ -611,9 +683,6 @@ teams:
     agents:
       - api-design-auditor
 
-  # ---------------------------------------------------------------------------
-  # Frontend/UI
-  # ---------------------------------------------------------------------------
   frontend:
     description: "Frontend review: accessibility, i18n, performance"
     strategy: verification
@@ -628,9 +697,6 @@ teams:
     agents:
       - accessibility-auditor
 
-  # ---------------------------------------------------------------------------
-  # Documentation & Dependencies
-  # ---------------------------------------------------------------------------
   docs:
     description: "Documentation completeness review"
     strategy: union
@@ -644,17 +710,134 @@ teams:
       - dependency-auditor
       - security-auditor
 
+  quality-gate:
+    description: "Quality checkpoint: code review, security, types, tests"
+    strategy: verification
+    agents:
+      - code-reviewer
+      - security-auditor
+      - type-safety-auditor
+      - test-coverage-auditor
+
   # ---------------------------------------------------------------------------
-  # Pre-release
+  # VERIFY - Testing
   # ---------------------------------------------------------------------------
+  verify:
+    description: "Full verification: test strategy, cases, acceptance, regression"
+    strategy: verification
+    agents:
+      - test-strategist
+      - test-case-designer
+      - acceptance-verifier
+      - regression-analyst
+
+  test-planning:
+    description: "Test planning: strategy and case design"
+    strategy: verification
+    agents:
+      - test-strategist
+      - test-case-designer
+
+  acceptance:
+    description: "Acceptance verification and regression analysis"
+    strategy: verification
+    agents:
+      - acceptance-verifier
+      - regression-analyst
+
+  # ---------------------------------------------------------------------------
+  # DELIVER - Release
+  # ---------------------------------------------------------------------------
+  deliver:
+    description: "Full delivery: changelog, deployment validation, release coordination"
+    strategy: verification
+    agents:
+      - changelog-generator
+      - deployment-validator
+      - release-coordinator
+
   pre-release:
-    description: "Pre-release checklist: security, testing, docs, dependencies"
+    description: "Pre-release checklist: validation, verification, delivery readiness"
     strategy: verification
     agents:
       - security-auditor
       - test-coverage-auditor
-      - docs-auditor
+      - acceptance-verifier
+      - deployment-validator
+
+  release-prep:
+    description: "Release preparation: changelog and deployment validation"
+    strategy: verification
+    agents:
+      - changelog-generator
+      - deployment-validator
+
+  # ---------------------------------------------------------------------------
+  # CROSS-PHASE Workflow Teams
+  # ---------------------------------------------------------------------------
+  before-coding:
+    description: "Pre-implementation: requirements, design, planning"
+    strategy: verification
+    agents:
+      - requirements-elicitor
+      - scope-guardian
+      - solution-architect
+      - task-orchestrator
+
+  after-coding:
+    description: "Post-implementation: validation, verification, delivery"
+    strategy: verification
+    agents:
+      - code-reviewer
+      - security-auditor
+      - acceptance-verifier
+      - changelog-generator
+
+  quick-fix:
+    description: "Quick bug fix workflow: context analysis and code review"
+    strategy: verification
+    agents:
+      - context-analyzer
+      - code-reviewer
+      - test-coverage-auditor
+
+  feature:
+    description: "Feature development: understand, design, validate"
+    strategy: verification
+    agents:
+      - requirements-elicitor
+      - solution-architect
+      - code-reviewer
+      - test-strategist
+
+  greenfield:
+    description: "New project setup: full requirements, research, and design"
+    strategy: verification
+    agents:
+      - requirements-elicitor
+      - research-synthesizer
+      - solution-architect
+      - api-contract-designer
+
+  maintenance:
+    description: "Maintenance workflow: dependencies, refactoring, tests, changelog"
+    strategy: verification
+    agents:
       - dependency-auditor
+      - refactoring-advisor
+      - test-coverage-auditor
+      - changelog-generator
+
+  full-cycle:
+    description: "Full SDLC: one key agent from each phase"
+    strategy: verification
+    agents:
+      - requirements-elicitor
+      - solution-architect
+      - task-orchestrator
+      - code-reviewer
+      - test-strategist
+      - changelog-generator
 
 # =============================================================================
 # Models

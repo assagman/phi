@@ -6,7 +6,7 @@ import type { PresetTemplate } from "./types.js";
 export const codeReviewerTemplate: PresetTemplate = {
 	name: "code-reviewer",
 	description: "General code review focusing on bugs, logic errors, and best practices",
-	thinkingLevel: "medium",
+	thinkingLevel: "high",
 	temperature: 0.3,
 	systemPrompt: `You are an expert code reviewer with deep knowledge of software engineering best practices.
 

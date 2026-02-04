@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MergeStrategyType } from "agents";
 import { parse as parseYaml } from "yaml";
+import { isPresetName } from "../preset-registry.js";
 import type {
 	AppConfig,
 	ModelsConfig,
@@ -265,22 +266,23 @@ function resolveTeams(
 
 /**
  * Resolve team agent references to preset names.
+ * Checks both YAML presets and TypeScript preset registry.
  */
 function resolveTeamAgents(team: TeamConfig, presets: Map<string, ResolvedPreset>): string[] {
 	const agents: string[] = [];
 
 	for (const agentRef of team.agents) {
 		if (typeof agentRef === "string") {
-			// Direct preset reference
-			if (presets.has(agentRef)) {
+			// Direct preset reference - check YAML presets first, then TypeScript registry
+			if (presets.has(agentRef) || isPresetName(agentRef)) {
 				agents.push(agentRef);
 			}
 		} else {
 			// Inline agent - use preset name or custom name
 			const inline = agentRef as TeamAgentInline;
-			const name = inline.name ?? inline.preset;
-			if (name && presets.has(inline.preset ?? name)) {
-				agents.push(inline.preset ?? name);
+			const presetName = inline.preset ?? inline.name;
+			if (presetName && (presets.has(presetName) || isPresetName(presetName))) {
+				agents.push(presetName);
 			}
 		}
 	}

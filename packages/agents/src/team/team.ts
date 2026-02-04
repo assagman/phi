@@ -16,6 +16,13 @@ import type {
 /**
  * Tracks epsilon tasks per agent during team execution.
  * Parses tool execution events to extract task creation/update info.
+ *
+ * Epsilon tool output formats:
+ * - Single create: "Created task #1:\n✓ #1 [priority] Title\n  status | date"
+ * - Bulk create:   "Created 3/3 tasks:\nCreated #1: Title\nCreated #2: Title"
+ * - Single update: "Updated task #1:\n✓ #1 [priority] Title\n  status | date"
+ * - Bulk update:   "Updated 2/2 tasks:\nUpdated #1: Title\nUpdated #2: Title"
+ * - Delete:        "Deleted task #1" or "Deleted #1"
  */
 class AgentTaskTracker {
 	/** Maximum tasks to track per agent to prevent unbounded memory growth */
@@ -44,72 +51,147 @@ class AgentTaskTracker {
 			if (!result || typeof result !== "object") return undefined;
 
 			// Extract text content from result with explicit type validation
-			let text = "";
-			if ("content" in result) {
-				const content = (result as { content: unknown }).content;
-				if (Array.isArray(content)) {
-					for (const item of content) {
-						if (
-							item &&
-							typeof item === "object" &&
-							"type" in item &&
-							(item as { type: unknown }).type === "text" &&
-							"text" in item &&
-							typeof (item as { text: unknown }).text === "string"
-						) {
-							text += (item as { text: string }).text;
-						}
-					}
-				}
-			}
+			const text = this.extractTextContent(result);
+			if (!text) return undefined;
 
 			// Parse task info from result text
 			if (toolName === "epsilon_task_create" || toolName === "epsilon_task_create_bulk") {
-				// Extract created task IDs and titles
-				// Format: "Created task #123:" or "Created #123: Title"
-				const matches = text.matchAll(/Created(?:\s+task)?\s+#(\d+)[:\s]+([^\n]+)?/gi);
-				for (const match of matches) {
-					// Enforce per-agent task limit to prevent unbounded memory growth
-					if (agentTasks.size >= AgentTaskTracker.MAX_TASKS_PER_AGENT) {
-						break;
-					}
-					const id = Number.parseInt(match[1], 10);
-					const title = match[2]?.trim() || `Task #${id}`;
-					agentTasks.set(id, { title, status: "todo" });
-				}
+				this.parseCreateResult(text, agentTasks);
 			} else if (toolName === "epsilon_task_update" || toolName === "epsilon_task_update_bulk") {
-				// Extract updated task status
-				// Format: "Updated task #123:" or "Updated #123: Title"
-				const matches = text.matchAll(/Updated(?:\s+task)?\s+#(\d+)[:\s]+([^\n]+)?/gi);
-				for (const match of matches) {
-					const id = Number.parseInt(match[1], 10);
-					const existing = agentTasks.get(id);
-					if (existing) {
-						// Check if status changed in the update
-						const statusMatch = text.match(/\b(todo|in_progress|blocked|done|cancelled)\b/i);
-						if (statusMatch) {
-							existing.status = statusMatch[1].toLowerCase() as TaskStatus;
-						}
-						// Update title if present
-						if (match[2]) {
-							existing.title = match[2].trim();
-						}
-					}
-				}
+				this.parseUpdateResult(text, agentTasks);
 			} else if (toolName === "epsilon_task_delete" || toolName === "epsilon_task_delete_bulk") {
-				// Remove deleted tasks
-				const matches = text.matchAll(/Deleted(?:\s+task)?\s+#(\d+)/gi);
-				for (const match of matches) {
-					const id = Number.parseInt(match[1], 10);
-					agentTasks.delete(id);
-				}
+				this.parseDeleteResult(text, agentTasks);
 			}
 
 			return this.getTaskInfo(agentName);
-		} catch {
-			// Silently fail - regex parsing errors shouldn't break progress tracking
+		} catch (e) {
+			// Log error in debug mode (task #313), but don't break progress tracking
+			if (process.env.DEBUG_AGENTS) {
+				debugLog("task-tracker", "Error processing tool event", {
+					agentName,
+					toolName: (event as { toolName?: string }).toolName,
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
 			// Return current state (may be partial) rather than crashing
 			return this.tasks.has(agentName) ? this.getTaskInfo(agentName) : undefined;
+		}
+	}
+
+	/**
+	 * Extract text content from tool result object.
+	 */
+	private extractTextContent(result: unknown): string {
+		let text = "";
+		if (result && typeof result === "object" && "content" in result) {
+			const content = (result as { content: unknown }).content;
+			if (Array.isArray(content)) {
+				for (const item of content) {
+					if (
+						item &&
+						typeof item === "object" &&
+						"type" in item &&
+						(item as { type: unknown }).type === "text" &&
+						"text" in item &&
+						typeof (item as { text: unknown }).text === "string"
+					) {
+						text += (item as { text: string }).text;
+					}
+				}
+			}
+		}
+		return text;
+	}
+
+	/**
+	 * Parse task creation result.
+	 * Handles both single creates ("Created task #1:\n✓ #1 [pri] Title")
+	 * and bulk creates ("Created #1: Title\nCreated #2: Title")
+	 */
+	private parseCreateResult(text: string, agentTasks: Map<number, { title: string; status: TaskStatus }>): void {
+		const lines = text.split("\n");
+
+		// First try bulk format: "Created #123: Title" (title on same line)
+		const bulkMatches = text.matchAll(/Created\s+#(\d+):\s+([^\n]+)/gi);
+		for (const match of bulkMatches) {
+			if (agentTasks.size >= AgentTaskTracker.MAX_TASKS_PER_AGENT) break;
+			const id = Number.parseInt(match[1], 10);
+			const title = match[2]?.trim() || `Task #${id}`;
+			agentTasks.set(id, { title, status: "todo" });
+		}
+
+		// Then try single format: "Created task #123:" followed by task details on next line
+		// The task detail line format: "✓ #1 [priority] Title [tags]"
+		const singleMatch = text.match(/Created\s+task\s+#(\d+):/i);
+		if (singleMatch) {
+			const id = Number.parseInt(singleMatch[1], 10);
+			if (!agentTasks.has(id) && agentTasks.size < AgentTaskTracker.MAX_TASKS_PER_AGENT) {
+				// Look for title in the task detail line: "✓ #id [priority] Title"
+				// Also handle status icons: ○ ◐ ✓ ✗
+				const titleMatch = text.match(/[○◐✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
+				const title = titleMatch?.[1]?.trim() || `Task #${id}`;
+				// Extract initial status from the status line: "  status | date"
+				const statusLine = lines.find((l) => /^\s+(todo|in_progress|blocked|done|cancelled)\s*\|/i.test(l));
+				const status = statusLine?.match(/^\s+(todo|in_progress|blocked|done|cancelled)/i)?.[1]?.toLowerCase() as
+					| TaskStatus
+					| undefined;
+				agentTasks.set(id, { title, status: status ?? "todo" });
+			}
+		}
+	}
+
+	/**
+	 * Parse task update result.
+	 * Handles both single updates and bulk updates, extracting per-task status.
+	 */
+	private parseUpdateResult(text: string, agentTasks: Map<number, { title: string; status: TaskStatus }>): void {
+		const lines = text.split("\n");
+
+		// For bulk updates: "Updated #123: Title" - update each task found
+		const bulkMatches = text.matchAll(/Updated\s+#(\d+):\s+([^\n]+)/gi);
+		for (const match of bulkMatches) {
+			const id = Number.parseInt(match[1], 10);
+			const existing = agentTasks.get(id);
+			if (existing) {
+				const newTitle = match[2]?.trim();
+				if (newTitle) existing.title = newTitle;
+				// For bulk updates, we can't reliably extract individual status
+				// Mark as done since it was successfully updated
+			}
+		}
+
+		// For single update: "Updated task #123:" followed by task details
+		const singleMatch = text.match(/Updated\s+task\s+#(\d+):/i);
+		if (singleMatch) {
+			const id = Number.parseInt(singleMatch[1], 10);
+			const existing = agentTasks.get(id);
+			if (existing) {
+				// Extract title from detail line: "✓ #id [priority] Title"
+				const titleMatch = text.match(/[○◐✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
+				if (titleMatch?.[1]) {
+					existing.title = titleMatch[1].trim();
+				}
+				// Extract status from status line: "  status | date"
+				const statusLine = lines.find((l) => /^\s+(todo|in_progress|blocked|done|cancelled)\s*\|/i.test(l));
+				const status = statusLine?.match(/^\s+(todo|in_progress|blocked|done|cancelled)/i)?.[1]?.toLowerCase() as
+					| TaskStatus
+					| undefined;
+				if (status) {
+					existing.status = status;
+				}
+			}
+		}
+	}
+
+	/**
+	 * Parse task deletion result.
+	 */
+	private parseDeleteResult(text: string, agentTasks: Map<number, { title: string; status: TaskStatus }>): void {
+		// Handle both "Deleted task #123" and "Deleted #123"
+		const matches = text.matchAll(/Deleted(?:\s+task)?\s+#(\d+)/gi);
+		for (const match of matches) {
+			const id = Number.parseInt(match[1], 10);
+			agentTasks.delete(id);
 		}
 	}
 
@@ -212,6 +294,30 @@ export class Team {
 	private async executeInternal(stream: EventStream<TeamEvent, TeamResult>, options: TeamRunOptions): Promise<void> {
 		const startTime = Date.now();
 		const { agents, tools, strategy = "parallel", merge, maxRetries = 1, continueOnError = true } = this.config;
+		const storage = options.storage;
+
+		// Create execution record in storage if provided
+		let executionId: number | undefined;
+		if (storage) {
+			try {
+				executionId = storage.createExecution({
+					sessionId: `session-${Date.now()}`, // Session ID from caller context
+					teamName: this.config.name,
+					task: options.task ?? "No task specified",
+					agentCount: agents.length,
+				});
+				if (process.env.DEBUG_AGENTS) {
+					debugLog("team", "Created execution record", { executionId, teamName: this.config.name });
+				}
+			} catch (err) {
+				// Storage errors shouldn't block execution - log and continue
+				if (process.env.DEBUG_AGENTS) {
+					debugLog("team", "Failed to create execution record", {
+						error: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
+		}
 
 		if (process.env.DEBUG_AGENTS) {
 			debugLog("team", "executeInternal starting", {
@@ -220,6 +326,7 @@ export class Team {
 				toolCount: tools.length,
 				strategy,
 				hasTask: !!options.task,
+				hasStorage: !!storage,
 			});
 		}
 
@@ -233,9 +340,34 @@ export class Team {
 
 		try {
 			if (strategy === "parallel") {
-				agentResults = await this.executeParallel(agents, tools, options, maxRetries, continueOnError, stream);
+				agentResults = await this.executeParallel(
+					agents,
+					tools,
+					options,
+					maxRetries,
+					continueOnError,
+					stream,
+					executionId,
+				);
 			} else {
-				agentResults = await this.executeSequential(agents, tools, options, maxRetries, continueOnError, stream);
+				agentResults = await this.executeSequential(
+					agents,
+					tools,
+					options,
+					maxRetries,
+					continueOnError,
+					stream,
+					executionId,
+				);
+			}
+
+			// Update execution status to merging
+			if (storage && executionId !== undefined) {
+				try {
+					storage.updateExecutionStatus(executionId, "merging");
+				} catch {
+					// Ignore storage errors
+				}
 			}
 
 			// Merge phase
@@ -246,7 +378,7 @@ export class Team {
 				findingCount: allFindings.length,
 			});
 
-			const mergeResult = await this.runMerge(agentResults, tools, options, stream);
+			const mergeResult = await this.runMerge(agentResults, tools, options, stream, executionId);
 
 			const result: TeamResult = {
 				teamName: this.config.name,
@@ -265,10 +397,29 @@ export class Team {
 				verifiedCount: result.findings.filter((f) => f.verified).length,
 			});
 
+			// Save final result to storage
+			if (storage && executionId !== undefined) {
+				try {
+					storage.saveTeamResult(executionId, result);
+				} catch {
+					// Ignore storage errors
+				}
+			}
+
 			stream.push({ type: "team_end", result });
 			stream.end(result);
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
+
+			// Update execution status to failed
+			if (storage && executionId !== undefined) {
+				try {
+					storage.updateExecutionStatus(executionId, "failed", errorMessage);
+				} catch {
+					// Ignore storage errors
+				}
+			}
+
 			if (process.env.DEBUG_AGENTS) {
 				debugLog("team", "executeInternal error", {
 					teamName: this.config.name,
@@ -297,9 +448,20 @@ export class Team {
 		maxRetries: number,
 		continueOnError: boolean,
 		stream: EventStream<TeamEvent, TeamResult>,
+		executionId?: number,
 	): Promise<AgentResult[]> {
 		const promises = agents.map((agent, index) =>
-			this.executeAgent(agent, tools, options, maxRetries, continueOnError, index, agents.length, stream),
+			this.executeAgent(
+				agent,
+				tools,
+				options,
+				maxRetries,
+				continueOnError,
+				index,
+				agents.length,
+				stream,
+				executionId,
+			),
 		);
 
 		return Promise.all(promises);
@@ -312,6 +474,7 @@ export class Team {
 		maxRetries: number,
 		continueOnError: boolean,
 		stream: EventStream<TeamEvent, TeamResult>,
+		executionId?: number,
 	): Promise<AgentResult[]> {
 		const results: AgentResult[] = [];
 
@@ -325,6 +488,7 @@ export class Team {
 				i,
 				agents.length,
 				stream,
+				executionId,
 			);
 			results.push(result);
 
@@ -344,9 +508,21 @@ export class Team {
 		index: number,
 		total: number,
 		stream: EventStream<TeamEvent, TeamResult>,
+		executionId?: number,
 	): Promise<AgentResult> {
 		const startTime = Date.now();
 		let lastError: string | undefined;
+		const storage = options.storage;
+
+		// Create agent result record in storage if provided
+		let agentResultId: number | undefined;
+		if (storage && executionId !== undefined) {
+			try {
+				agentResultId = storage.createAgentResult(executionId, preset.name);
+			} catch {
+				// Ignore storage errors
+			}
+		}
 
 		stream.push({
 			type: "agent_start",
@@ -363,10 +539,35 @@ export class Team {
 					attempt,
 					maxRetries,
 				});
+
+				// Update storage with retry status
+				if (storage && agentResultId !== undefined) {
+					try {
+						storage.updateAgentResult(agentResultId, { status: "retrying" });
+					} catch {
+						// Ignore storage errors
+					}
+				}
 			}
 
 			try {
 				const result = await this.runSingleAgent(preset, tools, options, stream);
+
+				// Persist successful result to storage
+				if (storage && agentResultId !== undefined) {
+					try {
+						storage.updateAgentResult(agentResultId, {
+							status: "completed",
+							findings: result.findings,
+							messages: result.messages,
+							usage: result.usage,
+							durationMs: result.durationMs,
+						});
+					} catch {
+						// Ignore storage errors
+					}
+				}
+
 				stream.push({
 					type: "agent_end",
 					agentName: preset.name,
@@ -385,6 +586,18 @@ export class Team {
 				});
 
 				if (!willRetry && !continueOnError) {
+					// Persist failure to storage
+					if (storage && agentResultId !== undefined) {
+						try {
+							storage.updateAgentResult(agentResultId, {
+								status: "failed",
+								error: lastError,
+								durationMs: Date.now() - startTime,
+							});
+						} catch {
+							// Ignore storage errors
+						}
+					}
 					throw error;
 				}
 			}
@@ -399,6 +612,19 @@ export class Team {
 			messages: [],
 			durationMs: Date.now() - startTime,
 		};
+
+		// Persist failure to storage
+		if (storage && agentResultId !== undefined) {
+			try {
+				storage.updateAgentResult(agentResultId, {
+					status: "failed",
+					error: lastError,
+					durationMs: failResult.durationMs,
+				});
+			} catch {
+				// Ignore storage errors
+			}
+		}
 
 		stream.push({
 			type: "agent_end",
@@ -591,9 +817,11 @@ export class Team {
 		tools: AgentTool[],
 		options: TeamRunOptions,
 		stream: EventStream<TeamEvent, TeamResult>,
+		executionId?: number,
 	): Promise<Pick<TeamResult, "findings" | "clusters" | "summary">> {
 		const { merge } = this.config;
 		const allFindings = agentResults.flatMap((r) => r.findings);
+		const storage = options.storage;
 
 		// Import merge executor dynamically to avoid circular deps
 		const { getMergeExecutor } = await import("../strategies/index.js");
@@ -608,7 +836,22 @@ export class Team {
 			};
 		}
 
+		// Track current merge snapshot for persistence
+		let currentSnapshotId: number | undefined;
+
 		stream.push({ type: "merge_progress", phase: "parsing" });
+
+		// Create initial merge snapshot with input data
+		if (storage && executionId !== undefined) {
+			try {
+				currentSnapshotId = storage.createMergeSnapshot(executionId, "parsing", {
+					findingCount: allFindings.length,
+					agentCount: agentResults.length,
+				});
+			} catch {
+				// Ignore storage errors
+			}
+		}
 
 		const result = await executor.execute(allFindings, {
 			mergeAgent: merge.mergeAgent,
@@ -620,8 +863,33 @@ export class Team {
 			},
 			onProgress: (phase: "parsing" | "clustering" | "verifying" | "ranking" | "synthesizing") => {
 				stream.push({ type: "merge_progress", phase });
+
+				// Create snapshot for each phase transition
+				if (storage && executionId !== undefined) {
+					try {
+						// Update previous snapshot's output before creating new one
+						if (currentSnapshotId !== undefined) {
+							storage.updateMergeSnapshot(currentSnapshotId, { phase, transitionTime: Date.now() });
+						}
+						currentSnapshotId = storage.createMergeSnapshot(executionId, phase, {
+							phase,
+							startTime: Date.now(),
+						});
+					} catch {
+						// Ignore storage errors
+					}
+				}
 			},
 		});
+
+		// Update final snapshot with merge result
+		if (storage && currentSnapshotId !== undefined) {
+			try {
+				storage.updateMergeSnapshot(currentSnapshotId, result);
+			} catch {
+				// Ignore storage errors
+			}
+		}
 
 		return result;
 	}

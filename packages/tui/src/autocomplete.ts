@@ -1,22 +1,37 @@
 import { spawnSync } from "child_process";
-import { readdirSync, statSync } from "fs";
+import { existsSync, readdirSync, statSync } from "fs";
 import { homedir } from "os";
-import { basename, dirname, join } from "path";
+import { basename, dirname, join, relative } from "path";
 import { fuzzyFilter } from "./fuzzy.js";
 
+/**
+ * Find the git root directory by walking up from the given directory.
+ * Returns null if not in a git repository.
+ */
+function findGitRoot(startDir: string): string | null {
+	let dir = startDir;
+	while (true) {
+		const gitPath = join(dir, ".git");
+		if (existsSync(gitPath)) {
+			return dir;
+		}
+		const parent = dirname(dir);
+		if (parent === dir) return null;
+		dir = parent;
+	}
+}
+
 // Use fd to walk directory tree (fast, respects .gitignore)
+// Returns all files up to maxResults - filtering is done by caller using full paths
 function walkDirectoryWithFd(
 	baseDir: string,
 	fdPath: string,
-	query: string,
 	maxResults: number,
 ): Array<{ path: string; isDirectory: boolean }> {
 	const args = ["--base-directory", baseDir, "--max-results", String(maxResults), "--type", "f", "--type", "d"];
 
-	// Add query as pattern if provided
-	if (query) {
-		args.push(query);
-	}
+	// Don't pass query to fd - fd only matches against basenames, not full paths.
+	// We'll filter using fuzzy matching on the full relative path ourselves.
 
 	const result = spawnSync(fdPath, args, {
 		encoding: "utf-8",
@@ -89,6 +104,9 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 	private commands: (SlashCommand | AutocompleteItem)[];
 	private basePath: string;
 	private fdPath: string | null;
+	// For fuzzy file search, we search from git root (if available) to enable
+	// full path matching like "packages/tui/fuzz" regardless of cwd
+	private gitRoot: string | null;
 
 	constructor(
 		commands: (SlashCommand | AutocompleteItem)[] = [],
@@ -98,6 +116,8 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		this.commands = commands;
 		this.basePath = basePath;
 		this.fdPath = fdPath;
+		// Find git root for fuzzy searches - allows searching full repo paths
+		this.gitRoot = findGitRoot(basePath);
 	}
 
 	getSuggestions(
@@ -109,9 +129,10 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const textBeforeCursor = currentLine.slice(0, cursorCol);
 
 		// Check for @ file reference (fuzzy search) - must be after a space or at start
-		const atMatch = textBeforeCursor.match(/(?:^|[\s])(@[^\s]*)$/);
+		// Supports space-separated tokens for fzf-style matching (e.g., "@tui auto" matches "packages/tui/src/autocomplete.ts")
+		const atMatch = textBeforeCursor.match(/(?:^|[\s])(@[^@]*)$/);
 		if (atMatch) {
-			const prefix = atMatch[1] ?? "@"; // The @... part
+			const prefix = atMatch[1]?.trimEnd() ?? "@"; // The @... part (trim trailing whitespace for cleaner matching)
 			const query = prefix.slice(1); // Remove the @
 			const suggestions = this.getFuzzyFileSuggestions(query);
 			if (suggestions.length === 0) return null;
@@ -468,31 +489,10 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		}
 	}
 
-	// Score an entry against the query (higher = better match)
-	// isDirectory adds bonus to prioritize folders
-	private scoreEntry(filePath: string, query: string, isDirectory: boolean): number {
-		const fileName = basename(filePath);
-		const lowerFileName = fileName.toLowerCase();
-		const lowerQuery = query.toLowerCase();
-
-		let score = 0;
-
-		// Exact filename match (highest)
-		if (lowerFileName === lowerQuery) score = 100;
-		// Filename starts with query
-		else if (lowerFileName.startsWith(lowerQuery)) score = 80;
-		// Substring match in filename
-		else if (lowerFileName.includes(lowerQuery)) score = 50;
-		// Substring match in full path
-		else if (filePath.toLowerCase().includes(lowerQuery)) score = 30;
-
-		// Directories get a bonus to appear first
-		if (isDirectory && score > 0) score += 10;
-
-		return score;
-	}
-
 	// Fuzzy file search using fd (fast, respects .gitignore)
+	// Uses full relative paths for matching, so queries like "tui/fuzz" work
+	// Searches from git root (if available) to enable matching paths like "packages/tui/..."
+	// regardless of which subdirectory the user started from
 	private getFuzzyFileSuggestions(query: string): AutocompleteItem[] {
 		if (!this.fdPath) {
 			// fd not available, return empty results
@@ -500,31 +500,57 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		}
 
 		try {
-			const entries = walkDirectoryWithFd(this.basePath, this.fdPath, query, 100);
+			// Search from git root if available, otherwise from basePath (cwd)
+			// This allows full repo path matching like "packages/tui/fuzz"
+			const searchRoot = this.gitRoot ?? this.basePath;
+			const entries = walkDirectoryWithFd(searchRoot, this.fdPath, 1000);
 
-			// Score entries
-			const scoredEntries = entries
-				.map((entry) => ({
-					...entry,
-					score: query ? this.scoreEntry(entry.path, query, entry.isDirectory) : 1,
-				}))
-				.filter((entry) => entry.score > 0);
+			// Calculate relative path from cwd to git root for path adjustment
+			// e.g., if cwd is /repo/packages/tui and gitRoot is /repo,
+			// cwdRelativeToRoot would be "packages/tui"
+			const cwdRelativeToRoot = this.gitRoot ? relative(this.gitRoot, this.basePath) : "";
 
-			// Sort by score (descending) and take top 20
-			scoredEntries.sort((a, b) => b.score - a.score);
-			const topEntries = scoredEntries.slice(0, 20);
+			if (!query) {
+				// No query - return first 20 entries
+				const topEntries = entries.slice(0, 20);
+				return topEntries.map(({ path: entryPath, isDirectory }) => {
+					const pathWithoutSlash = isDirectory ? entryPath.slice(0, -1) : entryPath;
+					const entryName = basename(pathWithoutSlash);
+					// Convert path to be relative to cwd for the actual file reference
+					const pathRelativeToCwd = this.convertToRelativePath(entryPath, cwdRelativeToRoot);
+					return {
+						value: `@${pathRelativeToCwd}`,
+						label: entryName + (isDirectory ? "/" : ""),
+						description: pathWithoutSlash, // Show full repo path for context
+					};
+				});
+			}
+
+			// Fuzzy match against full relative paths (from git root, not just basenames)
+			// This allows queries like "tui/fuzz" or "src/auto" to work properly
+			const entriesWithPaths = entries.map((entry) => ({
+				...entry,
+				// Use path without trailing slash for matching
+				matchPath: entry.isDirectory ? entry.path.slice(0, -1) : entry.path,
+			}));
+
+			// Use fuzzyFilter to match and sort by score
+			const filtered = fuzzyFilter(entriesWithPaths, query, (e) => e.matchPath);
+
+			// Take top 20 results
+			const topEntries = filtered.slice(0, 20);
 
 			// Build suggestions
 			const suggestions: AutocompleteItem[] = [];
-			for (const { path: entryPath, isDirectory } of topEntries) {
-				// fd already includes trailing / for directories
-				const pathWithoutSlash = isDirectory ? entryPath.slice(0, -1) : entryPath;
-				const entryName = basename(pathWithoutSlash);
+			for (const { path: entryPath, isDirectory, matchPath } of topEntries) {
+				const entryName = basename(matchPath);
+				// Convert path to be relative to cwd for the actual file reference
+				const pathRelativeToCwd = this.convertToRelativePath(entryPath, cwdRelativeToRoot);
 
 				suggestions.push({
-					value: `@${entryPath}`,
+					value: `@${pathRelativeToCwd}`,
 					label: entryName + (isDirectory ? "/" : ""),
-					description: pathWithoutSlash,
+					description: matchPath, // Show full repo path for context
 				});
 			}
 
@@ -532,6 +558,25 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		} catch {
 			return [];
 		}
+	}
+
+	/**
+	 * Convert a path relative to git root to a path relative to cwd.
+	 * If cwdRelativeToRoot is empty (cwd === gitRoot), returns the path as-is.
+	 * Otherwise, adjusts the path to be relative from cwd.
+	 *
+	 * Example: If gitRoot is /repo, cwd is /repo/packages/tui,
+	 * and entryPath is "packages/ai/src/index.ts",
+	 * the result would be "../ai/src/index.ts"
+	 */
+	private convertToRelativePath(entryPath: string, cwdRelativeToRoot: string): string {
+		if (!cwdRelativeToRoot) {
+			// cwd is at git root, no conversion needed
+			return entryPath;
+		}
+		// Use relative() to compute the path from cwd to the entry
+		// entryPath is relative to gitRoot, and cwdRelativeToRoot is cwd's position within gitRoot
+		return relative(cwdRelativeToRoot, entryPath);
 	}
 
 	// Force file completion (called on Tab key) - always returns suggestions

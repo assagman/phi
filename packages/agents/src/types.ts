@@ -248,4 +248,50 @@ export interface TeamRunOptions {
 	initialMessages?: AgentMessage[];
 	/** API key resolver for dynamic keys */
 	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+	/**
+	 * SQLite storage for persistence. When provided:
+	 * - Agent results are persisted as they complete
+	 * - Merge phase snapshots are saved
+	 * - Results can be recovered if execution fails
+	 */
+	storage?: TeamExecutionStorageInterface;
+}
+
+/**
+ * Interface for team execution storage (decoupled from implementation).
+ * Allows dependency injection and testing.
+ */
+export interface TeamExecutionStorageInterface {
+	/** Create a new execution record */
+	createExecution(input: { sessionId: string; teamName: string; task: string; agentCount: number }): number;
+	/** Update execution status */
+	updateExecutionStatus(
+		executionId: number,
+		status: "pending" | "running" | "merging" | "completed" | "failed" | "aborted",
+		error?: string,
+	): void;
+	/** Create agent result record */
+	createAgentResult(executionId: number, agentName: string): number;
+	/** Update agent result */
+	updateAgentResult(
+		agentResultId: number,
+		input: {
+			status?: "pending" | "running" | "completed" | "failed" | "retrying";
+			findings?: Finding[];
+			messages?: AgentMessage[];
+			usage?: { inputTokens: number; outputTokens: number };
+			durationMs?: number;
+			error?: string;
+		},
+	): void;
+	/** Create merge phase snapshot */
+	createMergeSnapshot(
+		executionId: number,
+		phase: "parsing" | "clustering" | "verifying" | "ranking" | "synthesizing" | "completed",
+		inputData: unknown,
+	): number;
+	/** Update merge snapshot with output */
+	updateMergeSnapshot(snapshotId: number, outputData: unknown): void;
+	/** Save final team result */
+	saveTeamResult(executionId: number, result: TeamResult): void;
 }

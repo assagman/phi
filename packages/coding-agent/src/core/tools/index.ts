@@ -15,12 +15,27 @@ export { createFindTool, type FindOperations, type FindToolDetails, type FindToo
 export { createGrepTool, type GrepOperations, type GrepToolDetails, type GrepToolOptions, grepTool } from "./grep.js";
 export { createLsTool, type LsOperations, type LsToolDetails, type LsToolOptions, lsTool } from "./ls.js";
 export {
+	createAnalyzeConfigsTool,
+	createAnalyzeDependenciesTool,
+	createAnalyzeLanguagesTool,
+	createAnalyzeStructureTool,
+	createProjectAnalyzerTools,
+	getProjectAnalyzerToolsArray,
+	type ProjectAnalyzerTools,
+} from "./project-analyzer.js";
+export {
 	createReadTool,
 	type ReadOperations,
 	type ReadToolDetails,
 	type ReadToolOptions,
 	readTool,
 } from "./read.js";
+export {
+	createTeamReviewTool,
+	type TeamReviewResult,
+	type TeamReviewToolDetails,
+	type TeamReviewToolOptions,
+} from "./team-review.js";
 export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
