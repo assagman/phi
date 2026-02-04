@@ -1751,7 +1751,9 @@ export class InteractiveMode {
 
 			case "tool_execution_start": {
 				if (!this.pendingTools.has(event.toolCallId)) {
-					const component = new ToolExecutionComponent(event.toolName, event.args, this.ui);
+					const component = new ToolExecutionComponent(event.toolName, event.args, this.ui, () =>
+						this.scrollableViewport.invalidateItemCache(component),
+					);
 					component.setExpanded(this.toolOutputExpanded);
 					this.addToChat(component);
 					this.pendingTools.set(event.toolCallId, component);
