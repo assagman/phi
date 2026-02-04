@@ -7,9 +7,10 @@
  * 2. Team review tool - shows lead analyzer phase, then multiple teams
  */
 
+import * as path from "node:path";
 import type { AgentTaskInfo, TeamEvent } from "agents";
 import { Container, Text, type TUI } from "tui";
-import type { CoopPhase } from "../../../core/tools/index.js";
+import type { CoopPhase, LeadTaskEvent, LeadToolEvent } from "../../../core/tools/index.js";
 import { theme } from "../theme/theme.js";
 
 const PULSE_PERIOD_MS = 1500;
@@ -74,6 +75,15 @@ export class TeamExecutionComponent extends Container {
 	private selectedTeams: string[] = [];
 	private leadReasoning: string | undefined;
 	private leadError: string | undefined;
+
+	// Lead analyzer task tracking (driven by epsilon)
+	private leadTasks: Map<number, { title: string; status: string }> = new Map();
+
+	// Lead analyzer tool activity tracking
+	private leadToolsActive: Map<string, LeadToolEvent> = new Map(); // toolCallId -> event
+	private leadToolsCompleted: Array<{ path?: string; command?: string; lineCount?: number; isError?: boolean }> = [];
+	private leadFilesScanned = 0;
+	private leadSearchesRun = 0;
 
 	constructor(teamName: string, agentNames: string[], ui?: TUI, onInvalidate?: () => void) {
 		super();
@@ -235,6 +245,69 @@ export class TeamExecutionComponent extends Container {
 		this.update();
 	}
 
+	/**
+	 * Handle lead analyzer epsilon task event for progress display
+	 */
+	handleLeadTaskEvent(event: LeadTaskEvent): void {
+		switch (event.type) {
+			case "create":
+				this.leadTasks.set(event.taskId, {
+					title: event.title ?? `Task #${event.taskId}`,
+					status: event.status ?? "todo",
+				});
+				break;
+			case "update": {
+				const existing = this.leadTasks.get(event.taskId);
+				if (existing) {
+					if (event.title) existing.title = event.title;
+					if (event.status) existing.status = event.status;
+				}
+				break;
+			}
+			case "delete":
+				this.leadTasks.delete(event.taskId);
+				break;
+		}
+		this.update();
+	}
+
+	/**
+	 * Handle lead analyzer tool activity event for progress display
+	 */
+	handleLeadToolEvent(event: LeadToolEvent): void {
+		if (event.type === "start") {
+			this.leadToolsActive.set(event.toolCallId, event);
+		} else {
+			// End event
+			this.leadToolsActive.delete(event.toolCallId);
+
+			// Track completed tools for display
+			const record: (typeof this.leadToolsCompleted)[0] = { isError: event.isError };
+
+			if (event.path) {
+				record.path = event.path;
+				this.leadFilesScanned++;
+			}
+			if (event.command) {
+				record.command = event.command;
+				// Count rg/fd commands as searches
+				if (event.command.includes("rg ") || event.command.includes("fd ")) {
+					this.leadSearchesRun++;
+				}
+			}
+			if (event.lineCount) {
+				record.lineCount = event.lineCount;
+			}
+
+			// Keep last 5 completed tools for display
+			this.leadToolsCompleted.push(record);
+			if (this.leadToolsCompleted.length > 5) {
+				this.leadToolsCompleted.shift();
+			}
+		}
+		this.update();
+	}
+
 	private startPulse(): void {
 		if (this.pulseTimer) return;
 		this.pulseTimer = setInterval(() => {
@@ -276,14 +349,76 @@ export class TeamExecutionComponent extends Container {
 		);
 		lines.push("");
 
-		// If in lead analyzer phase (team review tool), show that
+		// If in lead analyzer phase (team review tool), show tool activity and epsilon tasks
 		if (this.reviewPhase === "lead_analyzing") {
 			lines.push(`${this.pulsed("◐")} ${theme.fg("muted", "Analyzing project and selecting teams...")}`);
 			lines.push("");
-			lines.push(theme.fg("muted", "  The lead analyzer is:"));
-			lines.push(theme.fg("muted", "  • Searching memory for past context"));
-			lines.push(theme.fg("muted", "  • Analyzing project structure"));
-			lines.push(theme.fg("muted", "  • Selecting optimal review teams"));
+
+			// Show tool activity stats
+			const hasActivity = this.leadFilesScanned > 0 || this.leadSearchesRun > 0 || this.leadToolsActive.size > 0;
+
+			if (!hasActivity && this.leadTasks.size === 0) {
+				// No activity yet - show waiting indicator
+				lines.push(theme.fg("muted", "  Initializing lead analyzer..."));
+			} else {
+				// Show stats line
+				const stats: string[] = [];
+				if (this.leadFilesScanned > 0) {
+					stats.push(`Files: ${this.leadFilesScanned}`);
+				}
+				if (this.leadSearchesRun > 0) {
+					stats.push(`Searches: ${this.leadSearchesRun}`);
+				}
+				if (stats.length > 0) {
+					lines.push(theme.fg("muted", `  ${stats.join("  •  ")}`));
+					lines.push("");
+				}
+
+				// Show currently active tools
+				const activeTools = Array.from(this.leadToolsActive.values());
+				if (activeTools.length > 0) {
+					for (let i = 0; i < activeTools.length; i++) {
+						const tool = activeTools[i];
+						const isLast = i === activeTools.length - 1 && this.leadToolsCompleted.length === 0;
+						const treeBranch = isLast ? TREE.last : TREE.branch;
+						const activity = this.formatToolActivity(tool, true);
+						lines.push(`  ${treeBranch} ${this.pulsed("◐")} ${activity}`);
+					}
+				}
+
+				// Show recently completed tools
+				if (this.leadToolsCompleted.length > 0) {
+					const completed = this.leadToolsCompleted.slice(-3); // Last 3
+					for (let i = 0; i < completed.length; i++) {
+						const tool = completed[i];
+						const isLast = i === completed.length - 1 && this.leadTasks.size === 0;
+						const treeBranch = isLast ? TREE.last : TREE.branch;
+						const icon = tool.isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
+						const activity = this.formatCompletedTool(tool);
+						lines.push(`  ${treeBranch} ${icon} ${activity}`);
+					}
+				}
+
+				// Show epsilon tasks if any
+				if (this.leadTasks.size > 0) {
+					lines.push("");
+					const tasks = Array.from(this.leadTasks.entries());
+					const doneCount = tasks.filter(([, t]) => t.status === "done").length;
+					const totalCount = tasks.length;
+
+					lines.push(theme.fg("muted", `  Tasks: ${doneCount}/${totalCount}`));
+
+					for (let i = 0; i < tasks.length; i++) {
+						const [, task] = tasks[i];
+						const isLast = i === tasks.length - 1;
+						const treeBranch = isLast ? TREE.last : TREE.branch;
+						const icon = this.formatTaskStatusIcon(task.status);
+						const title = this.truncate(task.title, 50);
+						lines.push(`  ${treeBranch} ${icon} ${title}`);
+					}
+				}
+			}
+
 			this.text.setText(lines.join("\n"));
 			return;
 		}
@@ -437,6 +572,22 @@ export class TeamExecutionComponent extends Container {
 		}
 	}
 
+	private formatTaskStatusIcon(status: string): string {
+		switch (status) {
+			case "todo":
+				return theme.fg("muted", STATUS_ICONS.pending);
+			case "in_progress":
+				return this.pulsed(STATUS_ICONS.running);
+			case "done":
+				return theme.fg("success", STATUS_ICONS.success);
+			case "blocked":
+			case "cancelled":
+				return theme.fg("error", STATUS_ICONS.error);
+			default:
+				return theme.fg("muted", STATUS_ICONS.pending);
+		}
+	}
+
 	private formatMergePhase(): string {
 		const { phase, findingCount, verifiedCount } = this.mergeStatus;
 		switch (phase) {
@@ -455,6 +606,84 @@ export class TeamExecutionComponent extends Container {
 			default:
 				return "";
 		}
+	}
+
+	/**
+	 * Format an active tool event for display
+	 */
+	private formatToolActivity(tool: LeadToolEvent, _isActive: boolean): string {
+		const toolName = tool.toolName.toLowerCase();
+
+		if (toolName === "read" && tool.path) {
+			const shortPath = this.shortenPath(tool.path);
+			return theme.fg("muted", `Reading: ${shortPath}`);
+		}
+
+		if (toolName === "bash" && tool.command) {
+			// For rg/fd commands, show the pattern and directory
+			if (tool.pattern) {
+				const dir = tool.directory || ".";
+				const shortDir = this.shortenPath(dir);
+				if (tool.command.includes("rg ")) {
+					return theme.fg("muted", `Searching: "${tool.pattern}" in ${shortDir}`);
+				}
+				if (tool.command.includes("fd ")) {
+					return theme.fg("muted", `Finding: "${tool.pattern}" in ${shortDir}`);
+				}
+			}
+			// For other bash commands, show truncated command
+			const shortCmd = this.truncate(tool.command, 50);
+			return theme.fg("muted", `Running: ${shortCmd}`);
+		}
+
+		if (toolName.startsWith("analyze_")) {
+			const analyzeType = toolName.replace("analyze_", "").replace(/_/g, " ");
+			return theme.fg("muted", `Analyzing ${analyzeType}...`);
+		}
+
+		return theme.fg("muted", `${tool.toolName}...`);
+	}
+
+	/**
+	 * Format a completed tool for display
+	 */
+	private formatCompletedTool(tool: (typeof this.leadToolsCompleted)[0]): string {
+		if (tool.path) {
+			const shortPath = this.shortenPath(tool.path);
+			const lines = tool.lineCount ? ` (${tool.lineCount} lines)` : "";
+			return theme.fg("muted", `${shortPath}${lines}`);
+		}
+
+		if (tool.command) {
+			const shortCmd = this.truncate(tool.command, 40);
+			return theme.fg("muted", shortCmd);
+		}
+
+		return theme.fg("muted", "completed");
+	}
+
+	/**
+	 * Shorten a path for display (replace home dir with ~, use basename for long paths)
+	 */
+	private shortenPath(filePath: string): string {
+		// Replace home directory with ~
+		const home = process.env.HOME || process.env.USERPROFILE || "";
+		let shortened = filePath;
+		if (home && shortened.startsWith(home)) {
+			shortened = `~${shortened.slice(home.length)}`;
+		}
+
+		// If still too long, use directory + basename
+		if (shortened.length > 50) {
+			const dir = path.dirname(shortened);
+			const base = path.basename(shortened);
+			const dirParts = dir.split(path.sep);
+			if (dirParts.length > 2) {
+				shortened = `.../${dirParts[dirParts.length - 1]}/${base}`;
+			}
+		}
+
+		return shortened;
 	}
 
 	private truncate(text: string, maxLen: number): string {

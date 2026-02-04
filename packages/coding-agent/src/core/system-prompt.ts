@@ -17,7 +17,6 @@ const toolDescriptions: Record<ToolName, string> = {
 	edit: "Make surgical edits to files (find exact text and replace)",
 	write: "Create or overwrite files",
 	ls: "List directory contents",
-	ast_grep: "Search code using AST patterns (understands code structure, not just text)",
 };
 
 /** Resolve input as file path or literal string */
@@ -227,7 +226,16 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 
 	// File exploration guidelines
 	if (hasBash) {
-		guidelinesList.push("Use bash for file operations like ls, rg, fd");
+		guidelinesList.push("Use bash for file operations like ls, fd");
+		guidelinesList.push(
+			"**ALWAYS use ast-grep (sg) for code search** — NEVER use rg/grep for searching code patterns. " +
+				"ast-grep understands code structure (AST), not just text. " +
+				"Pattern syntax: $VAR (single node), $$$ARGS (multiple nodes). " +
+				"Examples: `sg -p 'console.log($$$)'`, `sg -p 'import { $$$NAMES } from \"$MOD\"'`, " +
+				"`sg -p 'async function $NAME($$$ARGS)' -l typescript`, " +
+				"`sg -p 'try { $$$BODY } catch { $$$HANDLER }'`, `sg -p 'await $EXPR'`. " +
+				"Use rg/grep ONLY for non-code text (logs, configs, docs, comments)",
+		);
 	}
 
 	// Read before edit guideline
@@ -275,16 +283,26 @@ Pi documentation (only when the user asks about pi itself, its SDK, extensions, 
 - When asked to create: custom models/providers (README.md), extensions (docs/extensions.md, examples/extensions/), themes (docs/theme.md), skills (docs/skills.md), TUI components (docs/tui.md - has copy-paste patterns)
 - When working on pi topics, read the docs and examples, and follow .md cross-references before implementing
 
-Team Cooperation (use coop tool):
-Coordinate multi-agent teams for any coding task. Describe your intent and the system selects optimal teams automatically.
-- UNDERSTAND: understand, research, kickoff
-- DESIGN: design, deep-design
-- IMPLEMENT: plan, implement, refactor
-- VALIDATE: code-review, full-audit, security-audit, security-deep, performance, quality, types, testing, architecture, api-review, frontend, accessibility, docs, dependencies, quality-gate
-- VERIFY: verify, test-planning, acceptance
-- DELIVER: deliver, pre-release, release-prep
-- WORKFLOW: before-coding, after-coding, quick-fix, feature, greenfield, maintenance
-Use for: implementation, refactoring, reviews, audits, testing, and any complex task benefiting from specialized agents.`;
+Team Cooperation (coop tool) — USE FOR NON-TRIVIAL WORK:
+For complex, large, or multi-step tasks, USE the coop tool to coordinate specialized agent teams.
+Do NOT attempt complex work alone — delegate to teams for better results.
+
+ALWAYS use coop for:
+- Features touching 3+ files or multiple concerns
+- Security-sensitive changes (auth, crypto, input handling)
+- Refactoring, migrations, or architectural changes
+- Pre-commit/PR reviews and audits
+- Any task where mistakes would be costly
+
+Available teams:
+- UNDERSTAND: requirements analysis, research, context gathering
+- DESIGN: architecture, API contracts, data modeling
+- IMPLEMENT: planning, code generation, refactoring
+- VALIDATE: code-review, security-audit, performance, quality, testing, architecture
+- VERIFY: test strategy, acceptance criteria, regression analysis
+- DELIVER: changelog, deployment validation, release coordination
+
+Just describe your intent — optimal teams are selected automatically.`;
 
 	if (appendSection) {
 		prompt += appendSection;

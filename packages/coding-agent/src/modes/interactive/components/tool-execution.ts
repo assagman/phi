@@ -183,11 +183,18 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
-	 * Apply pulse color to text
+	 * Apply pulse color and bold to tool name
 	 */
 	private pulsed(text: string): string {
 		const color = this.pulseColor(this.color());
-		return `${color}${text}\x1b[39m`;
+		return `\x1b[1m${color}${text}\x1b[22;39m`;
+	}
+
+	/**
+	 * Format file path with italic styling
+	 */
+	private formatPath(path: string): string {
+		return `\x1b[3m${theme.fg("toolPath", path)}\x1b[23m`;
 	}
 
 	private formatLine(): string {
@@ -207,7 +214,7 @@ export class ToolExecutionComponent extends Container {
 				}
 				const n = this.lineCount();
 				const stats = n > 0 ? theme.fg("muted", ` ${n} lines`) : "";
-				return `${i} ${this.pulsed("read")} ${theme.fg("accent", path)}${theme.fg("warning", range)}${stats} ${s}`;
+				return `${i} ${this.pulsed("read")} ${this.formatPath(path)}${theme.fg("warning", range)}${stats} ${s}`;
 			}
 
 			case "edit": {
@@ -219,14 +226,14 @@ export class ToolExecutionComponent extends Container {
 					if (es.removed > 0) parts.push(theme.fg("error", `-${es.removed}`));
 					if (parts.length) stats = ` ${parts.join(" ")}`;
 				}
-				return `${i} ${this.pulsed("edit")} ${theme.fg("accent", path)}${stats} ${s}`;
+				return `${i} ${this.pulsed("edit")} ${this.formatPath(path)}${stats} ${s}`;
 			}
 
 			case "write": {
 				const content = String(this.args.content ?? "");
 				const n = content ? content.split("\n").length : 0;
 				const stats = n > 0 ? theme.fg("muted", ` ${n} lines`) : "";
-				return `${i} ${this.pulsed("write")} ${theme.fg("accent", path)}${stats} ${s}`;
+				return `${i} ${this.pulsed("write")} ${this.formatPath(path)}${stats} ${s}`;
 			}
 
 			case "bash": {

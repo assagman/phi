@@ -1,9 +1,4 @@
 export {
-	type AstGrepToolDetails,
-	astGrepTool,
-	createAstGrepTool,
-} from "./ast-grep.js";
-export {
 	type BashOperations,
 	type BashToolDetails,
 	type BashToolOptions,
@@ -16,6 +11,8 @@ export {
 	type CoopToolDetails,
 	type CoopToolOptions,
 	createCoopTool,
+	type LeadTaskEvent,
+	type LeadToolEvent,
 } from "./coop.js";
 export { createEditTool, type EditOperations, type EditToolDetails, type EditToolOptions, editTool } from "./edit.js";
 export { createLsTool, type LsOperations, type LsToolDetails, type LsToolOptions, lsTool } from "./ls.js";
@@ -48,7 +45,6 @@ export {
 export { createWriteTool, type WriteOperations, type WriteToolOptions, writeTool } from "./write.js";
 
 import type { AgentTool } from "agent";
-import { astGrepTool, createAstGrepTool } from "./ast-grep.js";
 import { type BashToolOptions, bashTool, createBashTool } from "./bash.js";
 import { createEditTool, editTool } from "./edit.js";
 import { createLsTool, lsTool } from "./ls.js";
@@ -62,7 +58,7 @@ export type Tool = AgentTool<any>;
 export const codingTools: Tool[] = [readTool, bashTool, editTool, writeTool];
 
 // Read-only tools for exploration without modification (using process.cwd())
-export const readOnlyTools: Tool[] = [readTool, lsTool, astGrepTool];
+export const readOnlyTools: Tool[] = [readTool, lsTool];
 
 // All available tools (using process.cwd())
 export const allTools = {
@@ -71,7 +67,6 @@ export const allTools = {
 	edit: editTool,
 	write: writeTool,
 	ls: lsTool,
-	ast_grep: astGrepTool,
 };
 
 export type ToolName = keyof typeof allTools;
@@ -99,7 +94,7 @@ export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
  * Create read-only tools configured for a specific working directory.
  */
 export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[] {
-	return [createReadTool(cwd, options?.read), createLsTool(cwd), createAstGrepTool(cwd)];
+	return [createReadTool(cwd, options?.read), createLsTool(cwd)];
 }
 
 /**
@@ -112,6 +107,5 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		edit: createEditTool(cwd),
 		write: createWriteTool(cwd),
 		ls: createLsTool(cwd),
-		ast_grep: createAstGrepTool(cwd),
 	};
 }

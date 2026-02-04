@@ -265,6 +265,8 @@ export class TUI extends Container {
 	private selectionEnabled = false;
 	/** Callback when text is selected (mouse release after drag). Called with selected text. */
 	public onTextSelected?: (text: string) => void;
+	/** Callback after selection is copied and cleared. Used for showing "Copied!" notification. */
+	public onSelectionCopied?: () => void;
 
 	constructor(terminal: Terminal, showHardwareCursor?: boolean) {
 		super();
@@ -695,8 +697,10 @@ export class TUI extends Container {
 					const selectedText = this.selection.extractText(this.previousLines);
 					if (selectedText && this.onTextSelected) {
 						this.onTextSelected(selectedText);
+						// Clear selection after copy and notify
+						this.selection.clear();
+						this.onSelectionCopied?.();
 					}
-					// Keep selection visible (user can click to clear)
 					this.requestRender();
 					return true;
 				}

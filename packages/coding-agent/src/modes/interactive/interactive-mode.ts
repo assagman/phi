@@ -201,8 +201,8 @@ export class InteractiveMode {
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 
-	// Team review tool tracking: toolCallId -> TeamExecutionComponent
-	// Used when request_team_review tool is executed to show team progress
+	// Coop tool tracking: toolCallId -> TeamExecutionComponent
+	// Used when coop tool is executed to show team progress
 	private pendingTeamTools = new Map<string, TeamExecutionComponent>();
 
 	// Tool execution storage (SQLite-backed history)
@@ -465,6 +465,9 @@ export class InteractiveMode {
 			} catch {
 				// Silently ignore clipboard errors
 			}
+		};
+		this.ui.onSelectionCopied = () => {
+			this.showCopiedToast();
 		};
 
 		// Create status area (holds widgets, loading indicators, pending messages between chat and input)
@@ -1812,13 +1815,13 @@ export class InteractiveMode {
 				break;
 
 			case "tool_execution_start": {
-				// Special handling for request_team_review tool - show TeamExecutionComponent
-				if (event.toolName === "request_team_review") {
+				// Special handling for coop tool - show TeamExecutionComponent
+				if (event.toolName === "coop") {
 					if (!this.pendingTeamTools.has(event.toolCallId)) {
 						// Create TeamExecutionComponent with placeholder agent names
 						// Actual agent names will be provided via tool_execution_update events
 						const teamComponent = new TeamExecutionComponent(
-							"Team Review",
+							"Team Cooperation",
 							[], // Will be populated from first team_start event
 							this.ui,
 							() => this.scrollableViewport.invalidateItemCache(teamComponent),
@@ -1849,10 +1852,69 @@ export class InteractiveMode {
 				// Check if this is a team review tool update
 				const teamComponent = this.pendingTeamTools.get(event.toolCallId);
 				if (teamComponent) {
-					// Extract team event from details
+					// Extract details from update
 					const details = event.partialResult?.details as
-						| { teamEvent?: TeamEvent; agentNames?: string[] }
+						| {
+								phase?: string;
+								selectedTeams?: string[];
+								reasoning?: string;
+								errorMessage?: string;
+								teamEvent?: TeamEvent;
+								agentNames?: string[];
+								leadTaskEvent?: {
+									type: "create" | "update" | "delete";
+									taskId: number;
+									title?: string;
+									status?: string;
+								};
+								leadToolEvent?: {
+									type: "start" | "end";
+									toolName: string;
+									toolCallId: string;
+									path?: string;
+									command?: string;
+									pattern?: string;
+									directory?: string;
+									lineCount?: number;
+									isError?: boolean;
+								};
+						  }
 						| undefined;
+
+					// Handle phase updates (lead analyzer progress)
+					if (details?.phase) {
+						teamComponent.setReviewPhase(
+							details.phase as
+								| "lead_analyzing"
+								| "lead_complete"
+								| "lead_failed"
+								| "team_executing"
+								| "complete",
+							{
+								selectedTeams: details.selectedTeams,
+								reasoning: details.reasoning,
+								errorMessage: details.errorMessage,
+							},
+						);
+						this.scrollableViewport.invalidateItemCache(teamComponent);
+						this.ui.requestRender();
+					}
+
+					// Handle lead analyzer epsilon task events
+					if (details?.leadTaskEvent) {
+						teamComponent.handleLeadTaskEvent(details.leadTaskEvent);
+						this.scrollableViewport.invalidateItemCache(teamComponent);
+						this.ui.requestRender();
+					}
+
+					// Handle lead analyzer tool activity events
+					if (details?.leadToolEvent) {
+						teamComponent.handleLeadToolEvent(details.leadToolEvent);
+						this.scrollableViewport.invalidateItemCache(teamComponent);
+						this.ui.requestRender();
+					}
+
+					// Handle team events (agent progress)
 					if (details?.teamEvent) {
 						// Update agent names on first team_start event
 						if (details.teamEvent.type === "team_start" && details.agentNames) {
@@ -2061,6 +2123,21 @@ export class InteractiveMode {
 		this.lastStatusSpacer = spacer;
 		this.lastStatusText = text;
 		this.ui.requestRender();
+	}
+
+	/** Show a brief "Copied!" toast that auto-dismisses */
+	private showCopiedToast(): void {
+		const label = ` ✓ Copied `;
+		const text = new Text(theme.fg("success", label), 0, 0);
+		const handle = this.ui.showOverlay(text, {
+			anchor: "top-right",
+			offsetX: -3,
+			offsetY: 1,
+		});
+		setTimeout(() => {
+			handle.hide();
+			this.ui.requestRender();
+		}, 800);
 	}
 
 	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {

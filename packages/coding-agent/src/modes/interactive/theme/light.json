@@ -47,6 +47,7 @@
 		"toolBash": "#008899",
 		"toolGrep": "#993399",
 		"toolFind": "#669933",
+		"toolPath": "#cc6699",
 
 		"mdHeading": "yellow",
 		"mdLink": "blue",
