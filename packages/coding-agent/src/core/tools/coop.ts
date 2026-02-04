@@ -25,6 +25,8 @@ import {
 import { createPreset, debugLog, type Finding, leadAnalyzerTemplate, type TeamEvent, type TeamResult } from "agents";
 import type { Api, Message, Model } from "ai";
 import { streamSimple } from "ai";
+import { coopLog } from "../../utils/logger.js";
+import type { PersistentEventBus } from "../event-bus.js";
 import type { ModelRegistry } from "../model-registry.js";
 import { getProjectAnalyzerToolsArray } from "./project-analyzer.js";
 
@@ -315,6 +317,16 @@ async function runLeadAnalyzer(
 	onTaskEvent?: (event: LeadTaskEvent) => void,
 	onToolEvent?: (event: LeadToolEvent) => void,
 ): Promise<LeadAnalyzerResult> {
+	coopLog.info("runLeadAnalyzer started", {
+		intent,
+		scope,
+		depth,
+		focus,
+		cwd,
+		model: model.id,
+		provider: model.provider,
+	});
+
 	// Create lead agent preset
 	const leadPreset = createPreset(leadAnalyzerTemplate, model, {
 		injectEpsilon: true, // Enable epsilon for task progress tracking
@@ -325,6 +337,13 @@ async function runLeadAnalyzer(
 	const deltaTools = sessionTools.filter((t) => t.name.startsWith("delta_"));
 	const epsilonTools = sessionTools.filter((t) => t.name.startsWith("epsilon_"));
 	const leadTools = [...projectTools, ...deltaTools, ...epsilonTools];
+
+	coopLog.debug("Lead analyzer tools configured", {
+		projectTools: projectTools.map((t) => t.name),
+		deltaTools: deltaTools.map((t) => t.name),
+		epsilonTools: epsilonTools.map((t) => t.name),
+		totalTools: leadTools.length,
+	});
 
 	// Build enhanced prompt with tool parameters
 	const scopeHint = scope ? `\nScope: Focus on ${scope}` : "";
@@ -362,9 +381,15 @@ Remember to persist any valuable findings for future sessions.`;
 	const apiKey = await getApiKey();
 
 	if (!apiKey) {
+		coopLog.error("No API key available for lead analyzer", { provider: model.provider });
 		debugLog("coop", "No API key available for lead analyzer", { provider: model.provider });
 		return { output: null, error: `No API key configured for ${model.provider}` };
 	}
+
+	coopLog.debug("Starting agent loop for lead analyzer", {
+		temperature: leadPreset.temperature,
+		thinkingLevel: leadPreset.thinkingLevel,
+	});
 
 	const agentStream = agentLoop(
 		prompts,
@@ -393,6 +418,11 @@ Remember to persist any valuable findings for future sessions.`;
 			// Cache args from start events (for all tools, not just epsilon)
 			if (event.type === "tool_execution_start") {
 				toolArgsCache.set(event.toolCallId, event.args);
+				coopLog.debug("Lead analyzer tool_execution_start", {
+					toolName: event.toolName,
+					toolCallId: event.toolCallId,
+					argsPreview: JSON.stringify(event.args).slice(0, 200),
+				});
 
 				// Emit tool start event for non-epsilon tools
 				if (!event.toolName.startsWith("epsilon_task_") && !event.toolName.startsWith("delta_")) {
@@ -405,6 +435,16 @@ Remember to persist any valuable findings for future sessions.`;
 			if (event.type === "tool_execution_end") {
 				const args = toolArgsCache.get(event.toolCallId) ?? {};
 				toolArgsCache.delete(event.toolCallId);
+
+				coopLog.debug("Lead analyzer tool_execution_end", {
+					toolName: event.toolName,
+					toolCallId: event.toolCallId,
+					isError: event.isError,
+					resultPreview:
+						typeof event.result === "string"
+							? event.result.slice(0, 200)
+							: JSON.stringify(event.result).slice(0, 200),
+				});
 
 				// Epsilon task events for UI progress display
 				if (event.toolName.startsWith("epsilon_task_")) {
@@ -439,10 +479,19 @@ Remember to persist any valuable findings for future sessions.`;
 		}
 	} catch (streamError) {
 		const errorMsg = streamError instanceof Error ? streamError.message : String(streamError);
+		coopLog.error("Lead analyzer stream error", { error: errorMsg, eventCount });
 		debugLog("coop", "Lead analyzer stream error", { error: errorMsg, eventCount });
 		return { output: null, error: `Stream error: ${errorMsg}` };
 	}
 
+	coopLog.info("Lead analyzer stream completed", {
+		eventCount,
+		contentLength: lastAssistantContent.length,
+		hasError: !!lastError,
+	});
+	coopLog.debug("Lead analyzer full response", {
+		content: lastAssistantContent,
+	});
 	debugLog("coop", "Lead analyzer stream completed", {
 		eventCount,
 		contentLength: lastAssistantContent.length,
@@ -452,6 +501,7 @@ Remember to persist any valuable findings for future sessions.`;
 
 	// Check for empty response
 	if (!lastAssistantContent.trim()) {
+		coopLog.error("Lead analyzer returned empty content", { lastError });
 		debugLog("coop", "Lead analyzer returned empty content", { lastError });
 		return { output: null, error: lastError || "Lead analyzer returned no text content" };
 	}
@@ -459,38 +509,135 @@ Remember to persist any valuable findings for future sessions.`;
 	// Parse JSON from response
 	const parsed = parseLeadOutput(lastAssistantContent);
 	if (!parsed) {
+		coopLog.error("Failed to parse lead analyzer output", {
+			contentLength: lastAssistantContent.length,
+			contentPreview: lastAssistantContent.slice(0, 500),
+		});
 		return {
 			output: null,
 			error: `Failed to parse lead analyzer output. Response did not contain valid team selection JSON.\n\nResponse preview: ${lastAssistantContent.slice(0, 300)}`,
 		};
 	}
 
+	coopLog.info("Lead analyzer output parsed successfully", {
+		selectedTeams: parsed.selectedTeams,
+		intent: parsed.intent,
+		executionWaves: parsed.executionWaves,
+	});
+
 	return { output: parsed };
 }
 
 /**
+ * Fallback: Extract teams from markdown content when JSON parsing fails.
+ * Handles formats like:
+ * - `team-name` in backticks
+ * - **team-name** in bold
+ * - | team-name | in tables
+ * - "team-name" in quotes
+ */
+function extractTeamsFromMarkdown(content: string): string[] {
+	const teams = new Set<string>();
+
+	coopLog.debug("extractTeamsFromMarkdown starting", {
+		contentLength: content.length,
+		contentPreview: content.slice(0, 300),
+	});
+
+	// Pattern 1: `team-name` in backticks
+	const backtickMatches = content.matchAll(/`([a-z][a-z0-9-]*)`/g);
+	for (const match of backtickMatches) {
+		if (VALID_TEAM_NAMES.has(match[1])) {
+			coopLog.debug("Found team in backticks", { team: match[1] });
+			teams.add(match[1]);
+		}
+	}
+
+	// Pattern 2: **team-name** in bold
+	const boldMatches = content.matchAll(/\*\*([a-z][a-z0-9-]*)\*\*/g);
+	for (const match of boldMatches) {
+		if (VALID_TEAM_NAMES.has(match[1])) {
+			coopLog.debug("Found team in bold", { team: match[1] });
+			teams.add(match[1]);
+		}
+	}
+
+	// Pattern 3: "Teams selected: X, Y, Z" or "selected teams: X, Y" patterns
+	const selectedPattern = /(?:teams?\s+selected|selected\s+teams?)[:\s]+([^.\n]+)/gi;
+	const selectedMatches = content.matchAll(selectedPattern);
+	for (const match of selectedMatches) {
+		// Extract team names from the matched text
+		const segment = match[1];
+		for (const teamName of VALID_TEAM_NAMES) {
+			if (segment.includes(teamName)) {
+				coopLog.debug("Found team in selection text", { team: teamName, segment });
+				teams.add(teamName);
+			}
+		}
+	}
+
+	// Pattern 4: team names as standalone words (common in tables)
+	// Use a more permissive pattern that works with hyphens
+	for (const teamName of VALID_TEAM_NAMES) {
+		// Match team name surrounded by non-alphanumeric chars or start/end
+		const regex = new RegExp(`(?:^|[^a-z0-9])${teamName}(?:$|[^a-z0-9])`, "gi");
+		if (regex.test(content)) {
+			coopLog.debug("Found team as standalone word", { team: teamName });
+			teams.add(teamName);
+		}
+	}
+
+	coopLog.debug("extractTeamsFromMarkdown complete", {
+		teamsFound: Array.from(teams),
+		count: teams.size,
+	});
+
+	return Array.from(teams);
+}
+
+/**
  * Parse the lead analyzer's JSON output.
+ * Falls back to markdown extraction if JSON parsing fails.
  */
 function parseLeadOutput(content: string): LeadAnalyzerOutput | null {
 	// Extract JSON block
 	const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
 	const jsonStr = jsonMatch ? jsonMatch[1].trim() : content;
 
+	coopLog.debug("parseLeadOutput attempting parse", {
+		hasJsonBlock: !!jsonMatch,
+		jsonStrLength: jsonStr.length,
+		jsonStrPreview: jsonStr.slice(0, 300),
+	});
+
 	try {
 		const parsed = JSON.parse(jsonStr);
+		coopLog.debug("parseLeadOutput JSON.parse succeeded", {
+			keys: Object.keys(parsed),
+			hasSelectedTeams: !!parsed.selectedTeams,
+			selectedTeamsType: typeof parsed.selectedTeams,
+		});
 
 		// Validate required fields
 		if (!parsed.selectedTeams || !Array.isArray(parsed.selectedTeams)) {
+			coopLog.warn("Lead output missing selectedTeams", { parsed: JSON.stringify(parsed).slice(0, 500) });
 			debugLog("coop", "Lead output missing selectedTeams", { parsed });
-			return null;
+			// Fall through to markdown fallback
+			throw new Error("Missing selectedTeams array");
 		}
 
 		// Filter to valid teams
 		const selectedTeams = parsed.selectedTeams.filter((t: string) => VALID_TEAM_NAMES.has(t));
+		coopLog.debug("parseLeadOutput filtered teams", {
+			original: parsed.selectedTeams,
+			filtered: selectedTeams,
+			invalidTeams: parsed.selectedTeams.filter((t: string) => !VALID_TEAM_NAMES.has(t)),
+		});
 
 		if (selectedTeams.length === 0) {
 			debugLog("coop", "No valid teams in lead output", { parsed });
-			return null;
+			// Fall through to markdown fallback
+			throw new Error("No valid teams in selectedTeams");
 		}
 
 		return {
@@ -500,6 +647,35 @@ function parseLeadOutput(content: string): LeadAnalyzerOutput | null {
 			reasoning: parsed.reasoning || "",
 		};
 	} catch (e) {
+		const errorMsg = e instanceof Error ? e.message : String(e);
+		coopLog.warn("JSON parsing failed, attempting markdown fallback", {
+			error: errorMsg,
+			jsonStrPreview: jsonStr.slice(0, 300),
+		});
+
+		// Fallback: extract teams from markdown content
+		const extractedTeams = extractTeamsFromMarkdown(content);
+		coopLog.debug("Markdown fallback extraction result", {
+			extractedTeams,
+			count: extractedTeams.length,
+		});
+
+		if (extractedTeams.length > 0) {
+			coopLog.info("Successfully extracted teams from markdown fallback", {
+				teams: extractedTeams,
+			});
+			return {
+				intent: "extracted from markdown",
+				selectedTeams: extractedTeams,
+				executionWaves: [extractedTeams], // Single wave since we can't determine order
+				reasoning: "Teams extracted from markdown output (JSON parsing failed)",
+			};
+		}
+
+		coopLog.error("Failed to parse lead output - both JSON and markdown fallback failed", {
+			error: errorMsg,
+			contentPreview: content.slice(0, 500),
+		});
 		debugLog("coop", "Failed to parse lead output", { error: e, content });
 		return null;
 	}
@@ -508,29 +684,42 @@ function parseLeadOutput(content: string): LeadAnalyzerOutput | null {
 /**
  * Execute selected teams and collect findings.
  * Streams team events via onTeamEvent callback for UI progress display.
+ * Emits team_start, team_end, and finding events to persistent event bus.
  */
 async function executeTeams(
 	teamNames: string[],
 	model: Model<Api>,
 	modelRegistry: ModelRegistry,
 	sessionTools: AgentTool[],
+	persistentEventBus: PersistentEventBus,
 	onTeamEvent?: (event: TeamEvent, agentNames: string[]) => void,
 	signal?: AbortSignal,
 ): Promise<TeamResult[]> {
+	coopLog.info("executeTeams started", {
+		teamNames,
+		model: model.id,
+		toolCount: sessionTools.length,
+	});
+
 	const results: TeamResult[] = [];
 
 	// Import team command helpers dynamically to avoid circular deps
 	const { createTeamStream, BUILTIN_TEAMS, getTeamAgentNames } = await import("../commands/team.js");
 
+	// Create TeamEventEmitter for native event emission from agents package
+	const eventEmitter = persistentEventBus.createTeamEventEmitter();
+
 	for (const teamName of teamNames) {
 		// Check for abort
 		if (signal?.aborted) {
+			coopLog.info("executeTeams aborted", { completedTeams: results.length, remainingTeams: teamNames.length });
 			break;
 		}
 
 		// Find the built-in team config
 		const builtinTeam = BUILTIN_TEAMS.find((t) => t.name === teamName);
 		if (!builtinTeam) {
+			coopLog.warn("Unknown team requested", { teamName });
 			debugLog("coop", `Unknown team: ${teamName}`);
 			continue;
 		}
@@ -538,19 +727,25 @@ async function executeTeams(
 		try {
 			// Get agent names for this team
 			const agentNames = getTeamAgentNames(teamName);
+			coopLog.info("Starting team execution", { teamName, agentNames });
 
-			// Create team stream
+			// Create team stream with eventEmitter for native event emission
+			// Events (team_start, agent_start, agent_end, finding, team_end) are emitted
+			// directly by the agents package via the eventEmitter
 			const { stream } = createTeamStream(teamName, {
 				model,
 				modelRegistry,
 				tools: sessionTools,
 				task: `Team review: ${teamName}`,
 				signal,
+				eventEmitter,
 			});
 
 			// Consume stream, forwarding events for UI progress
 			let result: TeamResult | undefined;
+			let eventCount = 0;
 			for await (const event of stream) {
+				eventCount++;
 				// Forward all events for UI display
 				onTeamEvent?.(event, agentNames);
 
@@ -560,13 +755,28 @@ async function executeTeams(
 			}
 
 			if (result) {
+				coopLog.info("Team execution completed", {
+					teamName,
+					eventCount,
+					findingCount: result.findings?.length ?? 0,
+					success: result.success,
+				});
 				results.push(result);
+			} else {
+				coopLog.warn("Team execution returned no result", { teamName, eventCount });
 			}
 		} catch (error) {
+			const errorMsg = error instanceof Error ? error.message : String(error);
+			coopLog.error("Team execution failed", { teamName, error: errorMsg });
 			debugLog("coop", `Team ${teamName} failed`, { error });
 			// Continue with other teams
 		}
 	}
+
+	coopLog.info("executeTeams completed", {
+		teamsRun: results.length,
+		totalFindings: results.reduce((sum, r) => sum + (r.findings?.length ?? 0), 0),
+	});
 
 	return results;
 }
@@ -652,6 +862,8 @@ export interface CoopToolOptions {
 	modelRegistry: ModelRegistry;
 	/** Function to get session tools (dynamic - tools can change) */
 	getSessionTools: () => AgentTool[];
+	/** Persistent event bus for SQLite-backed event storage */
+	persistentEventBus: PersistentEventBus;
 }
 
 /**
@@ -662,7 +874,7 @@ export interface CoopToolOptions {
  * - Session tools can change (extensions can add/remove tools)
  */
 export function createCoopTool(options: CoopToolOptions): AgentTool<typeof coopSchema, CoopToolDetails> {
-	const { cwd, getModel, modelRegistry, getSessionTools } = options;
+	const { cwd, getModel, modelRegistry, getSessionTools, persistentEventBus } = options;
 
 	return {
 		name: "coop",
@@ -679,9 +891,18 @@ export function createCoopTool(options: CoopToolOptions): AgentTool<typeof coopS
 			const startTime = Date.now();
 			const { intent, scope, depth, focus } = params;
 
+			coopLog.info("Coop tool execute started", {
+				intent,
+				scope,
+				depth,
+				focus,
+				cwd,
+			});
+
 			// Get current model
 			const model = getModel();
 			if (!model) {
+				coopLog.error("No model configured for coop");
 				return {
 					content: [{ type: "text", text: "No model configured. Cannot run coop." }],
 					details: {
@@ -696,6 +917,11 @@ export function createCoopTool(options: CoopToolOptions): AgentTool<typeof coopS
 
 			// Get session tools for team execution
 			const sessionTools = getSessionTools();
+			coopLog.debug("Coop tool configuration", {
+				model: model.id,
+				provider: model.provider,
+				sessionToolCount: sessionTools.length,
+			});
 
 			// Create getApiKey wrapper for this model
 			const getApiKeyForModel = () => modelRegistry.getApiKey(model);
@@ -789,12 +1015,14 @@ export function createCoopTool(options: CoopToolOptions): AgentTool<typeof coopS
 				leadError = result.error;
 			} catch (e) {
 				leadError = e instanceof Error ? e.message : String(e);
+				coopLog.error("Lead analyzer threw exception", { error: leadError });
 				debugLog("coop", "Lead analyzer threw exception", { error: leadError });
 			}
 
 			if (!leadResult) {
 				const errorMessage =
 					leadError || "Lead analyzer could not determine which teams to run. Try a more specific intent.";
+				coopLog.error("Lead analyzer failed", { errorMessage, executionTimeMs: Date.now() - startTime });
 				emitPhaseUpdate("lead_failed", { errorMessage });
 				return {
 					content: [
@@ -821,12 +1049,21 @@ export function createCoopTool(options: CoopToolOptions): AgentTool<typeof coopS
 				reasoning: leadResult.reasoning,
 			});
 
+			// Emit lead_output event to persistent event bus
+			persistentEventBus.emitLeadOutput(
+				leadResult.selectedTeams,
+				leadResult.executionWaves,
+				leadResult.intent,
+				leadResult.reasoning,
+			);
+
 			// Step 2: Execute selected teams (streaming events via onUpdate for UI progress)
 			const teamResults = await executeTeams(
 				leadResult.selectedTeams,
 				model,
 				modelRegistry,
 				sessionTools,
+				persistentEventBus,
 				streamTeamEvent,
 				signal,
 			);
@@ -857,13 +1094,24 @@ export function createCoopTool(options: CoopToolOptions): AgentTool<typeof coopS
 				}
 			}
 
+			const criticalCount = findings.filter((f) => f.severity === "critical").length;
+			const highCount = findings.filter((f) => f.severity === "high").length;
+
+			coopLog.info("Coop tool execute completed", {
+				teamsRun: leadResult.selectedTeams,
+				findingCount: findings.length,
+				criticalCount,
+				highCount,
+				executionTimeMs,
+			});
+
 			return {
 				content: [{ type: "text", text: outputLines.join("\n") }],
 				details: {
 					teamsRun: leadResult.selectedTeams,
 					findingCount: findings.length,
-					criticalCount: findings.filter((f) => f.severity === "critical").length,
-					highCount: findings.filter((f) => f.severity === "high").length,
+					criticalCount,
+					highCount,
 					executionTimeMs,
 				},
 			};

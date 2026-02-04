@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MergeStrategyType } from "agents";
 import { parse as parseYaml } from "yaml";
+import { configLog } from "../../utils/logger.js";
 import { isPresetName } from "../preset-registry.js";
 import type {
 	AppConfig,
@@ -373,6 +374,14 @@ export function loadConfig(options: LoadConfigOptions = {}): ResolvedConfig {
 	const defaultsPath = options.defaultsPath ?? DEFAULTS_PATH;
 	const userConfigPath = options.userConfigPath ?? USER_CONFIG_PATH;
 
+	configLog.debug("loadConfig started", {
+		cwd,
+		defaultsPath,
+		userConfigPath,
+		skipUserConfig: options.skipUserConfig,
+		skipProjectConfig: options.skipProjectConfig,
+	});
+
 	// Start with empty collections
 	let presets = new Map<string, ResolvedPreset>();
 	let teams = new Map<string, ResolvedTeamConfig>();
@@ -437,11 +446,18 @@ export function loadConfig(options: LoadConfigOptions = {}): ResolvedConfig {
 	}
 
 	// Log errors to stderr if any (but don't throw - partial config is better than none)
-	if (configErrors.length > 0 && process.env.DEBUG) {
+	if (configErrors.length > 0) {
 		for (const err of configErrors) {
-			console.error(`[config] ${err}`);
+			configLog.warn("Config error", { error: err });
 		}
 	}
+
+	configLog.info("loadConfig completed", {
+		presetCount: presets.size,
+		teamCount: teams.size,
+		errorCount: configErrors.length,
+		providerCount: models.providers ? Object.keys(models.providers).length : 0,
+	});
 
 	return { presets, teams, models, settings, configErrors };
 }

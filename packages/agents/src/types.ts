@@ -237,6 +237,63 @@ export type TeamEvent =
 	| { type: "merge_end"; mergedCount: number; verifiedCount: number };
 
 /**
+ * Event emitter interface for SQLite-backed event persistence.
+ *
+ * This interface allows the agents package to emit events to the coding-agent's
+ * PersistentEventBus without creating a circular dependency. The coding-agent
+ * provides an implementation that bridges to its event bus.
+ *
+ * All methods return the event ID for parent-child relationships.
+ */
+export interface TeamEventEmitter {
+	/** Emit agent_start event. Returns event ID. */
+	emitAgentStart(agentName: string, teamName: string): number;
+
+	/** Emit agent_end event. Returns event ID. */
+	emitAgentEnd(
+		agentName: string,
+		teamName: string,
+		success: boolean,
+		findingCount: number,
+		durationMs: number,
+		error?: string,
+		parentEventId?: number,
+	): number;
+
+	/** Emit finding event. Returns event ID. */
+	emitFinding(
+		agentName: string,
+		category: string,
+		severity: "critical" | "high" | "medium" | "low" | "info",
+		title: string,
+		description: string,
+		file?: string,
+		line?: number,
+		suggestion?: string,
+		parentEventId?: number,
+	): number;
+
+	/** Emit team_start event. Returns event ID. */
+	emitTeamStart(teamName: string, agents: string[], task: string): number;
+
+	/** Emit team_end event. Returns event ID. */
+	emitTeamEnd(
+		teamName: string,
+		success: boolean,
+		findingCount: number,
+		durationMs: number,
+		error?: string,
+		parentEventId?: number,
+	): number;
+
+	/** Emit merge_start event. Returns event ID. */
+	emitMergeStart(strategy: string, inputFindingCount: number, parentEventId?: number): number;
+
+	/** Emit merge_end event. Returns event ID. */
+	emitMergeEnd(outputFindingCount: number, parentEventId?: number): number;
+}
+
+/**
  * Options for Team.run() and Team.execute()
  */
 export interface TeamRunOptions {
@@ -255,6 +312,16 @@ export interface TeamRunOptions {
 	 * - Results can be recovered if execution fails
 	 */
 	storage?: TeamExecutionStorageInterface;
+	/**
+	 * Event emitter for SQLite-backed event persistence. When provided:
+	 * - agent_start/agent_end events emitted for each agent
+	 * - finding events emitted for each parsed finding
+	 * - team_start/team_end events emitted for the team
+	 * - merge_start/merge_end events emitted for merge phase
+	 *
+	 * This enables event replay, auditing, and UI subscriptions.
+	 */
+	eventEmitter?: TeamEventEmitter;
 }
 
 /**

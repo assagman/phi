@@ -15,11 +15,12 @@
 
 import { readFileSync } from "node:fs";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "agent";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "ai";
+import type { AssistantMessage, ImageContent, Message, Model, TextContent, ThinkingContent } from "ai";
 import { isContextOverflow, modelsAreEqual, supportsXhigh } from "ai";
 import { getAuthPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
+import { sessionLog } from "../utils/logger.js";
 import { type BashResult, executeBash as executeBashCommand, executeBashWithOperations } from "./bash-executor.js";
 import {
 	type CompactionResult,
@@ -31,6 +32,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.js";
+import { createPersistentEventBus, type PersistentEventBus } from "./event-bus.js";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.js";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.js";
 import type {
@@ -53,19 +55,34 @@ import type { SettingsManager, SkillsSettings } from "./settings-manager.js";
 import type { Skill, SkillWarning } from "./skills.js";
 import type { BashOperations } from "./tools/bash.js";
 
+/**
+ * Optional event bus metadata attached to events that were persisted.
+ * TUI and other consumers can use this for correlation, replay, and debugging.
+ */
+export interface EventBusMetadata {
+	/** Event ID from SQLite-backed persistent event bus (if event was persisted) */
+	eventId?: number;
+}
+
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
-	| AgentEvent
-	| { type: "auto_compaction_start"; reason: "threshold" | "overflow" }
-	| {
+	| (AgentEvent & EventBusMetadata)
+	| ({ type: "auto_compaction_start"; reason: "threshold" | "overflow" } & EventBusMetadata)
+	| ({
 			type: "auto_compaction_end";
 			result: CompactionResult | undefined;
 			aborted: boolean;
 			willRetry: boolean;
 			errorMessage?: string;
-	  }
-	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
-	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
+	  } & EventBusMetadata)
+	| ({
+			type: "auto_retry_start";
+			attempt: number;
+			maxAttempts: number;
+			delayMs: number;
+			errorMessage: string;
+	  } & EventBusMetadata)
+	| ({ type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string } & EventBusMetadata);
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void | Promise<void>;
@@ -116,6 +133,8 @@ export interface AgentSessionConfig {
 	rebuildSystemPrompt?: (toolNames: string[]) => string;
 	/** Builtin tools lifecycle (delta, epsilon, sigma, handoff) */
 	builtinToolsLifecycle?: import("./builtin-tools/index.js").BuiltinToolsLifecycle;
+	/** Persistent event bus for SQLite-backed event storage */
+	persistentEventBus?: PersistentEventBus;
 }
 
 /** Options for AgentSession.prompt() */
@@ -231,6 +250,12 @@ export class AgentSession {
 	private _builtinToolsLifecycle?: import("./builtin-tools/index.js").BuiltinToolsLifecycle;
 	// Cache tool args by toolCallId for use in tool_execution_end (which doesn't have args)
 	private _toolArgsCache = new Map<string, unknown>();
+	// Cache tool start time by toolCallId for duration calculation
+	private _toolStartTime = new Map<string, number>();
+	// Persistent event bus for SQLite-backed event storage
+	private _persistentEventBus: PersistentEventBus;
+	// Map tool call ID to event ID for parent-child relationships
+	private _toolEventIds = new Map<string, number>();
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -247,6 +272,14 @@ export class AgentSession {
 		this._rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this._baseSystemPrompt = config.agent.state.systemPrompt;
 		this._builtinToolsLifecycle = config.builtinToolsLifecycle;
+		this._persistentEventBus = config.persistentEventBus ?? createPersistentEventBus(this.sessionId);
+
+		sessionLog.info("AgentSession created", {
+			sessionId: this.sessionId,
+			model: config.agent.state.model?.id,
+			toolCount: config.agent.state.tools?.length ?? 0,
+			skillCount: this._skills.length,
+		});
 
 		// Initialize builtin tools lifecycle
 		this._builtinToolsLifecycle?.onSessionStart();
@@ -259,6 +292,31 @@ export class AgentSession {
 	/** Model registry for API key resolution and model discovery */
 	get modelRegistry(): ModelRegistry {
 		return this._modelRegistry;
+	}
+
+	/** Persistent event bus for SQLite-backed event storage */
+	get persistentEventBus(): PersistentEventBus {
+		return this._persistentEventBus;
+	}
+
+	/**
+	 * Get recent events from the event bus for debugging or replay.
+	 * @param limit Maximum number of events to return (default: 50)
+	 * @param types Optional filter by event types
+	 */
+	getRecentEvents<T = unknown>(
+		limit = 50,
+		types?: import("./event-bus.js").EventType[],
+	): import("./event-bus.js").Event<T>[] {
+		return this._persistentEventBus.queryByType<T>(types ?? [], limit);
+	}
+
+	/**
+	 * Get an event by ID from the event bus.
+	 * Useful for fetching full event details when only the ID was received.
+	 */
+	getEventById<T = unknown>(eventId: number): import("./event-bus.js").Event<T> | null {
+		return this._persistentEventBus.get<T>(eventId);
 	}
 
 	// =========================================================================
@@ -296,11 +354,32 @@ export class AgentSession {
 			}
 		}
 
-		// Emit to extensions first
-		await this._emitExtensionEvent(event);
+		// Emit to extensions and persistent event bus, get eventId if applicable
+		const eventId = await this._emitExtensionEventAndPersist(event);
 
-		// Notify all listeners
-		this._emit(event);
+		// Emit LLM response for assistant message_end (returns eventId)
+		let llmEventId: number | undefined;
+		if (event.type === "message_end" && event.message.role === "assistant") {
+			const assistantMsg = event.message as AssistantMessage;
+			const textContent = this._extractTextContent(assistantMsg);
+			const thinkingContent = this._extractThinkingContent(assistantMsg);
+			llmEventId = this._persistentEventBus.emitLlmResponse(
+				assistantMsg.model,
+				textContent,
+				thinkingContent || undefined,
+				assistantMsg.usage.input,
+				assistantMsg.usage.output,
+				assistantMsg.stopReason,
+			);
+		}
+
+		// Determine the eventId to attach (tool events use their ID, message_end uses llm response ID)
+		const attachedEventId = eventId ?? llmEventId;
+
+		// Notify all listeners with eventId attached
+		const eventWithId: AgentSessionEvent =
+			attachedEventId !== undefined ? { ...event, eventId: attachedEventId } : event;
+		this._emit(eventWithId);
 
 		// Handle session persistence
 		if (event.type === "message_end") {
@@ -372,6 +451,19 @@ export class AgentSession {
 		return textBlocks.map((c) => (c as TextContent).text).join("");
 	}
 
+	/** Extract text content from an assistant message */
+	private _extractTextContent(message: AssistantMessage): string {
+		const textBlocks = message.content.filter((c) => c.type === "text");
+		return textBlocks.map((c) => (c as TextContent).text).join("");
+	}
+
+	/** Extract thinking content from an assistant message */
+	private _extractThinkingContent(message: AssistantMessage): string | null {
+		const thinkingBlocks = message.content.filter((c) => c.type === "thinking");
+		if (thinkingBlocks.length === 0) return null;
+		return thinkingBlocks.map((c) => (c as ThinkingContent).thinking).join("");
+	}
+
 	/** Find the last assistant message in agent state (including aborted ones) */
 	private _findLastAssistantMessage(): AssistantMessage | undefined {
 		const messages = this.agent.state.messages;
@@ -384,18 +476,68 @@ export class AgentSession {
 		return undefined;
 	}
 
-	/** Emit extension events based on agent events */
-	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
+	/**
+	 * Emit extension events and persist to event bus.
+	 * Returns the event ID if the event was persisted to the event bus.
+	 */
+	private async _emitExtensionEventAndPersist(event: AgentEvent): Promise<number | undefined> {
+		let eventId: number | undefined;
+
+		// Emit tool call events to persistent event bus for SQLite storage
+		if (event.type === "tool_execution_start") {
+			// Cache args and start time for use in tool_execution_end
+			this._toolArgsCache.set(event.toolCallId, event.args);
+			this._toolStartTime.set(event.toolCallId, Date.now());
+
+			// Emit to persistent event bus
+			eventId = this._persistentEventBus.emitToolCallStart(
+				event.toolCallId,
+				event.toolName,
+				event.args as Record<string, unknown>,
+			);
+			this._toolEventIds.set(event.toolCallId, eventId);
+
+			sessionLog.debug("tool_execution_start", {
+				toolName: event.toolName,
+				toolCallId: event.toolCallId,
+				eventId,
+				argsPreview: JSON.stringify(event.args).slice(0, 100),
+			});
+		} else if (event.type === "tool_execution_end") {
+			// Retrieve cached data and clean up
+			const startTime = this._toolStartTime.get(event.toolCallId) ?? Date.now();
+			const parentEventId = this._toolEventIds.get(event.toolCallId);
+			this._toolArgsCache.delete(event.toolCallId);
+			this._toolStartTime.delete(event.toolCallId);
+			this._toolEventIds.delete(event.toolCallId);
+
+			// Calculate duration
+			const durationMs = Date.now() - startTime;
+
+			// Emit to persistent event bus
+			eventId = this._persistentEventBus.emitToolCallEnd(
+				event.toolCallId,
+				event.toolName,
+				event.result,
+				event.isError,
+				durationMs,
+				parentEventId,
+			);
+
+			sessionLog.debug("tool_execution_end", {
+				toolName: event.toolName,
+				toolCallId: event.toolCallId,
+				isError: event.isError,
+				durationMs,
+			});
+		}
+
 		// Handle builtin tools lifecycle events (delta, epsilon)
 		if (this._builtinToolsLifecycle) {
 			if (event.type === "tool_execution_start") {
-				// Cache args for use in tool_execution_end
-				this._toolArgsCache.set(event.toolCallId, event.args);
 				this._builtinToolsLifecycle.onToolCall({ toolName: event.toolName });
 			} else if (event.type === "tool_execution_end") {
-				// Retrieve cached args and clean up
 				const cachedArgs = this._toolArgsCache.get(event.toolCallId) ?? {};
-				this._toolArgsCache.delete(event.toolCallId);
 				this._builtinToolsLifecycle.onToolResult({
 					toolName: event.toolName,
 					input: cachedArgs,
@@ -404,7 +546,7 @@ export class AgentSession {
 			}
 		}
 
-		if (!this._extensionRunner) return;
+		if (!this._extensionRunner) return eventId;
 
 		if (event.type === "agent_start") {
 			this._turnIndex = 0;
@@ -428,6 +570,8 @@ export class AgentSession {
 			await this._extensionRunner.emit(extensionEvent);
 			this._turnIndex++;
 		}
+
+		return eventId;
 	}
 
 	/**
@@ -556,6 +700,8 @@ export class AgentSession {
 		this._eventListeners = [];
 		// Shutdown builtin tools (closes databases)
 		this._builtinToolsLifecycle?.onSessionShutdown();
+		// Close persistent event bus
+		this._persistentEventBus.close();
 	}
 
 	// =========================================================================

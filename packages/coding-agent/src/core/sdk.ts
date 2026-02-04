@@ -33,7 +33,7 @@ import {
 	createBuiltinUIContext,
 } from "./builtin-tools/index.js";
 import { serializeConversation } from "./compaction/utils.js";
-import { createEventBus, type EventBus } from "./event-bus.js";
+import { createEventBus, createPersistentEventBus, type EventBus } from "./event-bus.js";
 import {
 	createExtensionRuntime,
 	discoverAndLoadExtensions,
@@ -356,6 +356,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd);
 	time("sessionManager");
 
+	// Create persistent event bus for SQLite-backed event storage
+	const persistentEventBus = createPersistentEventBus(sessionManager.getSessionId());
+	time("createPersistentEventBus");
+
 	// Check if session has existing data to restore
 	const existingSession = sessionManager.buildSessionContext();
 	time("loadSession");
@@ -671,6 +675,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		getModel: () => agent.state.model,
 		modelRegistry,
 		getSessionTools: () => Array.from((wrappedToolRegistry ?? toolRegistry).values()),
+		persistentEventBus,
 	});
 	// Add to both registries (cast needed due to TypeScript generic variance)
 	// The tool is fully type-safe internally; cast is only for registry compatibility
@@ -756,6 +761,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolRegistry: wrappedToolRegistry ?? toolRegistry,
 		rebuildSystemPrompt,
 		builtinToolsLifecycle,
+		persistentEventBus,
 	});
 	time("createAgentSession");
 

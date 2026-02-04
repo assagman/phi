@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { AgentTool } from "agent";
 import { spawn } from "child_process";
+import { toolsLog } from "../../utils/logger.js";
 import { getShellConfig, killProcessTree } from "../../utils/shell.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
@@ -154,6 +155,13 @@ export function createBashTool(cwd: string, options?: BashToolOptions): AgentToo
 			signal?: AbortSignal,
 			onUpdate?,
 		) => {
+			toolsLog.debug("bash execute started", {
+				command: command.slice(0, 200),
+				timeout,
+				cwd,
+				hasCommandPrefix: !!commandPrefix,
+			});
+
 			// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 
@@ -253,8 +261,19 @@ export function createBashTool(cwd: string, options?: BashToolOptions): AgentToo
 
 						if (exitCode !== 0 && exitCode !== null) {
 							outputText += `\n\nCommand exited with code ${exitCode}`;
+							toolsLog.debug("bash execute failed (non-zero exit)", {
+								command: command.slice(0, 100),
+								exitCode,
+								outputLength: fullOutput.length,
+							});
 							reject(new Error(outputText));
 						} else {
+							toolsLog.debug("bash execute completed", {
+								command: command.slice(0, 100),
+								exitCode,
+								outputLength: fullOutput.length,
+								truncated: truncation.truncated,
+							});
 							resolve({ content: [{ type: "text", text: outputText }], details });
 						}
 					})
@@ -271,13 +290,16 @@ export function createBashTool(cwd: string, options?: BashToolOptions): AgentToo
 						if (err.message === "aborted") {
 							if (output) output += "\n\n";
 							output += "Command aborted";
+							toolsLog.debug("bash execute aborted", { command: command.slice(0, 100) });
 							reject(new Error(output));
 						} else if (err.message.startsWith("timeout:")) {
 							const timeoutSecs = err.message.split(":")[1];
 							if (output) output += "\n\n";
 							output += `Command timed out after ${timeoutSecs} seconds`;
+							toolsLog.warn("bash execute timeout", { command: command.slice(0, 100), timeout: timeoutSecs });
 							reject(new Error(output));
 						} else {
+							toolsLog.error("bash execute error", { command: command.slice(0, 100), error: err.message });
 							reject(err);
 						}
 					});

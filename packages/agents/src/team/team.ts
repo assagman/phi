@@ -262,8 +262,9 @@ export class Team {
 				// Fallback for older Node versions
 				const controller = new AbortController();
 				const abort = () => controller.abort();
-				options.signal.addEventListener("abort", abort);
-				this.abortController.signal.addEventListener("abort", abort);
+				// Use { once: true } to prevent memory leaks (#302)
+				options.signal.addEventListener("abort", abort, { once: true });
+				this.abortController.signal.addEventListener("abort", abort, { once: true });
 				combinedSignal = controller.signal;
 			}
 		} else {
@@ -295,6 +296,7 @@ export class Team {
 		const startTime = Date.now();
 		const { agents, tools, strategy = "parallel", merge, maxRetries = 1, continueOnError = true } = this.config;
 		const storage = options.storage;
+		const eventEmitter = options.eventEmitter;
 
 		// Create execution record in storage if provided
 		let executionId: number | undefined;
@@ -327,7 +329,27 @@ export class Team {
 				strategy,
 				hasTask: !!options.task,
 				hasStorage: !!storage,
+				hasEventEmitter: !!eventEmitter,
 			});
+		}
+
+		// Emit team_start event to SQLite event bus (if eventEmitter provided)
+		let teamEventId: number | undefined;
+		if (eventEmitter) {
+			try {
+				teamEventId = eventEmitter.emitTeamStart(
+					this.config.name,
+					agents.map((a) => a.name),
+					options.task ?? "No task specified",
+				);
+			} catch (err) {
+				// Event emission errors shouldn't block execution
+				if (process.env.DEBUG_AGENTS) {
+					debugLog("team", "Failed to emit team_start event", {
+						error: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
 		}
 
 		stream.push({
@@ -348,6 +370,7 @@ export class Team {
 					continueOnError,
 					stream,
 					executionId,
+					teamEventId,
 				);
 			} else {
 				agentResults = await this.executeSequential(
@@ -358,6 +381,7 @@ export class Team {
 					continueOnError,
 					stream,
 					executionId,
+					teamEventId,
 				);
 			}
 
@@ -378,6 +402,16 @@ export class Team {
 				findingCount: allFindings.length,
 			});
 
+			// Emit merge_start event to SQLite event bus
+			let mergeEventId: number | undefined;
+			if (eventEmitter) {
+				try {
+					mergeEventId = eventEmitter.emitMergeStart(merge.strategy, allFindings.length, teamEventId);
+				} catch {
+					// Event emission errors shouldn't block execution
+				}
+			}
+
 			const mergeResult = await this.runMerge(agentResults, tools, options, stream, executionId);
 
 			const result: TeamResult = {
@@ -397,12 +431,37 @@ export class Team {
 				verifiedCount: result.findings.filter((f) => f.verified).length,
 			});
 
+			// Emit merge_end event to SQLite event bus
+			if (eventEmitter) {
+				try {
+					eventEmitter.emitMergeEnd(result.findings.length, mergeEventId);
+				} catch {
+					// Event emission errors shouldn't block execution
+				}
+			}
+
 			// Save final result to storage
 			if (storage && executionId !== undefined) {
 				try {
 					storage.saveTeamResult(executionId, result);
 				} catch {
 					// Ignore storage errors
+				}
+			}
+
+			// Emit team_end event to SQLite event bus
+			if (eventEmitter) {
+				try {
+					eventEmitter.emitTeamEnd(
+						this.config.name,
+						result.success,
+						result.findings.length,
+						result.durationMs,
+						undefined,
+						teamEventId,
+					);
+				} catch {
+					// Event emission errors shouldn't block execution
 				}
 			}
 
@@ -417,6 +476,15 @@ export class Team {
 					storage.updateExecutionStatus(executionId, "failed", errorMessage);
 				} catch {
 					// Ignore storage errors
+				}
+			}
+
+			// Emit team_end event with error to SQLite event bus
+			if (eventEmitter) {
+				try {
+					eventEmitter.emitTeamEnd(this.config.name, false, 0, Date.now() - startTime, errorMessage, teamEventId);
+				} catch {
+					// Event emission errors shouldn't block execution
 				}
 			}
 
@@ -449,6 +517,7 @@ export class Team {
 		continueOnError: boolean,
 		stream: EventStream<TeamEvent, TeamResult>,
 		executionId?: number,
+		teamEventId?: number,
 	): Promise<AgentResult[]> {
 		const promises = agents.map((agent, index) =>
 			this.executeAgent(
@@ -461,6 +530,7 @@ export class Team {
 				agents.length,
 				stream,
 				executionId,
+				teamEventId,
 			),
 		);
 
@@ -475,6 +545,7 @@ export class Team {
 		continueOnError: boolean,
 		stream: EventStream<TeamEvent, TeamResult>,
 		executionId?: number,
+		teamEventId?: number,
 	): Promise<AgentResult[]> {
 		const results: AgentResult[] = [];
 
@@ -489,6 +560,7 @@ export class Team {
 				agents.length,
 				stream,
 				executionId,
+				teamEventId,
 			);
 			results.push(result);
 
@@ -509,10 +581,12 @@ export class Team {
 		total: number,
 		stream: EventStream<TeamEvent, TeamResult>,
 		executionId?: number,
+		teamEventId?: number,
 	): Promise<AgentResult> {
 		const startTime = Date.now();
 		let lastError: string | undefined;
 		const storage = options.storage;
+		const eventEmitter = options.eventEmitter;
 
 		// Create agent result record in storage if provided
 		let agentResultId: number | undefined;
@@ -521,6 +595,16 @@ export class Team {
 				agentResultId = storage.createAgentResult(executionId, preset.name);
 			} catch {
 				// Ignore storage errors
+			}
+		}
+
+		// Emit agent_start event to SQLite event bus
+		let agentEventId: number | undefined;
+		if (eventEmitter) {
+			try {
+				agentEventId = eventEmitter.emitAgentStart(preset.name, this.config.name);
+			} catch {
+				// Event emission errors shouldn't block execution
 			}
 		}
 
@@ -568,6 +652,39 @@ export class Team {
 					}
 				}
 
+				// Emit agent_end event and finding events to SQLite event bus
+				if (eventEmitter) {
+					try {
+						// Emit finding events first (child of agent event)
+						for (const finding of result.findings) {
+							const line = Array.isArray(finding.line) ? finding.line[0] : finding.line;
+							eventEmitter.emitFinding(
+								finding.agentName,
+								finding.category,
+								finding.severity,
+								finding.title,
+								finding.description,
+								finding.file,
+								line,
+								finding.suggestion,
+								agentEventId,
+							);
+						}
+						// Emit agent_end event (links to parent team event)
+						eventEmitter.emitAgentEnd(
+							preset.name,
+							this.config.name,
+							result.success,
+							result.findings.length,
+							result.durationMs,
+							undefined,
+							teamEventId,
+						);
+					} catch {
+						// Event emission errors shouldn't block execution
+					}
+				}
+
 				stream.push({
 					type: "agent_end",
 					agentName: preset.name,
@@ -598,6 +715,22 @@ export class Team {
 							// Ignore storage errors
 						}
 					}
+					// Emit agent_end event with error to SQLite event bus
+					if (eventEmitter) {
+						try {
+							eventEmitter.emitAgentEnd(
+								preset.name,
+								this.config.name,
+								false,
+								0,
+								Date.now() - startTime,
+								lastError,
+								teamEventId,
+							);
+						} catch {
+							// Event emission errors shouldn't block execution
+						}
+					}
 					throw error;
 				}
 			}
@@ -623,6 +756,23 @@ export class Team {
 				});
 			} catch {
 				// Ignore storage errors
+			}
+		}
+
+		// Emit agent_end event with error to SQLite event bus
+		if (eventEmitter) {
+			try {
+				eventEmitter.emitAgentEnd(
+					preset.name,
+					this.config.name,
+					false,
+					0,
+					failResult.durationMs,
+					lastError,
+					teamEventId,
+				);
+			} catch {
+				// Event emission errors shouldn't block execution
 			}
 		}
 

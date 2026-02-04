@@ -35,6 +35,7 @@ import {
 	Team,
 	type TeamConfig,
 	type TeamEvent,
+	type TeamEventEmitter,
 	type TeamExecutionStorageInterface,
 	type TeamResult,
 } from "agents";
@@ -703,6 +704,8 @@ export interface TeamStreamOptions {
 	signal?: AbortSignal;
 	/** Optional storage for persisting execution state (SQLite-backed) */
 	storage?: TeamExecutionStorageInterface;
+	/** Optional event emitter for SQLite-backed event persistence */
+	eventEmitter?: TeamEventEmitter;
 }
 
 export interface TeamStreamResult {
@@ -729,7 +732,7 @@ export function createTeamStream(teamName: string, options: TeamStreamOptions): 
  * Returns the Team instance and its event stream for real-time UI updates.
  */
 export function createResolvedTeamStream(team: ResolvedTeam, options: TeamStreamOptions): TeamStreamResult {
-	const { model, modelRegistry, tools = [], task, signal, storage } = options;
+	const { model, modelRegistry, tools = [], task, signal, storage, eventEmitter } = options;
 
 	// Validate models against registry
 	const modelErrors = validateTeamModels(team, modelRegistry);
@@ -781,6 +784,7 @@ export function createResolvedTeamStream(team: ResolvedTeam, options: TeamStream
 		task,
 		signal,
 		storage,
+		eventEmitter,
 		getApiKey: async (provider: string) => {
 			return modelRegistry.getApiKeyForProvider(provider);
 		},
@@ -799,7 +803,7 @@ function createTeamStreamInternal(
 	strategy: MergeStrategyType,
 	options: TeamStreamOptions,
 ): TeamStreamResult {
-	const { model, modelRegistry, tools = [], task, signal, storage } = options;
+	const { model, modelRegistry, tools = [], task, signal, storage, eventEmitter } = options;
 
 	// model cast is safe - we only care about provider for API key lookup
 	const agentPresets = createAgentPresets(agentNames, model as Model<Api>);
@@ -823,6 +827,7 @@ function createTeamStreamInternal(
 		task,
 		signal,
 		storage,
+		eventEmitter,
 		getApiKey: async (provider: string) => {
 			return modelRegistry.getApiKeyForProvider(provider);
 		},

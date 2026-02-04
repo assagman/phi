@@ -36,6 +36,7 @@
 		"agent": "*",
 		"agents": "*",
 		"ai": "*",
+		"events": "*",
 		"ajv": "^8.17.1",
 		"chalk": "^5.5.0",
 		"cli-highlight": "^2.1.11",

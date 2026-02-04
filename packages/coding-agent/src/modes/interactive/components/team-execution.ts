@@ -5,6 +5,10 @@
  * Supports two modes:
  * 1. Direct team execution (via /team command) - shows single team's agents
  * 2. Team review tool - shows lead analyzer phase, then multiple teams
+ *
+ * Displays atomic, detailed events as they happen:
+ * - Lead analyzer: tool calls (read, bash, analyze_*), epsilon tasks
+ * - Team execution: agent progress, findings, merge phases
  */
 
 import * as path from "node:path";
@@ -40,6 +44,22 @@ const PROGRESS = {
 
 // RGB for pulse animation
 const PULSE_RGB: [number, number, number] = [95, 135, 255]; // accent blue
+
+// Maximum number of activity items to show
+const MAX_ACTIVITY_ITEMS = 8;
+const MAX_COMPLETED_ITEMS = 5;
+
+/** Activity log entry for detailed display */
+interface ActivityEntry {
+	id: string;
+	type: "tool" | "task" | "memory" | "analysis";
+	status: "active" | "done" | "error";
+	icon: string;
+	label: string;
+	detail?: string;
+	startTime: number;
+	endTime?: number;
+}
 
 interface AgentStatus {
 	name: string;
@@ -79,11 +99,24 @@ export class TeamExecutionComponent extends Container {
 	// Lead analyzer task tracking (driven by epsilon)
 	private leadTasks: Map<number, { title: string; status: string }> = new Map();
 
+	// Detailed activity log for atomic event display
+	private activityLog: ActivityEntry[] = [];
+
 	// Lead analyzer tool activity tracking
 	private leadToolsActive: Map<string, LeadToolEvent> = new Map(); // toolCallId -> event
-	private leadToolsCompleted: Array<{ path?: string; command?: string; lineCount?: number; isError?: boolean }> = [];
+	private leadToolsCompleted: Array<{
+		toolName?: string;
+		path?: string;
+		command?: string;
+		lineCount?: number;
+		isError?: boolean;
+	}> = [];
+
+	// Statistics counters
 	private leadFilesScanned = 0;
 	private leadSearchesRun = 0;
+	private leadMemoryOps = 0;
+	private leadAnalysisOps = 0;
 
 	constructor(teamName: string, agentNames: string[], ui?: TUI, onInvalidate?: () => void) {
 		super();
@@ -277,12 +310,30 @@ export class TeamExecutionComponent extends Container {
 	handleLeadToolEvent(event: LeadToolEvent): void {
 		if (event.type === "start") {
 			this.leadToolsActive.set(event.toolCallId, event);
+
+			// Add to activity log
+			const { icon, label, detail } = this.formatToolForActivity(event);
+			this.addActivity({
+				id: event.toolCallId,
+				type: this.getToolActivityType(event.toolName),
+				status: "active",
+				icon,
+				label,
+				detail,
+				startTime: Date.now(),
+			});
 		} else {
 			// End event
 			this.leadToolsActive.delete(event.toolCallId);
 
+			// Update activity log entry
+			this.updateActivityStatus(event.toolCallId, event.isError ? "error" : "done", Date.now());
+
 			// Track completed tools for display
-			const record: (typeof this.leadToolsCompleted)[0] = { isError: event.isError };
+			const record: (typeof this.leadToolsCompleted)[0] = {
+				toolName: event.toolName,
+				isError: event.isError,
+			};
 
 			if (event.path) {
 				record.path = event.path;
@@ -299,13 +350,127 @@ export class TeamExecutionComponent extends Container {
 				record.lineCount = event.lineCount;
 			}
 
-			// Keep last 5 completed tools for display
+			// Update statistics
+			if (event.toolName.startsWith("delta_")) {
+				this.leadMemoryOps++;
+			} else if (event.toolName.startsWith("analyze_")) {
+				this.leadAnalysisOps++;
+			}
+
+			// Keep last N completed tools for display
 			this.leadToolsCompleted.push(record);
-			if (this.leadToolsCompleted.length > 5) {
+			if (this.leadToolsCompleted.length > MAX_COMPLETED_ITEMS) {
 				this.leadToolsCompleted.shift();
 			}
 		}
 		this.update();
+	}
+
+	/**
+	 * Add an entry to the activity log
+	 */
+	private addActivity(entry: ActivityEntry): void {
+		this.activityLog.push(entry);
+		// Trim old completed entries if too many
+		const activeCount = this.activityLog.filter((e) => e.status === "active").length;
+		const completedCount = this.activityLog.length - activeCount;
+		if (completedCount > MAX_ACTIVITY_ITEMS) {
+			// Remove oldest completed entries
+			const toRemove = completedCount - MAX_ACTIVITY_ITEMS;
+			let removed = 0;
+			this.activityLog = this.activityLog.filter((e) => {
+				if (e.status !== "active" && removed < toRemove) {
+					removed++;
+					return false;
+				}
+				return true;
+			});
+		}
+	}
+
+	/**
+	 * Update an activity entry's status
+	 */
+	private updateActivityStatus(id: string, status: "done" | "error", endTime: number): void {
+		const entry = this.activityLog.find((e) => e.id === id);
+		if (entry) {
+			entry.status = status;
+			entry.endTime = endTime;
+		}
+	}
+
+	/**
+	 * Get activity type from tool name
+	 */
+	private getToolActivityType(toolName: string): ActivityEntry["type"] {
+		if (toolName.startsWith("delta_")) return "memory";
+		if (toolName.startsWith("analyze_")) return "analysis";
+		return "tool";
+	}
+
+	/**
+	 * Format a tool event for activity display
+	 */
+	private formatToolForActivity(event: LeadToolEvent): { icon: string; label: string; detail?: string } {
+		const toolName = event.toolName.toLowerCase();
+
+		// Read tool
+		if (toolName === "read" && event.path) {
+			return {
+				icon: "\uf02d", // nf-fa-book
+				label: "Read",
+				detail: this.shortenPath(event.path),
+			};
+		}
+
+		// Bash/search tools
+		if (toolName === "bash" && event.command) {
+			if (event.pattern && event.command.includes("rg ")) {
+				return {
+					icon: "\uf002", // nf-fa-search
+					label: "Search",
+					detail: `"${event.pattern}" in ${this.shortenPath(event.directory || ".")}`,
+				};
+			}
+			if (event.pattern && event.command.includes("fd ")) {
+				return {
+					icon: "\uf07c", // nf-fa-folder_open
+					label: "Find",
+					detail: `"${event.pattern}"`,
+				};
+			}
+			return {
+				icon: "\uf120", // nf-fa-terminal
+				label: "Bash",
+				detail: this.truncate(event.command, 40),
+			};
+		}
+
+		// Project analysis tools
+		if (toolName.startsWith("analyze_")) {
+			const type = toolName.replace("analyze_", "").replace(/_/g, " ");
+			return {
+				icon: "\uf085", // nf-fa-cogs
+				label: "Analyze",
+				detail: type,
+			};
+		}
+
+		// Delta memory tools
+		if (toolName.startsWith("delta_")) {
+			const op = toolName.replace("delta_", "");
+			return {
+				icon: "\uf1c0", // nf-fa-database
+				label: "Memory",
+				detail: op,
+			};
+		}
+
+		// Default
+		return {
+			icon: "\uf013", // nf-fa-gear
+			label: event.toolName,
+		};
 	}
 
 	private startPulse(): void {
@@ -349,72 +514,91 @@ export class TeamExecutionComponent extends Container {
 		);
 		lines.push("");
 
-		// If in lead analyzer phase (team review tool), show tool activity and epsilon tasks
+		// If in lead analyzer phase (team review tool), show detailed atomic events
 		if (this.reviewPhase === "lead_analyzing") {
-			lines.push(`${this.pulsed("◐")} ${theme.fg("muted", "Analyzing project and selecting teams...")}`);
+			lines.push(
+				`${this.pulsed("◐")} ${theme.fg("accent", "Lead Analyzer")} ${theme.fg("muted", "Analyzing project...")}`,
+			);
 			lines.push("");
 
-			// Show tool activity stats
-			const hasActivity = this.leadFilesScanned > 0 || this.leadSearchesRun > 0 || this.leadToolsActive.size > 0;
+			// Statistics bar
+			const stats = this.buildStatsLine();
+			if (stats) {
+				lines.push(stats);
+				lines.push("");
+			}
+
+			// Activity section header
+			const activeCount = this.activityLog.filter((e) => e.status === "active").length;
+			const doneCount = this.activityLog.filter((e) => e.status === "done").length;
+			const hasActivity = this.activityLog.length > 0 || this.leadToolsActive.size > 0;
 
 			if (!hasActivity && this.leadTasks.size === 0) {
-				// No activity yet - show waiting indicator
-				lines.push(theme.fg("muted", "  Initializing lead analyzer..."));
+				lines.push(theme.fg("muted", "  Initializing..."));
 			} else {
-				// Show stats line
-				const stats: string[] = [];
-				if (this.leadFilesScanned > 0) {
-					stats.push(`Files: ${this.leadFilesScanned}`);
-				}
-				if (this.leadSearchesRun > 0) {
-					stats.push(`Searches: ${this.leadSearchesRun}`);
-				}
-				if (stats.length > 0) {
-					lines.push(theme.fg("muted", `  ${stats.join("  •  ")}`));
-					lines.push("");
+				// Show activity header with counts
+				if (activeCount > 0 || doneCount > 0) {
+					const countText = activeCount > 0 ? `${activeCount} active` : "";
+					const doneText = doneCount > 0 ? `${doneCount} done` : "";
+					const separator = countText && doneText ? " • " : "";
+					lines.push(theme.fg("muted", `Activity: ${countText}${separator}${doneText}`));
 				}
 
-				// Show currently active tools
-				const activeTools = Array.from(this.leadToolsActive.values());
-				if (activeTools.length > 0) {
-					for (let i = 0; i < activeTools.length; i++) {
-						const tool = activeTools[i];
-						const isLast = i === activeTools.length - 1 && this.leadToolsCompleted.length === 0;
-						const treeBranch = isLast ? TREE.last : TREE.branch;
-						const activity = this.formatToolActivity(tool, true);
-						lines.push(`  ${treeBranch} ${this.pulsed("◐")} ${activity}`);
-					}
+				// Render active activities first (with pulsing indicator)
+				const activeEntries = this.activityLog.filter((e) => e.status === "active");
+				const doneEntries = this.activityLog.filter((e) => e.status !== "active").slice(-MAX_COMPLETED_ITEMS);
+
+				for (let i = 0; i < activeEntries.length; i++) {
+					const entry = activeEntries[i];
+					const isLast = i === activeEntries.length - 1 && doneEntries.length === 0;
+					const branch = isLast ? TREE.last : TREE.branch;
+					const elapsedMs = Date.now() - entry.startTime;
+					const elapsedText = elapsedMs > 1000 ? ` ${(elapsedMs / 1000).toFixed(1)}s` : "";
+
+					const line = `  ${branch} ${this.pulsed("◐")} ${theme.fg("accent", entry.label)}${entry.detail ? ` ${theme.fg("muted", entry.detail)}` : ""}${theme.fg("muted", elapsedText)}`;
+					lines.push(line);
 				}
 
-				// Show recently completed tools
-				if (this.leadToolsCompleted.length > 0) {
-					const completed = this.leadToolsCompleted.slice(-3); // Last 3
-					for (let i = 0; i < completed.length; i++) {
-						const tool = completed[i];
-						const isLast = i === completed.length - 1 && this.leadTasks.size === 0;
-						const treeBranch = isLast ? TREE.last : TREE.branch;
-						const icon = tool.isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-						const activity = this.formatCompletedTool(tool);
-						lines.push(`  ${treeBranch} ${icon} ${activity}`);
-					}
+				// Render completed activities
+				for (let i = 0; i < doneEntries.length; i++) {
+					const entry = doneEntries[i];
+					const isLast = i === doneEntries.length - 1 && this.leadTasks.size === 0;
+					const branch = isLast ? TREE.last : TREE.branch;
+					const icon = entry.status === "error" ? theme.fg("error", "✗") : theme.fg("success", "✓");
+					const durationMs = entry.endTime ? entry.endTime - entry.startTime : 0;
+					const durationText = durationMs > 500 ? ` ${(durationMs / 1000).toFixed(1)}s` : "";
+
+					const labelColor = entry.status === "error" ? "error" : "muted";
+					const line = `  ${branch} ${icon} ${theme.fg(labelColor, entry.label)}${entry.detail ? ` ${theme.fg("muted", entry.detail)}` : ""}${theme.fg("muted", durationText)}`;
+					lines.push(line);
 				}
 
 				// Show epsilon tasks if any
 				if (this.leadTasks.size > 0) {
 					lines.push("");
 					const tasks = Array.from(this.leadTasks.entries());
-					const doneCount = tasks.filter(([, t]) => t.status === "done").length;
-					const totalCount = tasks.length;
+					const tasksDone = tasks.filter(([, t]) => t.status === "done").length;
+					const tasksTotal = tasks.length;
 
-					lines.push(theme.fg("muted", `  Tasks: ${doneCount}/${totalCount}`));
+					lines.push(theme.fg("muted", `Tasks: ${tasksDone}/${tasksTotal}`));
 
-					for (let i = 0; i < tasks.length; i++) {
-						const [, task] = tasks[i];
-						const isLast = i === tasks.length - 1;
-						const treeBranch = isLast ? TREE.last : TREE.branch;
+					// Show only active or recent tasks (up to 5)
+					const activeTasks = tasks.filter(([, t]) => t.status === "in_progress");
+					const otherTasks = tasks.filter(([, t]) => t.status !== "in_progress").slice(-3);
+					const visibleTasks = [...activeTasks, ...otherTasks].slice(0, 5);
+
+					for (let i = 0; i < visibleTasks.length; i++) {
+						const [, task] = visibleTasks[i];
+						const isLast = i === visibleTasks.length - 1;
+						const branch = isLast ? TREE.last : TREE.branch;
 						const icon = this.formatTaskStatusIcon(task.status);
 						const title = this.truncate(task.title, 50);
-						lines.push(`  ${treeBranch} ${icon} ${title}`);
+						lines.push(`  ${branch} ${icon} ${title}`);
+					}
+
+					// Show count of hidden tasks if any
+					if (tasks.length > 5) {
+						lines.push(theme.fg("muted", `  ${TREE.space}... and ${tasks.length - 5} more tasks`));
 					}
 				}
 			}
@@ -609,57 +793,26 @@ export class TeamExecutionComponent extends Container {
 	}
 
 	/**
-	 * Format an active tool event for display
+	 * Build a statistics line showing counters for files, searches, memory ops, etc.
 	 */
-	private formatToolActivity(tool: LeadToolEvent, _isActive: boolean): string {
-		const toolName = tool.toolName.toLowerCase();
+	private buildStatsLine(): string | null {
+		const parts: string[] = [];
 
-		if (toolName === "read" && tool.path) {
-			const shortPath = this.shortenPath(tool.path);
-			return theme.fg("muted", `Reading: ${shortPath}`);
+		if (this.leadFilesScanned > 0) {
+			parts.push(`${theme.fg("accent", "\uf02d")} ${this.leadFilesScanned}`); // nf-fa-book
+		}
+		if (this.leadSearchesRun > 0) {
+			parts.push(`${theme.fg("accent", "\uf002")} ${this.leadSearchesRun}`); // nf-fa-search
+		}
+		if (this.leadMemoryOps > 0) {
+			parts.push(`${theme.fg("accent", "\uf1c0")} ${this.leadMemoryOps}`); // nf-fa-database
+		}
+		if (this.leadAnalysisOps > 0) {
+			parts.push(`${theme.fg("accent", "\uf085")} ${this.leadAnalysisOps}`); // nf-fa-cogs
 		}
 
-		if (toolName === "bash" && tool.command) {
-			// For rg/fd commands, show the pattern and directory
-			if (tool.pattern) {
-				const dir = tool.directory || ".";
-				const shortDir = this.shortenPath(dir);
-				if (tool.command.includes("rg ")) {
-					return theme.fg("muted", `Searching: "${tool.pattern}" in ${shortDir}`);
-				}
-				if (tool.command.includes("fd ")) {
-					return theme.fg("muted", `Finding: "${tool.pattern}" in ${shortDir}`);
-				}
-			}
-			// For other bash commands, show truncated command
-			const shortCmd = this.truncate(tool.command, 50);
-			return theme.fg("muted", `Running: ${shortCmd}`);
-		}
-
-		if (toolName.startsWith("analyze_")) {
-			const analyzeType = toolName.replace("analyze_", "").replace(/_/g, " ");
-			return theme.fg("muted", `Analyzing ${analyzeType}...`);
-		}
-
-		return theme.fg("muted", `${tool.toolName}...`);
-	}
-
-	/**
-	 * Format a completed tool for display
-	 */
-	private formatCompletedTool(tool: (typeof this.leadToolsCompleted)[0]): string {
-		if (tool.path) {
-			const shortPath = this.shortenPath(tool.path);
-			const lines = tool.lineCount ? ` (${tool.lineCount} lines)` : "";
-			return theme.fg("muted", `${shortPath}${lines}`);
-		}
-
-		if (tool.command) {
-			const shortCmd = this.truncate(tool.command, 40);
-			return theme.fg("muted", shortCmd);
-		}
-
-		return theme.fg("muted", "completed");
+		if (parts.length === 0) return null;
+		return `  ${parts.join("  ")}`;
 	}
 
 	/**

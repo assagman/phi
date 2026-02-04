@@ -1,5 +1,5 @@
 {
-	"name": "agents",
+	"name": "events",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -15,12 +15,7 @@
 		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "vitest --run"
 	},
-	"dependencies": {
-		"@sinclair/typebox": "^0.34.48",
-		"agent": "*",
-		"ai": "*",
-		"events": "*"
-	},
+	"dependencies": {},
 	"devDependencies": {
 		"@types/node": "^24.3.0",
 		"typescript": "^5.7.3",
