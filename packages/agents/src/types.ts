@@ -73,8 +73,32 @@ export type FindingSeverity = "critical" | "high" | "medium" | "low" | "info";
 
 /**
  * Category of finding.
+ * Expanded to cover comprehensive code review domains.
  */
-export type FindingCategory = "security" | "bug" | "performance" | "style" | "maintainability" | "other";
+export type FindingCategory =
+	// Core categories
+	| "security" // Vulnerabilities, attack vectors, auth issues
+	| "privacy" // PII handling, data protection, compliance
+	| "bug" // Logic errors, incorrect behavior
+	| "performance" // Bottlenecks, complexity, resource usage
+	// Code quality categories
+	| "types" // Type safety, type design, type holes
+	| "testing" // Test coverage, test quality, edge cases
+	| "error-handling" // Error handling, resilience, fault tolerance
+	| "concurrency" // Race conditions, deadlocks, thread safety
+	// Design categories
+	| "architecture" // Structure, patterns, SOLID, modularity
+	| "api" // API design, contracts, consistency
+	// Content categories
+	| "docs" // Documentation, comments, examples
+	| "accessibility" // WCAG, a11y, inclusive design
+	| "i18n" // Internationalization, localization, Unicode
+	// Ecosystem categories
+	| "dependencies" // Dependency health, vulnerabilities, hygiene
+	// Generic
+	| "style" // Code style, formatting (low priority)
+	| "maintainability" // General maintainability concerns
+	| "other"; // Uncategorized findings
 
 /**
  * A finding represents a single issue, suggestion, or observation from an agent.
@@ -175,6 +199,23 @@ export interface TeamResult {
 }
 
 /**
+ * Task status for epsilon task tracking.
+ */
+export type TaskStatus = "todo" | "in_progress" | "blocked" | "done" | "cancelled";
+
+/**
+ * Epsilon task tracking info for an agent.
+ */
+export interface AgentTaskInfo {
+	/** Total tasks created by this agent */
+	total: number;
+	/** Tasks completed (done or cancelled) */
+	completed: number;
+	/** Currently active task title (in_progress) */
+	activeTaskTitle?: string;
+}
+
+/**
  * Events emitted during team execution for UI updates.
  */
 export type TeamEvent =
@@ -187,6 +228,8 @@ export type TeamEvent =
 	| { type: "agent_end"; agentName: string; result: AgentResult }
 	| { type: "agent_error"; agentName: string; error: string; willRetry: boolean }
 	| { type: "agent_retry"; agentName: string; attempt: number; maxRetries: number }
+	// Task tracking (epsilon integration)
+	| { type: "agent_task_update"; agentName: string; taskInfo: AgentTaskInfo }
 	// Merge phase
 	| { type: "merge_start"; strategy: MergeStrategyType; findingCount: number }
 	| { type: "merge_progress"; phase: "parsing" | "clustering" | "verifying" | "ranking" | "synthesizing" }

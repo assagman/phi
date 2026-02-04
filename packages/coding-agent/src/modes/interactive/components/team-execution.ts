@@ -1,9 +1,9 @@
 /**
  * Team execution progress component for inline chat display.
- * Shows live agent status and high-level tool calls.
+ * Shows hierarchical tree of agents with epsilon task progress.
  */
 
-import type { TeamEvent } from "agents";
+import type { AgentTaskInfo, TeamEvent } from "agents";
 import { Container, Text, type TUI } from "tui";
 import { theme } from "../theme/theme.js";
 
@@ -17,15 +17,30 @@ const STATUS_ICONS = {
 	error: "✗", // Failed
 };
 
+// Tree characters
+const TREE = {
+	branch: "├──",
+	last: "└──",
+	pipe: "│  ",
+	space: "   ",
+};
+
+// Progress bar characters
+const PROGRESS = {
+	filled: "█",
+	empty: "░",
+	width: 10,
+};
+
 // RGB for pulse animation
 const PULSE_RGB: [number, number, number] = [95, 135, 255]; // accent blue
 
 interface AgentStatus {
 	name: string;
 	status: "pending" | "running" | "success" | "error";
-	toolCalls: string[];
 	error?: string;
 	findingCount?: number;
+	taskInfo: AgentTaskInfo;
 }
 
 interface MergeStatus {
@@ -36,7 +51,7 @@ interface MergeStatus {
 
 /**
  * Displays team execution progress inline in chat.
- * Updates in real-time as agents run and complete.
+ * Shows tree hierarchy with epsilon task progress per agent.
  */
 export class TeamExecutionComponent extends Container {
 	private text: Text;
@@ -57,12 +72,12 @@ export class TeamExecutionComponent extends Container {
 		this.text = new Text("", 1, 0);
 		this.addChild(this.text);
 
-		// Initialize all agents as pending
+		// Initialize all agents as pending with empty task info
 		for (const name of agentNames) {
 			this.agents.set(name, {
 				name,
 				status: "pending",
-				toolCalls: [],
+				taskInfo: { total: 0, completed: 0 },
 			});
 		}
 
@@ -83,14 +98,10 @@ export class TeamExecutionComponent extends Container {
 				break;
 			}
 
-			case "agent_event": {
+			case "agent_task_update": {
 				const agent = this.agents.get(event.agentName);
-				if (agent && event.event.type === "tool_execution_start") {
-					// Add tool call summary (just name, not full args)
-					const toolName = event.event.toolName;
-					if (!agent.toolCalls.includes(toolName)) {
-						agent.toolCalls.push(toolName);
-					}
+				if (agent) {
+					agent.taskInfo = event.taskInfo;
 				}
 				break;
 			}
@@ -185,15 +196,26 @@ export class TeamExecutionComponent extends Container {
 		lines.push(`${theme.fg("accent", `⚑ Team: ${this.teamName}`)} ${theme.fg("muted", `(${elapsed}s)`)} ${status}`);
 		lines.push("");
 
-		// Agent status table
+		// Agent tree with progress
 		lines.push(theme.fg("muted", "Agents:"));
-		for (const agent of this.agents.values()) {
-			const icon = this.formatStatusIcon(agent.status);
-			const tools = agent.toolCalls.length > 0 ? theme.fg("muted", ` → ${agent.toolCalls.join(", ")}`) : "";
-			const findings =
-				agent.findingCount !== undefined ? theme.fg("muted", ` (${agent.findingCount} findings)`) : "";
-			const error = agent.error ? theme.fg("error", ` Error: ${agent.error}`) : "";
-			lines.push(`  ${icon} ${agent.name}${tools}${findings}${error}`);
+		const agentList = Array.from(this.agents.values());
+		for (let i = 0; i < agentList.length; i++) {
+			const agent = agentList[i];
+			const isLast = i === agentList.length - 1;
+			const treeBranch = isLast ? TREE.last : TREE.branch;
+			const agentLine = this.formatAgentLine(agent, treeBranch);
+			lines.push(agentLine);
+		}
+
+		// Team progress summary
+		const { totalTasks, completedTasks } = this.getTeamProgress();
+		if (totalTasks > 0) {
+			lines.push("");
+			const progressBar = this.renderProgressBar(completedTasks, totalTasks, 20);
+			const percent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+			lines.push(
+				`${theme.fg("muted", "Progress:")} ${progressBar} ${completedTasks}/${totalTasks} tasks (${percent}%)`,
+			);
 		}
 
 		// Merge status (only show during/after merge phase)
@@ -205,6 +227,63 @@ export class TeamExecutionComponent extends Container {
 		}
 
 		this.text.setText(lines.join("\n"));
+	}
+
+	private formatAgentLine(agent: AgentStatus, treeBranch: string): string {
+		const icon = this.formatStatusIcon(agent.status);
+		const name = agent.name;
+
+		// Progress bar for this agent
+		const { total, completed, activeTaskTitle } = agent.taskInfo;
+		const progressBar = this.renderProgressBar(completed, total, PROGRESS.width);
+
+		// Task count
+		const taskCount = total > 0 ? `${completed}/${total}` : "0/0";
+
+		// Active task or status text
+		let statusText = "";
+		if (agent.status === "pending") {
+			statusText = theme.fg("muted", "(pending)");
+		} else if (agent.status === "error" && agent.error) {
+			statusText = theme.fg("error", `Error: ${this.truncate(agent.error, 30)}`);
+		} else if (agent.status === "success") {
+			const findings = agent.findingCount !== undefined ? ` (${agent.findingCount} findings)` : "";
+			statusText = theme.fg("success", `Complete${findings}`);
+		} else if (activeTaskTitle) {
+			statusText = theme.fg("muted", this.truncate(activeTaskTitle, 40));
+		} else if (agent.status === "running") {
+			statusText = this.pulsed("working...");
+		}
+
+		// Build the line
+		const namePadded = name.padEnd(24);
+		return `${treeBranch} ${icon} ${namePadded} ${progressBar} ${taskCount.padStart(5)}  ${statusText}`;
+	}
+
+	private renderProgressBar(completed: number, total: number, width: number): string {
+		if (total === 0) {
+			return theme.fg("muted", PROGRESS.empty.repeat(width));
+		}
+
+		const filledCount = Math.round((completed / total) * width);
+		const emptyCount = width - filledCount;
+
+		const filled = theme.fg("success", PROGRESS.filled.repeat(filledCount));
+		const empty = theme.fg("muted", PROGRESS.empty.repeat(emptyCount));
+
+		return filled + empty;
+	}
+
+	private getTeamProgress(): { totalTasks: number; completedTasks: number } {
+		let totalTasks = 0;
+		let completedTasks = 0;
+
+		for (const agent of this.agents.values()) {
+			totalTasks += agent.taskInfo.total;
+			completedTasks += agent.taskInfo.completed;
+		}
+
+		return { totalTasks, completedTasks };
 	}
 
 	private formatStatusIcon(status: AgentStatus["status"]): string {
@@ -238,6 +317,11 @@ export class TeamExecutionComponent extends Container {
 			default:
 				return "";
 		}
+	}
+
+	private truncate(text: string, maxLen: number): string {
+		if (text.length <= maxLen) return text;
+		return `${text.slice(0, maxLen - 3)}...`;
 	}
 
 	dispose(): void {

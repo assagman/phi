@@ -19,16 +19,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ThinkingLevel } from "agent";
-import {
-	codeReviewerTemplate,
-	type MergeStrategyType,
-	mergeSynthesizerTemplate,
-	type PresetTemplate,
-	perfAnalyzerTemplate,
-	securityAuditorTemplate,
-} from "agents";
+import type { MergeStrategyType, PresetTemplate } from "agents";
 import type { Api, Model } from "ai";
 import { parse as parseYaml } from "yaml";
+import {
+	getAvailablePresets as getPresetsFromRegistry,
+	getPresetTemplate as getTemplateFromRegistry,
+	isPresetName,
+	type PresetName,
+} from "./preset-registry.js";
 
 // Maximum number of config errors to accumulate before truncating
 const MAX_CONFIG_ERRORS = 50;
@@ -99,16 +98,7 @@ export interface ResolvedTeam {
 	source: "builtin" | "user" | "project";
 }
 
-// ============================================================================
-// Built-in Presets Registry
-// ============================================================================
-
-const PRESET_REGISTRY: Record<string, PresetTemplate> = {
-	"code-reviewer": codeReviewerTemplate,
-	"security-auditor": securityAuditorTemplate,
-	"perf-analyzer": perfAnalyzerTemplate,
-	"merge-synthesizer": mergeSynthesizerTemplate,
-};
+// PRESET_REGISTRY is imported from ./preset-registry.js
 
 // ============================================================================
 // Model String Parsing
@@ -271,10 +261,10 @@ function resolveAgent(config: AgentConfigDefinition): ResolveAgentResult {
 
 	// If using a preset, load base values
 	if (config.preset) {
-		const preset = PRESET_REGISTRY[config.preset];
-		if (!preset) {
+		if (!isPresetName(config.preset)) {
 			return { agent: null, error: `Unknown preset: ${config.preset}` };
 		}
+		const preset = getTemplateFromRegistry(config.preset);
 		baseName = config.name || preset.name;
 		basePrompt = preset.systemPrompt;
 		baseTemperature = preset.temperature;
@@ -461,15 +451,15 @@ export function loadCustomTeams(cwd: string): LoadTeamsResult {
 /**
  * Get list of available presets for reference in configs.
  */
-export function getAvailablePresets(): string[] {
-	return Object.keys(PRESET_REGISTRY);
+export function getAvailablePresets(): PresetName[] {
+	return getPresetsFromRegistry();
 }
 
 /**
  * Get preset template by name.
  */
 export function getPresetTemplate(name: string): PresetTemplate | undefined {
-	return PRESET_REGISTRY[name];
+	return getTemplateFromRegistry(name);
 }
 
 /**

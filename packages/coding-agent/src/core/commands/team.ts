@@ -1,28 +1,32 @@
 /**
  * /team command - Multi-agent team orchestration
+ *
+ * Teams and presets are defined in YAML config files:
+ * - packages/coding-agent/config/defaults.yaml (builtin)
+ * - ~/.phi/config.yaml (user overrides)
+ * - .phi/config.yaml (project overrides)
  */
 
 import type { AgentTool } from "agent";
 import {
 	type AgentPreset,
 	type AgentResult,
-	codeReviewerTemplate,
 	createPreset,
+	EPSILON_TASK_INSTRUCTIONS,
 	type Finding,
 	type MergeStrategyType,
 	mergeSynthesizerTemplate,
-	perfAnalyzerTemplate,
-	securityAuditorTemplate,
 	Team,
 	type TeamConfig,
 	type TeamEvent,
 	type TeamResult,
 } from "agents";
 import type { Api, Model } from "ai";
+import { getYamlTeams } from "../config/index.js";
 import type { ModelRegistry } from "../model-registry.js";
+import { AGENT_INFO, getPresetTemplate, isPresetName, type PresetName } from "../preset-registry.js";
 import {
 	getAvailablePresets,
-	getPresetTemplate,
 	loadCustomTeams,
 	type ResolvedTeam,
 	resolveModelFromParsed,
@@ -36,11 +40,12 @@ import {
 export interface BuiltinTeam {
 	name: string;
 	description: string;
-	agents: string[];
+	agents: PresetName[];
 	strategy: MergeStrategyType;
 }
 
 export const BUILTIN_TEAMS: BuiltinTeam[] = [
+	// Comprehensive reviews
 	{
 		name: "code-review",
 		description: "Comprehensive code review with multiple perspectives",
@@ -48,37 +53,117 @@ export const BUILTIN_TEAMS: BuiltinTeam[] = [
 		strategy: "verification",
 	},
 	{
+		name: "full-audit",
+		description: "Full-spectrum audit: security, privacy, types, architecture, errors",
+		agents: [
+			"security-auditor",
+			"privacy-auditor",
+			"type-safety-auditor",
+			"architecture-auditor",
+			"error-handling-auditor",
+		],
+		strategy: "verification",
+	},
+	// Security focused
+	{
 		name: "security-audit",
-		description: "Deep security analysis",
+		description: "Deep security and privacy analysis",
+		agents: ["security-auditor", "privacy-auditor"],
+		strategy: "verification",
+	},
+	{
+		name: "security-deep",
+		description: "Security-only deep dive (OWASP, CWE, attack surface)",
 		agents: ["security-auditor"],
 		strategy: "union",
 	},
+	// Performance & reliability
 	{
 		name: "performance",
-		description: "Performance and optimization analysis",
-		agents: ["perf-analyzer"],
+		description: "Performance, concurrency, and error handling analysis",
+		agents: ["perf-analyzer", "concurrency-auditor", "error-handling-auditor"],
+		strategy: "verification",
+	},
+	// Code quality
+	{
+		name: "quality",
+		description: "Code quality: types, testing, error handling",
+		agents: ["type-safety-auditor", "test-coverage-auditor", "error-handling-auditor"],
+		strategy: "verification",
+	},
+	{
+		name: "types",
+		description: "Type safety analysis",
+		agents: ["type-safety-auditor"],
 		strategy: "union",
+	},
+	{
+		name: "testing",
+		description: "Test coverage and quality analysis",
+		agents: ["test-coverage-auditor"],
+		strategy: "union",
+	},
+	// Architecture & design
+	{
+		name: "architecture",
+		description: "Architecture, API design, and dependency analysis",
+		agents: ["architecture-auditor", "api-design-auditor", "dependency-auditor"],
+		strategy: "verification",
+	},
+	{
+		name: "api-review",
+		description: "API design review",
+		agents: ["api-design-auditor"],
+		strategy: "union",
+	},
+	// Frontend/UI focused
+	{
+		name: "frontend",
+		description: "Frontend review: accessibility, i18n, performance",
+		agents: ["accessibility-auditor", "i18n-auditor", "perf-analyzer"],
+		strategy: "verification",
+	},
+	{
+		name: "accessibility",
+		description: "Accessibility (WCAG) audit",
+		agents: ["accessibility-auditor"],
+		strategy: "union",
+	},
+	// Documentation
+	{
+		name: "docs",
+		description: "Documentation completeness review",
+		agents: ["docs-auditor"],
+		strategy: "union",
+	},
+	// Dependencies
+	{
+		name: "dependencies",
+		description: "Dependency health and security audit",
+		agents: ["dependency-auditor", "security-auditor"],
+		strategy: "verification",
+	},
+	// Pre-release
+	{
+		name: "pre-release",
+		description: "Pre-release checklist: security, testing, docs, dependencies",
+		agents: ["security-auditor", "test-coverage-auditor", "docs-auditor", "dependency-auditor"],
+		strategy: "verification",
 	},
 ];
 
-const PRESET_TEMPLATES = {
-	"code-reviewer": codeReviewerTemplate,
-	"security-auditor": securityAuditorTemplate,
-	"perf-analyzer": perfAnalyzerTemplate,
-	"merge-synthesizer": mergeSynthesizerTemplate,
-} as const;
+// PRESET_REGISTRY is imported from ../preset-registry.js
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
-function createAgentPresets(agentNames: string[], model: Model<any>): AgentPreset[] {
+function createAgentPresets(agentNames: PresetName[], model: Model<Api>): AgentPreset[] {
 	return agentNames.map((name) => {
-		const template = PRESET_TEMPLATES[name as keyof typeof PRESET_TEMPLATES];
-		if (!template) {
-			throw new Error(`Unknown agent template: ${name}`);
-		}
-		return createPreset(template, model);
+		const template = getPresetTemplate(name);
+		// Template is guaranteed to exist since name is PresetName
+		// Inject epsilon task tracking instructions for UI progress display
+		return createPreset(template, model, { injectEpsilon: true });
 	});
 }
 
@@ -198,11 +283,8 @@ export function handleTeamEvent(event: TeamEvent, state: TeamExecutionState): vo
 // Available Agents for Free-text Mode
 // ============================================================================
 
-export const AVAILABLE_AGENTS = [
-	{ name: "code-reviewer", description: "General code quality, bugs, logic errors, maintainability" },
-	{ name: "security-auditor", description: "Security vulnerabilities, OWASP, CWE references" },
-	{ name: "perf-analyzer", description: "Performance issues, complexity, memory, I/O optimization" },
-] as const;
+// Re-export AGENT_INFO from preset-registry for backwards compatibility
+export const AVAILABLE_AGENTS = AGENT_INFO;
 
 // ============================================================================
 // Team Discovery (combines built-in + custom teams)
@@ -218,36 +300,31 @@ export interface TeamInfo {
 	resolved?: ResolvedTeam;
 }
 
-/** Load all teams (built-in + custom from config files) */
+/** Load all teams from YAML config (builtin + user + project) */
 export function loadAllTeams(cwd: string): { teams: TeamInfo[]; errors: string[] } {
-	const teams: TeamInfo[] = [];
+	// Get teams from YAML config (already merged: defaults < user < project)
+	const yamlTeams = getYamlTeams({ cwd });
 
-	// Add built-in teams
-	for (const builtin of BUILTIN_TEAMS) {
-		teams.push({
-			name: builtin.name,
-			description: builtin.description,
-			agentCount: builtin.agents.length,
-			source: "builtin",
-		});
-	}
+	const teams: TeamInfo[] = yamlTeams.map((t) => ({
+		name: t.name,
+		description: t.description || `Team (${t.agentCount} agents)`,
+		agentCount: t.agentCount,
+		source: t.source,
+	}));
 
-	// Load custom teams
+	// Also load legacy custom teams from teams.yaml for backward compatibility
 	const customResult = loadCustomTeams(cwd);
 	for (const custom of customResult.teams) {
-		// Check if custom team overrides a built-in (same name)
-		const existingIdx = teams.findIndex((t) => t.name === custom.name);
-		if (existingIdx >= 0) {
-			teams.splice(existingIdx, 1);
+		// Only add if not already in YAML config
+		if (!teams.some((t) => t.name === custom.name)) {
+			teams.push({
+				name: custom.name,
+				description: custom.description || `Custom team (${custom.agents.length} agents)`,
+				agentCount: custom.agents.length,
+				source: custom.source,
+				resolved: custom,
+			});
 		}
-
-		teams.push({
-			name: custom.name,
-			description: custom.description || `Custom team (${custom.agents.length} agents)`,
-			agentCount: custom.agents.length,
-			source: custom.source,
-			resolved: custom,
-		});
 	}
 
 	return { teams, errors: customResult.errors };
@@ -271,7 +348,8 @@ export function parseTeamSelectorOption(option: string): string {
 // ============================================================================
 
 export interface TeamCommandOptions {
-	model: Model<any>;
+	/** Model to use for agents (accepts any API type for multi-provider flexibility) */
+	model: Model<Api>;
 	modelRegistry: ModelRegistry;
 	tools?: AgentTool[];
 	task?: string;
@@ -357,11 +435,14 @@ export async function executeResolvedTeam(team: ResolvedTeam, options: TeamComma
 			}
 		}
 
+		// Inject epsilon task tracking instructions for UI progress display
+		const systemPrompt = `${agent.systemPrompt}\n${EPSILON_TASK_INSTRUCTIONS}`;
+
 		return {
 			name: agent.name,
 			description: `Custom agent: ${agent.name}`,
 			model: agentModel,
-			systemPrompt: agent.systemPrompt,
+			systemPrompt,
 			thinkingLevel: agent.thinkingLevel,
 			temperature: agent.temperature,
 		};
@@ -396,17 +477,19 @@ export async function executeCustomTeam(
 	agentNames: string[],
 	options: TeamCommandOptions,
 ): Promise<TeamResult | null> {
-	// Validate agent names
+	// Validate agent names and narrow to PresetName[]
+	const validatedNames: PresetName[] = [];
 	for (const name of agentNames) {
-		if (!PRESET_TEMPLATES[name as keyof typeof PRESET_TEMPLATES]) {
+		if (!isPresetName(name)) {
 			throw new Error(`Unknown agent: ${name}`);
 		}
+		validatedNames.push(name);
 	}
 
 	// Use verification strategy if multiple agents, union if single
-	const strategy: MergeStrategyType = agentNames.length > 1 ? "verification" : "union";
+	const strategy: MergeStrategyType = validatedNames.length > 1 ? "verification" : "union";
 
-	return executeTeamWithAgents(`custom: ${taskDescription.slice(0, 30)}...`, agentNames, strategy, options);
+	return executeTeamWithAgents(`custom: ${taskDescription.slice(0, 30)}...`, validatedNames, strategy, options);
 }
 
 // ============================================================================
@@ -414,7 +497,8 @@ export async function executeCustomTeam(
 // ============================================================================
 
 export interface TeamStreamOptions {
-	model: Model<any>;
+	/** Model to use for agents (accepts any API type for multi-provider flexibility) */
+	model: Model<Api>;
 	modelRegistry: ModelRegistry;
 	tools?: AgentTool[];
 	task: string;
@@ -463,11 +547,14 @@ export function createResolvedTeamStream(team: ResolvedTeam, options: TeamStream
 			}
 		}
 
+		// Inject epsilon task tracking instructions for UI progress display
+		const systemPrompt = `${agent.systemPrompt}\n${EPSILON_TASK_INSTRUCTIONS}`;
+
 		return {
 			name: agent.name,
 			description: `Custom agent: ${agent.name}`,
 			model: agentModel,
-			systemPrompt: agent.systemPrompt,
+			systemPrompt,
 			thinkingLevel: agent.thinkingLevel,
 			temperature: agent.temperature,
 		};
@@ -507,13 +594,14 @@ export function createResolvedTeamStream(team: ResolvedTeam, options: TeamStream
 
 function createTeamStreamInternal(
 	teamName: string,
-	agentNames: string[],
+	agentNames: PresetName[],
 	strategy: MergeStrategyType,
 	options: TeamStreamOptions,
 ): TeamStreamResult {
 	const { model, modelRegistry, tools = [], task, signal } = options;
 
-	const agentPresets = createAgentPresets(agentNames, model);
+	// model cast is safe - we only care about provider for API key lookup
+	const agentPresets = createAgentPresets(agentNames, model as Model<Api>);
 	const mergeAgent = strategy === "verification" ? createPreset(mergeSynthesizerTemplate, model) : undefined;
 
 	const teamConfig: TeamConfig = {
@@ -534,7 +622,7 @@ function createTeamStreamInternal(
 		task,
 		signal,
 		getApiKey: async (provider: string) => {
-			return modelRegistry.getApiKey({ provider } as Model<any>);
+			return modelRegistry.getApiKey({ provider } as Model<Api>);
 		},
 	});
 
@@ -546,14 +634,14 @@ function createTeamStreamInternal(
  */
 async function executeTeamWithAgents(
 	teamName: string,
-	agentNames: string[],
+	agentNames: PresetName[],
 	strategy: MergeStrategyType,
 	options: TeamCommandOptions,
 ): Promise<TeamResult | null> {
 	const { model, tools = [] } = options;
 
-	// Create agent presets
-	const agentPresets = createAgentPresets(agentNames, model);
+	// Create agent presets (model cast is safe - we only care about provider for API key lookup)
+	const agentPresets = createAgentPresets(agentNames, model as Model<Api>);
 
 	// Create merge agent if using verification strategy
 	const mergeAgent = strategy === "verification" ? createPreset(mergeSynthesizerTemplate, model) : undefined;

@@ -1,7 +1,121 @@
 import { type AgentContext, type AgentEvent, type AgentMessage, type AgentTool, agentLoop } from "agent";
 import { type AssistantMessage, EventStream, type Message, streamSimple } from "ai";
 import { debugLog } from "../debug.js";
-import type { AgentPreset, AgentResult, Finding, TeamConfig, TeamEvent, TeamResult, TeamRunOptions } from "../types.js";
+import type {
+	AgentPreset,
+	AgentResult,
+	AgentTaskInfo,
+	Finding,
+	TaskStatus,
+	TeamConfig,
+	TeamEvent,
+	TeamResult,
+	TeamRunOptions,
+} from "../types.js";
+
+/**
+ * Tracks epsilon tasks per agent during team execution.
+ * Parses tool execution events to extract task creation/update info.
+ */
+class AgentTaskTracker {
+	private tasks: Map<string, Map<number, { title: string; status: TaskStatus }>> = new Map();
+
+	/**
+	 * Process a tool execution event and update task tracking.
+	 * Returns updated AgentTaskInfo if task state changed, undefined otherwise.
+	 */
+	processToolEvent(agentName: string, event: AgentEvent): AgentTaskInfo | undefined {
+		if (event.type !== "tool_execution_end") return undefined;
+
+		const toolName = event.toolName;
+		if (!toolName.startsWith("epsilon_task_")) return undefined;
+
+		// Initialize agent task map if needed
+		if (!this.tasks.has(agentName)) {
+			this.tasks.set(agentName, new Map());
+		}
+		const agentTasks = this.tasks.get(agentName)!;
+
+		// Parse tool result to extract task info
+		const result = event.result;
+		if (!result || typeof result !== "object") return undefined;
+
+		// Extract text content from result
+		let text = "";
+		if ("content" in result && Array.isArray(result.content)) {
+			for (const item of result.content) {
+				if (item && typeof item === "object" && "type" in item && item.type === "text" && "text" in item) {
+					text += item.text;
+				}
+			}
+		}
+
+		// Parse task info from result text
+		if (toolName === "epsilon_task_create" || toolName === "epsilon_task_create_bulk") {
+			// Extract created task IDs and titles
+			// Format: "Created task #123:" or "Created #123: Title"
+			const matches = text.matchAll(/Created(?:\s+task)?\s+#(\d+)[:\s]+([^\n]+)?/gi);
+			for (const match of matches) {
+				const id = Number.parseInt(match[1], 10);
+				const title = match[2]?.trim() || `Task #${id}`;
+				agentTasks.set(id, { title, status: "todo" });
+			}
+		} else if (toolName === "epsilon_task_update" || toolName === "epsilon_task_update_bulk") {
+			// Extract updated task status
+			// Format: "Updated task #123:" or "Updated #123: Title"
+			const matches = text.matchAll(/Updated(?:\s+task)?\s+#(\d+)[:\s]+([^\n]+)?/gi);
+			for (const match of matches) {
+				const id = Number.parseInt(match[1], 10);
+				const existing = agentTasks.get(id);
+				if (existing) {
+					// Check if status changed in the update
+					const statusMatch = text.match(/\b(todo|in_progress|blocked|done|cancelled)\b/i);
+					if (statusMatch) {
+						existing.status = statusMatch[1].toLowerCase() as TaskStatus;
+					}
+					// Update title if present
+					if (match[2]) {
+						existing.title = match[2].trim();
+					}
+				}
+			}
+		} else if (toolName === "epsilon_task_delete" || toolName === "epsilon_task_delete_bulk") {
+			// Remove deleted tasks
+			const matches = text.matchAll(/Deleted(?:\s+task)?\s+#(\d+)/gi);
+			for (const match of matches) {
+				const id = Number.parseInt(match[1], 10);
+				agentTasks.delete(id);
+			}
+		}
+
+		return this.getTaskInfo(agentName);
+	}
+
+	/**
+	 * Get current task info for an agent.
+	 */
+	getTaskInfo(agentName: string): AgentTaskInfo {
+		const agentTasks = this.tasks.get(agentName);
+		if (!agentTasks || agentTasks.size === 0) {
+			return { total: 0, completed: 0 };
+		}
+
+		let total = 0;
+		let completed = 0;
+		let activeTaskTitle: string | undefined;
+
+		for (const task of agentTasks.values()) {
+			total++;
+			if (task.status === "done" || task.status === "cancelled") {
+				completed++;
+			} else if (task.status === "in_progress" && !activeTaskTitle) {
+				activeTaskTitle = task.title;
+			}
+		}
+
+		return { total, completed, activeTaskTitle };
+	}
+}
 
 /**
  * Team orchestrates multiple specialized agents for parallel/sequential execution.
@@ -9,6 +123,7 @@ import type { AgentPreset, AgentResult, Finding, TeamConfig, TeamEvent, TeamResu
 export class Team {
 	private config: TeamConfig;
 	private abortController: AbortController | null = null;
+	private taskTracker: AgentTaskTracker = new AgentTaskTracker();
 
 	constructor(config: TeamConfig) {
 		this.config = config;
@@ -401,6 +516,16 @@ export class Team {
 				agentName: preset.name,
 				event,
 			});
+
+			// Track epsilon task updates
+			const taskInfo = this.taskTracker.processToolEvent(preset.name, event);
+			if (taskInfo) {
+				stream.push({
+					type: "agent_task_update",
+					agentName: preset.name,
+					taskInfo,
+				});
+			}
 
 			// Collect messages
 			if (event.type === "message_end") {
