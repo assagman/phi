@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "agent";
+import type { TeamResult } from "agents";
 import {
 	type AssistantMessage,
 	getOAuthProviders,
@@ -49,6 +50,20 @@ import {
 } from "tui";
 import { APP_NAME, getAuthPath, getDebugLogPath } from "../../config.js";
 import type { AgentSession, AgentSessionEvent } from "../../core/agent-session.js";
+import {
+	executeResolvedTeam,
+	executeTeam,
+	formatTeamDetailHelp,
+	formatTeamHelp,
+	formatTeamPresets,
+	formatTeamProgress,
+	formatTeamResults,
+	formatTeamSelectorOption,
+	loadAllTeams,
+	parseTeamSelectorOption,
+	type TeamExecutionState,
+	type TeamInfo,
+} from "../../core/commands/team.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
 	ExtensionContext,
@@ -64,7 +79,6 @@ import { resolveModelScope } from "../../core/model-resolver.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { loadProjectContextFiles } from "../../core/system-prompt.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
-
 import { copyToClipboard } from "../../utils/clipboard.js";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.js";
 import { ensureTool } from "../../utils/tools-manager.js";
@@ -331,6 +345,7 @@ export class InteractiveMode {
 			{ name: "new", description: "Start a new session" },
 			{ name: "compact", description: "Manually compact the session context" },
 			{ name: "resume", description: "Resume a different session" },
+			{ name: "team", description: "Run multi-agent team (help, presets, <name>)" },
 		];
 
 		// Convert prompt templates to SlashCommand format for autocomplete
@@ -1537,6 +1552,12 @@ export class InteractiveMode {
 			if (text === "/resume") {
 				this.showSessionSelector();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/team" || text.startsWith("/team ")) {
+				const arg = text.startsWith("/team ") ? text.slice(6).trim() : undefined;
+				this.editor.setText("");
+				await this.handleTeamCommand(arg);
 				return;
 			}
 			if (text === "/quit" || text === "/exit") {
@@ -3812,6 +3833,168 @@ export class InteractiveMode {
 		}
 		void this.flushCompactionQueue({ willRetry: false });
 		return result;
+	}
+
+	/**
+	 * Handle /team command - multi-agent team orchestration
+	 */
+	private async handleTeamCommand(arg?: string): Promise<void> {
+		// Handle help subcommands
+		if (arg === "help") {
+			const help = formatTeamHelp(process.cwd());
+			this.addToChat(new Spacer(1));
+			this.addToChat(new Markdown(help, 1, 1, this.getMarkdownThemeWithSettings()));
+			this.ui.requestRender();
+			return;
+		}
+
+		if (arg?.startsWith("help ")) {
+			const teamName = arg.slice(5).trim();
+			const help = formatTeamDetailHelp(teamName, process.cwd());
+			this.addToChat(new Spacer(1));
+			this.addToChat(new Markdown(help, 1, 1, this.getMarkdownThemeWithSettings()));
+			this.ui.requestRender();
+			return;
+		}
+
+		if (arg === "presets") {
+			const presets = formatTeamPresets();
+			this.addToChat(new Spacer(1));
+			this.addToChat(new Markdown(presets, 1, 1, this.getMarkdownThemeWithSettings()));
+			this.ui.requestRender();
+			return;
+		}
+
+		// Load all available teams
+		const { teams, errors } = loadAllTeams(process.cwd());
+
+		// Show any config errors as warnings
+		for (const err of errors) {
+			this.showWarning(err);
+		}
+
+		if (teams.length === 0) {
+			this.showError("No teams available");
+			return;
+		}
+
+		// If team name provided directly, execute it
+		let selectedTeam: TeamInfo | undefined;
+		if (arg) {
+			selectedTeam = teams.find((t) => t.name === arg);
+			if (!selectedTeam) {
+				this.showError(`Unknown team: ${arg}. Run /team help to see available teams.`);
+				return;
+			}
+		} else {
+			// Show team selector
+			const options = teams.map(formatTeamSelectorOption);
+			const selected = await this.showExtensionSelector("Select a team", options);
+			if (!selected) return;
+
+			const teamName = parseTeamSelectorOption(selected);
+			selectedTeam = teams.find((t) => t.name === teamName);
+			if (!selectedTeam) return;
+		}
+
+		// Execute the team
+		await this.executeTeamWithProgress(selectedTeam);
+	}
+
+	/**
+	 * Execute a team with progress UI
+	 */
+	private async executeTeamWithProgress(team: TeamInfo): Promise<void> {
+		// Create abort controller
+		const abortController = new AbortController();
+
+		// Initialize execution state
+		const state: TeamExecutionState = {
+			phase: "starting",
+			teamName: team.name,
+			agentCount: team.agentCount,
+			agentResults: new Map(),
+		};
+
+		// Create progress loader
+		const loader = new BorderedLoader(this.ui, theme, `Starting team: ${team.name}...`);
+		const loaderOverlay = this.ui.showOverlay(loader, {
+			anchor: "center",
+			width: "60%",
+			maxHeight: "50%",
+			dimBackground: true,
+			border: true,
+		});
+		this.ui.setFocus(loader);
+		this.ui.requestRender();
+
+		loader.onAbort = () => {
+			abortController.abort();
+		};
+
+		const cleanup = () => {
+			loader.dispose();
+			loaderOverlay.hide();
+			this.ui.setFocus(this.editor);
+		};
+
+		try {
+			// Get current model and registry
+			const model = this.session.model;
+			if (!model) {
+				cleanup();
+				this.showError("No model configured. Use /model to select a model first.");
+				return;
+			}
+			const modelRegistry = this.session.modelRegistry;
+			const tools = this.session.getRegisteredTools();
+
+			// Progress callback
+			const onProgress = (updatedState: TeamExecutionState) => {
+				Object.assign(state, updatedState);
+				loader.setText(formatTeamProgress(state, theme));
+				this.ui.requestRender();
+			};
+
+			// Execute team based on type
+			let result: TeamResult | null;
+			if (team.resolved) {
+				// Custom team from config
+				result = await executeResolvedTeam(team.resolved, {
+					model,
+					modelRegistry,
+					tools,
+					signal: abortController.signal,
+					onProgress,
+				});
+			} else {
+				// Built-in team
+				result = await executeTeam(team.name, {
+					model,
+					modelRegistry,
+					tools,
+					signal: abortController.signal,
+					onProgress,
+				});
+			}
+
+			cleanup();
+
+			if (result) {
+				// Show results in chat
+				const formatted = formatTeamResults(result);
+				this.addToChat(new Spacer(1));
+				this.addToChat(new Markdown(formatted, 1, 1, this.getMarkdownThemeWithSettings()));
+				this.ui.requestRender();
+			} else if (!abortController.signal.aborted) {
+				this.showError("Team execution failed");
+			}
+		} catch (error) {
+			cleanup();
+			if (!abortController.signal.aborted) {
+				this.showError(`Team execution failed: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
 	}
 
 	stop(): void {

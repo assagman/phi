@@ -575,6 +575,13 @@ export class AgentSession {
 	}
 
 	/**
+	 * Get all registered tools (full AgentTool objects).
+	 */
+	getRegisteredTools(): AgentTool[] {
+		return Array.from(this._toolRegistry.values());
+	}
+
+	/**
 	 * Set active tools by name.
 	 * Only tools in the registry can be enabled. Unknown tool names are ignored.
 	 * Also rebuilds the system prompt to reflect the new tool set.
