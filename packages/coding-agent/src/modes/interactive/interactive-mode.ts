@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "agent";
-import type { TeamResult } from "agents";
+import { debugLog, type TeamResult } from "agents";
 import {
 	type AssistantMessage,
 	getOAuthProviders,
@@ -1074,6 +1074,8 @@ export class InteractiveMode {
 				anchor: "center",
 				width: "80%",
 				maxHeight: "70%",
+				dimBackground: true,
+				border: true,
 			});
 			this.ui.setFocus(this.extensionSelector);
 			this.ui.requestRender();
@@ -1145,6 +1147,8 @@ export class InteractiveMode {
 				anchor: "center",
 				width: "80%",
 				maxHeight: "70%",
+				dimBackground: true,
+				border: true,
 			});
 			this.ui.setFocus(this.extensionInput);
 			this.ui.requestRender();
@@ -1188,6 +1192,8 @@ export class InteractiveMode {
 				anchor: "center",
 				width: "80%",
 				maxHeight: "70%",
+				dimBackground: true,
+				border: true,
 			});
 			this.ui.setFocus(this.extensionEditor);
 			this.ui.requestRender();
@@ -1320,7 +1326,8 @@ export class InteractiveMode {
 								typeof options.overlayOptions === "function"
 									? options.overlayOptions()
 									: options.overlayOptions;
-							return opts;
+							// Allow extension to control dimming, default to true
+							return { dimBackground: true, border: true, ...opts };
 						}
 						// Default: centered overlay with sensible defaults
 						const w = (component as { width?: number }).width;
@@ -1328,6 +1335,8 @@ export class InteractiveMode {
 							anchor: "center",
 							width: w ?? "80%",
 							maxHeight: "70%",
+							dimBackground: true,
+							border: true,
 						};
 					};
 					overlayHandle = this.ui.showOverlay(component, resolveOptions());
@@ -1690,7 +1699,9 @@ export class InteractiveMode {
 						if (content.type === "toolCall") {
 							if (!this.pendingTools.has(content.id)) {
 								this.addToChat(new Text("", 0, 0));
-								const component = new ToolExecutionComponent(content.name, content.arguments, this.ui);
+								const component = new ToolExecutionComponent(content.name, content.arguments, this.ui, () =>
+									this.scrollableViewport.invalidateItemCache(component),
+								);
 								component.setExpanded(this.toolOutputExpanded);
 								this.addToChat(component);
 								this.pendingTools.set(content.id, component);
@@ -2030,7 +2041,9 @@ export class InteractiveMode {
 				// Render tool call components
 				for (const content of message.content) {
 					if (content.type === "toolCall") {
-						const component = new ToolExecutionComponent(content.name, content.arguments, this.ui);
+						const component = new ToolExecutionComponent(content.name, content.arguments, this.ui, () =>
+							this.scrollableViewport.invalidateItemCache(component),
+						);
 						component.setExpanded(this.toolOutputExpanded);
 						this.addToChat(component);
 
@@ -2400,7 +2413,7 @@ export class InteractiveMode {
 		}
 
 		const currentText = this.editor.getExpandedText?.() ?? this.editor.getText();
-		const tmpFile = path.join(os.tmpdir(), `pi-editor-${Date.now()}.pi.md`);
+		const tmpFile = path.join(os.tmpdir(), `phi-editor-${Date.now()}.md`);
 
 		try {
 			// Write current content to temp file
@@ -2638,6 +2651,8 @@ export class InteractiveMode {
 			anchor: "center",
 			width: "80%",
 			maxHeight: "70%",
+			dimBackground: true,
+			border: true,
 		});
 
 		this.ui.setFocus(focus);
@@ -3232,6 +3247,8 @@ export class InteractiveMode {
 			anchor: "center",
 			width: "80%",
 			maxHeight: "70%",
+			dimBackground: true,
+			border: true,
 		});
 		this.ui.setFocus(dialog);
 		this.ui.requestRender();
@@ -4056,6 +4073,16 @@ Which team is best suited for this task? Reply with ONLY the team name, nothing 
 			};
 
 			// Execute team based on type
+			debugLog("interactive", "executeTeamWithProgress calling team", {
+				teamName: team.name,
+				isResolved: !!team.resolved,
+				modelId: model.id,
+				modelProvider: model.provider,
+				toolCount: tools.length,
+				toolNames: tools.map((t) => t.name),
+				taskLength: task.length,
+			});
+
 			let result: TeamResult | null;
 			if (team.resolved) {
 				// Custom team from config
