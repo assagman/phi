@@ -16,6 +16,7 @@ import {
 	type Message,
 	type Model,
 	type OAuthProvider,
+	streamSimple,
 } from "ai";
 import { spawn, spawnSync } from "child_process";
 import type {
@@ -3878,16 +3879,24 @@ export class InteractiveMode {
 			return;
 		}
 
-		// If team name provided directly, execute it
+		// Determine team and task
 		let selectedTeam: TeamInfo | undefined;
+		let task: string | undefined;
+
 		if (arg) {
+			// Check if arg matches a known team name
 			selectedTeam = teams.find((t) => t.name === arg);
+
 			if (!selectedTeam) {
-				this.showError(`Unknown team: ${arg}. Run /team help to see available teams.`);
-				return;
+				// Not a team name - treat as free-text task, auto-select best team
+				task = arg;
+				selectedTeam = await this.autoSelectTeam(task, teams);
+				if (!selectedTeam) return;
 			}
-		} else {
-			// Show team selector
+		}
+
+		if (!selectedTeam) {
+			// No arg provided - show team selector
 			const options = teams.map(formatTeamSelectorOption);
 			const selected = await this.showExtensionSelector("Select a team", options);
 			if (!selected) return;
@@ -3897,15 +3906,96 @@ export class InteractiveMode {
 			if (!selectedTeam) return;
 		}
 
-		// Prompt for task description
-		const task = await this.showExtensionInput(
-			"Describe what you want the team to analyze",
-			"e.g., Check auth code for vulnerabilities, Review error handling...",
-		);
-		if (!task) return;
+		// If no task yet (explicit team selection), prompt for it
+		if (!task) {
+			task = await this.showExtensionInput(
+				"Describe what you want the team to analyze",
+				"e.g., Check auth code for vulnerabilities, Review error handling...",
+			);
+			if (!task) return;
+		}
 
 		// Execute the team
 		await this.executeTeamWithProgress(selectedTeam, task);
+	}
+
+	/**
+	 * Auto-select the best team based on task description using LLM
+	 */
+	private async autoSelectTeam(task: string, teams: TeamInfo[]): Promise<TeamInfo | undefined> {
+		if (!this.session.model) {
+			this.showError("No model selected");
+			return undefined;
+		}
+
+		// Build team descriptions for the prompt
+		const teamDescriptions = teams.map((t) => `- ${t.name}: ${t.description} (${t.agentCount} agents)`).join("\n");
+
+		const prompt = `Given this task: "${task}"
+
+Available teams:
+${teamDescriptions}
+
+Which team is best suited for this task? Reply with ONLY the team name, nothing else.`;
+
+		// Show loader
+		const loader = new BorderedLoader(this.ui, theme, "Selecting best team...");
+		const loaderOverlay = this.ui.showOverlay(loader, {
+			anchor: "center",
+			width: "40%",
+			maxHeight: "30%",
+			dimBackground: true,
+			border: true,
+		});
+		this.ui.requestRender();
+
+		try {
+			const context = {
+				messages: [{ role: "user" as const, content: prompt, timestamp: Date.now() }],
+			};
+			const apiKey = await this.session.modelRegistry.getApiKey(this.session.model);
+			const stream = streamSimple(this.session.model, context, {
+				maxTokens: 50,
+				temperature: 0,
+				apiKey,
+			});
+
+			let response = "";
+			for await (const event of stream) {
+				if (event.type === "text_delta") {
+					response += event.delta;
+				}
+			}
+
+			loaderOverlay.hide();
+
+			// Parse response - find matching team
+			const teamName = response.trim().toLowerCase();
+			const selected = teams.find((t) => t.name.toLowerCase() === teamName);
+
+			if (!selected) {
+				// Fuzzy match - check if response contains a team name
+				const fuzzyMatch = teams.find((t) => response.toLowerCase().includes(t.name.toLowerCase()));
+				if (fuzzyMatch) {
+					this.showStatus(`Auto-selected team: ${fuzzyMatch.name}`);
+					return fuzzyMatch;
+				}
+				this.showWarning(`Could not determine best team. Please select manually.`);
+				// Fall back to selector
+				const options = teams.map(formatTeamSelectorOption);
+				const manualSelection = await this.showExtensionSelector("Select a team", options);
+				if (!manualSelection) return undefined;
+				const manualTeamName = parseTeamSelectorOption(manualSelection);
+				return teams.find((t) => t.name === manualTeamName);
+			}
+
+			this.showStatus(`Auto-selected team: ${selected.name}`);
+			return selected;
+		} catch (error) {
+			loaderOverlay.hide();
+			this.showError(`Team selection failed: ${error instanceof Error ? error.message : String(error)}`);
+			return undefined;
+		}
 	}
 
 	/**
