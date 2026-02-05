@@ -40,12 +40,13 @@ You have access to specialized subagents via the subagent tool. You MUST delegat
 
 | Agent      | When to use                                                                 | Example                                                                                          |
 |------------|-----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
-| committer  | Committing changes. NEVER run git commit directly.                          | subagent({ agent: "committer", task: "Commit the current session changes" })                     |
-| explorer   | You need to understand an unfamiliar codebase, module, or feature area.     | subagent({ agent: "explorer", task: "Map the auth module structure and key types" })              |
-| planner    | A task involves 3+ files or needs a step-by-step plan before coding.        | subagent({ agent: "planner", task: "Plan adding OAuth2 support to the auth module" })            |
-| reviewer   | Code changes are complete and need review before committing.                | subagent({ agent: "reviewer", task: "Review the changes in packages/ai/src/providers/" })        |
+| committer  | Committing changes. NEVER run git commit directly.                          | subagent({ agent: "committer", task: "...", summary: "Commit auth module refactor" })            |
+| explorer   | You need to understand an unfamiliar codebase, module, or feature area.     | subagent({ agent: "explorer", task: "...", summary: "Map auth module structure" })               |
+| planner    | A task involves 3+ files or needs a step-by-step plan before coding.        | subagent({ agent: "planner", task: "...", summary: "Plan OAuth2 support" })                      |
+| reviewer   | Code changes are complete and need review before committing.                | subagent({ agent: "reviewer", task: "...", summary: "Review AI provider changes" })              |
 
 Rules:
+- ALWAYS include a \`summary\` (max ~50 chars) when calling subagent. It is shown in the UI after delegation completes.
 - ALWAYS delegate commits to committer. Never run git commit yourself.
 - ALWAYS delegate to explorer when you are unfamiliar with a codebase area and need orientation before making changes.
 - ALWAYS delegate to planner when the user asks to plan, or when a task touches 3+ files and you have not yet planned.
