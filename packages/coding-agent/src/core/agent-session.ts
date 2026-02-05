@@ -13,7 +13,8 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "agent";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "ai";
 import { isContextOverflow, modelsAreEqual, supportsXhigh } from "ai";
@@ -74,7 +75,8 @@ export type AgentSessionEvent =
 			delayMs: number;
 			errorMessage: string;
 	  }
-	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
+	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
+	| { type: "cwd_change"; previousCwd: string; newCwd: string };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void | Promise<void>;
@@ -125,6 +127,10 @@ export interface AgentSessionConfig {
 	rebuildSystemPrompt?: (toolNames: string[]) => string;
 	/** Builtin tools lifecycle (delta, epsilon, sigma, handoff) */
 	builtinToolsLifecycle?: import("./builtin-tools/index.js").BuiltinToolsLifecycle;
+	/** Initial working directory */
+	cwd?: string;
+	/** Factory to rebuild built-in tools for a new cwd */
+	createBuiltInTools?: (cwd: string) => Record<string, AgentTool>;
 }
 
 /** Options for AgentSession.prompt() */
@@ -241,6 +247,11 @@ export class AgentSession {
 	// Cache tool args by toolCallId for use in tool_execution_end (which doesn't have args)
 	private _toolArgsCache = new Map<string, unknown>();
 
+	// CWD management
+	private _cwd: string;
+	private _createBuiltInTools?: (cwd: string) => Record<string, AgentTool>;
+	private _pendingCwdChange: string | undefined = undefined;
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -256,6 +267,8 @@ export class AgentSession {
 		this._rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this._baseSystemPrompt = config.agent.state.systemPrompt;
 		this._builtinToolsLifecycle = config.builtinToolsLifecycle;
+		this._cwd = config.cwd ?? process.cwd();
+		this._createBuiltInTools = config.createBuiltInTools;
 
 		sessionLog.info("AgentSession created", {
 			sessionId: this.sessionId,
@@ -368,6 +381,20 @@ export class AgentSession {
 
 			await this._checkCompaction(msg);
 		}
+
+		// Apply deferred CWD change after agent finishes (not while streaming)
+		if (event.type === "agent_end" && this._pendingCwdChange) {
+			const newPath = this._pendingCwdChange;
+			this._pendingCwdChange = undefined;
+			try {
+				this.changeCwd(newPath);
+			} catch (error) {
+				sessionLog.warn("Deferred CWD change failed", {
+					newPath,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
 	};
 
 	/** Resolve the pending retry promise */
@@ -404,19 +431,28 @@ export class AgentSession {
 	 * Emit extension events.
 	 */
 	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
-		// Handle builtin tools lifecycle events (delta, epsilon)
-		if (this._builtinToolsLifecycle) {
-			if (event.type === "tool_execution_start") {
-				this._toolArgsCache.set(event.toolCallId, event.args);
-				this._builtinToolsLifecycle.onToolCall({ toolName: event.toolName });
-			} else if (event.type === "tool_execution_end") {
-				const cachedArgs = this._toolArgsCache.get(event.toolCallId) ?? {};
-				this._toolArgsCache.delete(event.toolCallId);
-				this._builtinToolsLifecycle.onToolResult({
-					toolName: event.toolName,
-					input: cachedArgs,
-					content: event.result?.content ?? [],
-				});
+		// Handle builtin tools lifecycle events (delta, epsilon) and worktree detection
+		if (event.type === "tool_execution_start") {
+			this._toolArgsCache.set(event.toolCallId, event.args);
+			this._builtinToolsLifecycle?.onToolCall({ toolName: event.toolName });
+		} else if (event.type === "tool_execution_end") {
+			const cachedArgs = this._toolArgsCache.get(event.toolCallId) ?? {};
+			this._toolArgsCache.delete(event.toolCallId);
+			this._builtinToolsLifecycle?.onToolResult({
+				toolName: event.toolName,
+				input: cachedArgs,
+				content: event.result?.content ?? [],
+			});
+
+			// Detect git worktree add in bash tool results — defer CWD change to agent_end
+			if (event.toolName === "bash" && !event.result?.isError) {
+				const command = (cachedArgs as { command?: string }).command;
+				if (command) {
+					const worktreePath = this._detectWorktreeAdd(command);
+					if (worktreePath) {
+						this._pendingCwdChange = worktreePath;
+					}
+				}
 			}
 		}
 
@@ -596,6 +632,11 @@ export class AgentSession {
 	/** Whether agent is currently streaming a response */
 	get isStreaming(): boolean {
 		return this.agent.state.isStreaming;
+	}
+
+	/** Current working directory */
+	get cwd(): string {
+		return this._cwd;
 	}
 
 	/** Current retry attempt (0 if not retrying) */
@@ -2529,6 +2570,104 @@ export class AgentSession {
 		}
 
 		return text.trim() || undefined;
+	}
+
+	// =========================================================================
+	// CWD Management
+	// =========================================================================
+
+	/**
+	 * Detect `git worktree add <path>` in a bash command string.
+	 * Returns the resolved worktree path if found and it exists on disk, otherwise undefined.
+	 *
+	 * Handles compound commands like `cd /bare && git worktree add <relative-path>`.
+	 */
+	private _detectWorktreeAdd(command: string): string | undefined {
+		// Match: git worktree add with flags-with-args (-b/-B/--reason take arg), flags-without-args (-f/--force/etc), and -- separator
+		const match = command.match(
+			/git\s+worktree\s+add\s+(?:(?:-[bB]\s+\S+|--reason\s+\S+|-[f]|--(?:force|detach|checkout|no-checkout|lock)|--)\s+)*([^\s;|&"']+)/,
+		);
+		if (!match?.[1]) return undefined;
+
+		const rawPath = match[1];
+
+		// Determine the effective cwd by parsing any `cd <dir>` before the git command
+		let effectiveCwd = this._cwd;
+		const cdMatch = command.match(/cd\s+([^\s;|&]+)\s*(?:&&|;)/);
+		if (cdMatch?.[1]) {
+			effectiveCwd = resolvePath(this._cwd, cdMatch[1]);
+		}
+
+		const resolved = resolvePath(effectiveCwd, rawPath);
+
+		if (existsSync(resolved) && statSync(resolved).isDirectory()) {
+			return resolved;
+		}
+		return undefined;
+	}
+
+	/**
+	 * Change the working directory.
+	 * - Validates the path exists and is a directory
+	 * - Calls process.chdir()
+	 * - Rebuilds built-in tools with the new cwd
+	 * - Rebuilds system prompt
+	 * - Emits cwd_change event
+	 * @throws Error if streaming, path doesn't exist, or path is not a directory
+	 */
+	changeCwd(newPath: string): void {
+		if (this.isStreaming) {
+			throw new Error("Cannot change working directory while streaming");
+		}
+
+		if (!existsSync(newPath)) {
+			throw new Error(`Path does not exist: ${newPath}`);
+		}
+
+		if (!statSync(newPath).isDirectory()) {
+			throw new Error(`Path is not a directory: ${newPath}`);
+		}
+
+		const previousCwd = this._cwd;
+		if (previousCwd === newPath) return;
+
+		// Update process cwd (global, affects footer which reads process.cwd())
+		try {
+			process.chdir(newPath);
+		} catch (err) {
+			throw new Error(
+				`Failed to change directory to ${newPath}: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+		this._cwd = newPath;
+
+		// Rebuild built-in tools with new cwd
+		if (this._createBuiltInTools) {
+			const newTools = this._createBuiltInTools(newPath);
+			for (const [name, tool] of Object.entries(newTools)) {
+				this._toolRegistry.set(name, tool);
+			}
+
+			// Update active tools on the agent
+			const activeToolNames = this.getActiveToolNames();
+			const activeTools: AgentTool[] = [];
+			for (const name of activeToolNames) {
+				const tool = this._toolRegistry.get(name);
+				if (tool) activeTools.push(tool);
+			}
+			this.agent.setTools(activeTools);
+		}
+
+		// Rebuild system prompt (references cwd)
+		if (this._rebuildSystemPrompt) {
+			const toolNames = this.getActiveToolNames();
+			this._baseSystemPrompt = this._rebuildSystemPrompt(toolNames);
+			this.agent.setSystemPrompt(this._baseSystemPrompt);
+		}
+
+		sessionLog.info("CWD changed", { previousCwd, newCwd: newPath });
+
+		this._emit({ type: "cwd_change", previousCwd, newCwd: newPath });
 	}
 
 	// =========================================================================
