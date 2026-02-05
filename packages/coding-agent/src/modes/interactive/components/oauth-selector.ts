@@ -6,7 +6,7 @@ import { DynamicBorder } from "./dynamic-border.js";
 
 /**
  * Provider selector component for /login and /logout.
- * Shows OAuth providers (interactive login) and env-var providers (API key guidance).
+ * Shows OAuth providers (interactive login) and env-var providers (stored or environment variable).
  */
 export class OAuthSelectorComponent extends Container {
 	private listContainer: Container;
@@ -56,8 +56,13 @@ export class OAuthSelectorComponent extends Container {
 	private loadProviders(): void {
 		const all = getLoginProviders();
 		if (this.mode === "logout") {
-			// Logout only shows OAuth providers that are logged in
-			this.allProviders = all.filter((p) => p.kind === "oauth" && this.authStorage.get(p.id)?.type === "oauth");
+			// Logout shows OAuth providers that are logged in AND env providers with stored API keys
+			this.allProviders = all.filter((p) => {
+				if (p.kind === "oauth") {
+					return this.authStorage.get(p.id)?.type === "oauth";
+				}
+				return this.authStorage.get(p.id)?.type === "api_key";
+			});
 		} else {
 			this.allProviders = all;
 		}
@@ -81,7 +86,7 @@ export class OAuthSelectorComponent extends Container {
 				const header =
 					provider.kind === "oauth"
 						? theme.fg("dim", "  OAuth (interactive login)")
-						: theme.fg("dim", "  API Key (environment variable)");
+						: theme.fg("dim", "  API Key (stored or environment variable)");
 				this.listContainer.addChild(new TruncatedText(header, 0, 0));
 				lastKind = provider.kind;
 			}
@@ -97,7 +102,7 @@ export class OAuthSelectorComponent extends Container {
 
 		if (this.allProviders.length === 0) {
 			const message =
-				this.mode === "login" ? "No providers available" : "No OAuth providers logged in. Use /login first.";
+				this.mode === "login" ? "No providers available" : "No providers configured. Use /login first.";
 			this.listContainer.addChild(new TruncatedText(theme.fg("muted", `  ${message}`), 0, 0));
 		}
 	}
@@ -117,7 +122,12 @@ export class OAuthSelectorComponent extends Container {
 	}
 
 	private renderEnvRow(provider: LoginProviderInfo & { kind: "env" }, isSelected: boolean): string {
-		const status = provider.isSet ? theme.fg("success", " ✓ set") : theme.fg("dim", " ✗ not set");
+		const hasStoredKey = this.authStorage.get(provider.id)?.type === "api_key";
+		const status = hasStoredKey
+			? theme.fg("success", " ✓ stored")
+			: provider.isSet
+				? theme.fg("success", " ✓ env")
+				: theme.fg("dim", " ✗ not set");
 		const envHint = theme.fg("dim", ` (${provider.envVar})`);
 
 		if (isSelected) {

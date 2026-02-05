@@ -70,6 +70,7 @@ import type { TruncationResult } from "../../core/tools/truncate.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.js";
 import { ensureTool } from "../../utils/tools-manager.js";
+import { ApiKeyDialogComponent } from "./components/api-key-dialog.js";
 import { ArminComponent } from "./components/armin.js";
 import { AssistantMessageComponent } from "./components/assistant-message.js";
 import { BashExecutionComponent } from "./components/bash-execution.js";
@@ -3211,11 +3212,12 @@ export class InteractiveMode {
 	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
 		if (mode === "logout") {
 			const providers = this.session.modelRegistry.authStorage.list();
-			const loggedInProviders = providers.filter(
-				(p) => this.session.modelRegistry.authStorage.get(p)?.type === "oauth",
-			);
-			if (loggedInProviders.length === 0) {
-				this.showStatus("No OAuth providers logged in. Use /login first.");
+			const hasConfigured = providers.some((p) => {
+				const cred = this.session.modelRegistry.authStorage.get(p);
+				return cred?.type === "oauth" || cred?.type === "api_key";
+			});
+			if (!hasConfigured) {
+				this.showStatus("No providers configured. Use /login first.");
 				return;
 			}
 		}
@@ -3231,17 +3233,16 @@ export class InteractiveMode {
 						if (selected.kind === "oauth") {
 							await this.showLoginDialog(selected.id);
 						} else {
-							this.showEnvVarSetupHelp(selected);
+							this.showApiKeyDialog(selected);
 						}
 					} else {
-						// Logout flow — only OAuth providers
-						const providerInfo = getOAuthProviders().find((p) => p.id === selected.id);
-						const providerName = providerInfo?.name || selected.id;
+						// Logout flow — OAuth and stored API keys
+						const providerName = selected.name ?? selected.id;
 
 						try {
 							this.session.modelRegistry.authStorage.logout(selected.id);
 							this.session.modelRegistry.refresh();
-							this.showStatus(`Logged out of ${providerName}`);
+							this.showStatus(`Removed credentials for ${providerName}`);
 						} catch (error: unknown) {
 							this.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
 						}
@@ -3256,19 +3257,46 @@ export class InteractiveMode {
 		});
 	}
 
-	private showEnvVarSetupHelp(provider: EnvLoginProviderInfo): void {
-		const status = provider.isSet ? "currently set" : "not set";
-		const lines = [
-			`${provider.name} uses an API key via environment variable.`,
-			"",
-			`  Variable: ${provider.envVar} (${status})`,
-			"",
-			"  To configure, add to your shell profile:",
-			`    export ${provider.envVar}="your-api-key"`,
-			"",
-			"  Then restart phi for the change to take effect.",
-		];
-		this.showStatus(lines.join("\n"));
+	private showApiKeyDialog(provider: EnvLoginProviderInfo): void {
+		const authStorage = this.session.modelRegistry.authStorage;
+		const hasExistingKey = authStorage.get(provider.id)?.type === "api_key";
+
+		this.showSelector((done) => {
+			const dialog = new ApiKeyDialogComponent(
+				provider,
+				hasExistingKey,
+				(key: string) => {
+					// Save API key
+					try {
+						authStorage.set(provider.id, { type: "api_key", key });
+						this.session.modelRegistry.refresh();
+						done();
+						this.showStatus(`API key for ${provider.name} saved to ${getAuthPath()}`);
+					} catch (error: unknown) {
+						done();
+						this.showError(`Failed to save API key: ${error instanceof Error ? error.message : String(error)}`);
+					}
+				},
+				() => {
+					// Remove stored key
+					try {
+						authStorage.remove(provider.id);
+						this.session.modelRegistry.refresh();
+						done();
+						this.showStatus(`Removed stored API key for ${provider.name}`);
+					} catch (error: unknown) {
+						done();
+						this.showError(`Failed to remove API key: ${error instanceof Error ? error.message : String(error)}`);
+					}
+				},
+				() => {
+					// Cancel
+					done();
+					this.ui.requestRender();
+				},
+			);
+			return { component: dialog, focus: dialog };
+		});
 	}
 
 	private async showLoginDialog(providerId: string): Promise<void> {
