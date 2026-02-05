@@ -168,6 +168,11 @@ export class LiveFeed implements Component {
 		const rawOverflow = this.overflowText(hiddenCount).replace(/\n/g, " ");
 		const overflowLine = visibleWidth(rawOverflow) > w ? truncateToWidth(rawOverflow, w) : rawOverflow;
 
+		// When maxLines is 1, only the overflow indicator fits — no content lines
+		if (visibleCount <= 0) {
+			return [overflowLine];
+		}
+
 		return [overflowLine, ...allLines.slice(-visibleCount)];
 	}
 

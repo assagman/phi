@@ -566,13 +566,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	}
 
-	// Function to rebuild system prompt when tools change
-	// Captures static options (cwd, agentDir, skills, contextFiles, customPrompt)
-	const rebuildSystemPrompt = (toolNames: string[]): string => {
+	// Function to rebuild system prompt when tools change.
+	// Optional cwdOverride allows changeCwd() to pass the new directory.
+	// Falls back to the initial cwd from session creation (not process.cwd(),
+	// which could diverge if multiple sessions exist).
+	const rebuildSystemPrompt = (toolNames: string[], cwdOverride?: string): string => {
 		// Filter to valid tool names
 		const validToolNames = toolNames.filter((n): n is ToolName => n in allBuiltInToolsMap);
+		const effectiveCwd = cwdOverride ?? cwd;
 		const defaultPrompt = buildSystemPromptInternal({
-			cwd,
+			cwd: effectiveCwd,
 			agentDir,
 			skills,
 			contextFiles,
@@ -777,11 +780,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		rebuildSystemPrompt,
 		builtinToolsLifecycle,
 		cwd,
-		createBuiltInTools: (newCwd: string) =>
-			createAllTools(newCwd, {
+		createBuiltInTools: (newCwd: string) => {
+			const rawTools = createAllTools(newCwd, {
 				read: { autoResizeImages },
 				bash: { commandPrefix: shellCommandPrefix },
-			}) as Record<string, AgentTool>,
+			}) as Record<string, AgentTool>;
+			// Re-wrap rebuilt tools with extensions so wrappers survive cwd changes
+			if (extensionRunner) {
+				const wrapped = wrapToolsWithExtensions(Object.values(rawTools), extensionRunner);
+				const result: Record<string, AgentTool> = {};
+				for (const tool of wrapped) {
+					result[tool.name] = tool;
+				}
+				return result;
+			}
+			return rawTools;
+		},
 	});
 	time("createAgentSession");
 

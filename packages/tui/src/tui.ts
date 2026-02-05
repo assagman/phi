@@ -981,7 +981,7 @@ export class TUI extends Container {
 		const tc = opts.titleColor ?? ((s: string) => s);
 		const title = opts.title;
 
-		const innerWidth = totalWidth - 2; // Width between vertical borders
+		const innerWidth = Math.max(0, totalWidth - 2); // Width between vertical borders
 		const contentWidth = innerWidth; // Content fills inner width
 
 		// Build top border with optional title

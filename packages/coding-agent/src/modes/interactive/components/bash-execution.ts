@@ -27,12 +27,10 @@ export class BashExecutionComponent extends Container {
 	private fullOutputPath?: string;
 	private expanded = false;
 	private contentContainer: Container;
-	private ui: TUI;
 
 	constructor(command: string, ui: TUI, excludeFromContext = false) {
 		super();
 		this.command = command;
-		this.ui = ui;
 
 		// Use dim border for excluded-from-context commands (!! prefix)
 		const colorKey = excludeFromContext ? "dim" : "bashMode";
@@ -128,9 +126,8 @@ export class BashExecutionComponent extends Container {
 		// Get the lines to potentially display (after context truncation)
 		const availableLines = contextTruncation.content ? contextTruncation.content.split("\n") : [];
 
-		// Apply preview truncation based on expanded state
-		const previewLogicalLines = availableLines.slice(-PREVIEW_LINES);
-		const hiddenLineCount = availableLines.length - previewLogicalLines.length;
+		// Compute hidden line count for status display
+		const hiddenLineCount = Math.max(0, availableLines.length - PREVIEW_LINES);
 
 		// Rebuild content container
 		this.contentContainer.clear();
@@ -146,17 +143,22 @@ export class BashExecutionComponent extends Container {
 				const displayText = availableLines.map((line) => theme.fg("muted", line)).join("\n");
 				this.contentContainer.addChild(new Text(`\n${displayText}`, 1, 0));
 			} else {
-				// Use LiveFeed for tail-windowed preview of output
+				// Use LiveFeed for tail-windowed preview — feed all available lines
+				// and let LiveFeed handle the sliding window truncation
 				const feed = new LiveFeed({
 					maxLines: PREVIEW_LINES,
 					overflowText: (n) => theme.fg("muted", `… ${n} lines above`),
 				});
-				for (let idx = 0; idx < previewLogicalLines.length; idx++) {
-					feed.addItem({ id: `out:${idx}`, text: theme.fg("muted", previewLogicalLines[idx]) });
+				for (let idx = 0; idx < availableLines.length; idx++) {
+					feed.addItem({ id: `out:${idx}`, text: theme.fg("muted", availableLines[idx]) });
 				}
-				const feedLines = feed.render(Math.max(1, this.ui.terminal.columns - 4));
+				// Defer width computation to render time via component interface
+				const feedRef = feed;
 				this.contentContainer.addChild({
-					render: () => (feedLines.length > 0 ? ["", ...feedLines] : []),
+					render: (width: number) => {
+						const feedLines = feedRef.render(Math.max(1, width - 2));
+						return feedLines.length > 0 ? ["", ...feedLines] : [];
+					},
 					invalidate: () => {},
 				});
 			}
