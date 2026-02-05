@@ -30,7 +30,7 @@ describe("SettingsManager", () => {
 			writeFileSync(
 				settingsPath,
 				JSON.stringify({
-					theme: "dark",
+					theme: "orange",
 					defaultModel: "claude-sonnet",
 				}),
 			);
@@ -50,7 +50,7 @@ describe("SettingsManager", () => {
 			const savedSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
 			expect(savedSettings.enabledModels).toEqual(["claude-opus-4-5", "gpt-5.2-codex"]);
 			expect(savedSettings.defaultThinkingLevel).toBe("high");
-			expect(savedSettings.theme).toBe("dark");
+			expect(savedSettings.theme).toBe("orange");
 			expect(savedSettings.defaultModel).toBe("claude-sonnet");
 		});
 
@@ -72,13 +72,13 @@ describe("SettingsManager", () => {
 			writeFileSync(settingsPath, JSON.stringify(currentSettings, null, 2));
 
 			// User changes theme
-			manager.setTheme("light");
+			manager.setTheme("orange");
 
 			// Verify all settings preserved
 			const savedSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
 			expect(savedSettings.shellPath).toBe("/bin/zsh");
 			expect(savedSettings.extensions).toEqual(["/path/to/extension.ts"]);
-			expect(savedSettings.theme).toBe("light");
+			expect(savedSettings.theme).toBe("orange");
 		});
 
 		it("should let in-memory changes override file changes for same key", () => {
@@ -86,7 +86,7 @@ describe("SettingsManager", () => {
 			writeFileSync(
 				settingsPath,
 				JSON.stringify({
-					theme: "dark",
+					theme: "orange",
 				}),
 			);
 
@@ -118,7 +118,7 @@ describe("SettingsManager", () => {
 
 		it("should return undefined when shellCommandPrefix is not set", () => {
 			const settingsPath = join(agentDir, "settings.json");
-			writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
+			writeFileSync(settingsPath, JSON.stringify({ theme: "orange" }));
 
 			const manager = SettingsManager.create(projectDir, agentDir);
 
@@ -130,11 +130,11 @@ describe("SettingsManager", () => {
 			writeFileSync(settingsPath, JSON.stringify({ shellCommandPrefix: "shopt -s expand_aliases" }));
 
 			const manager = SettingsManager.create(projectDir, agentDir);
-			manager.setTheme("light");
+			manager.setTheme("orange");
 
 			const savedSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
 			expect(savedSettings.shellCommandPrefix).toBe("shopt -s expand_aliases");
-			expect(savedSettings.theme).toBe("light");
+			expect(savedSettings.theme).toBe("orange");
 		});
 	});
 });

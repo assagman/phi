@@ -168,6 +168,10 @@ export class SettingsManager {
 			settings.steeringMode = settings.queueMode;
 			delete settings.queueMode;
 		}
+		// Migrate removed dark/light themes -> orange
+		if (settings.theme === "dark" || settings.theme === "light") {
+			settings.theme = "orange";
+		}
 		return settings as Settings;
 	}
 
