@@ -19,7 +19,10 @@ const PULSE_INTERVAL_MS = 100; // Pulse animation tick (~10fps, sufficient for s
 
 /** Per-agent hex color overrides (agent name → hex) */
 const AGENT_COLORS: Record<string, string> = {
-	reviewer: "#5E27F5",
+	reviewer: "#F54927",
+	planner: "#57B5AD",
+	committer: "#F5EE7D",
+	explorer: "#6BEDE0",
 };
 
 /**
