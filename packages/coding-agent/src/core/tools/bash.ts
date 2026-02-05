@@ -7,6 +7,7 @@ import type { AgentTool } from "agent";
 import { spawn } from "child_process";
 import { toolsLog } from "../../utils/logger.js";
 import { getShellConfig, killProcessTree } from "../../utils/shell.js";
+import { type BashDisplayHints, buildDisplayHints, matchRule } from "./bash-rules.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
 /**
@@ -25,6 +26,7 @@ const bashSchema = Type.Object({
 export interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
+	displayHints?: BashDisplayHints;
 }
 
 /**
@@ -165,6 +167,10 @@ export function createBashTool(cwd: string, options?: BashToolOptions): AgentToo
 			// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 
+			// Match per-command rules for exit code handling and display hints
+			const rule = matchRule(command);
+			const displayHints = buildDisplayHints(rule);
+
 			return new Promise((resolve, reject) => {
 				// We'll stream to a temp file if output gets large
 				let tempFilePath: string | undefined;
@@ -259,7 +265,11 @@ export function createBashTool(cwd: string, options?: BashToolOptions): AgentToo
 							}
 						}
 
-						if (exitCode !== 0 && exitCode !== null) {
+						// Check per-command rules for exit code interpretation
+						const isSuccess =
+							exitCode === 0 || exitCode === null || (rule?.successExitCodes?.includes(exitCode) ?? false);
+
+						if (!isSuccess) {
 							outputText += `\n\nCommand exited with code ${exitCode}`;
 							toolsLog.debug("bash execute failed (non-zero exit)", {
 								command: command.slice(0, 100),
@@ -268,6 +278,10 @@ export function createBashTool(cwd: string, options?: BashToolOptions): AgentToo
 							});
 							reject(new Error(outputText));
 						} else {
+							// Attach display hints for the TUI layer
+							if (displayHints) {
+								details = details ? { ...details, displayHints } : { displayHints };
+							}
 							toolsLog.debug("bash execute completed", {
 								command: command.slice(0, 100),
 								exitCode,
