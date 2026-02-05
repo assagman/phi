@@ -339,21 +339,66 @@ export function clearRegistryCache(): void {
 
 // ─── Subagent Execution ─────────────────────────────────────────────────────
 
-function getApiKeyEnvVar(provider: string): string {
-	const envVars: Record<string, string> = {
-		anthropic: "ANTHROPIC_API_KEY",
-		openai: "OPENAI_API_KEY",
-		google: "GOOGLE_API_KEY",
-		"google-vertex": "GOOGLE_VERTEX_API_KEY",
-		"google-gemini-cli": "GOOGLE_API_KEY",
-		"amazon-bedrock": "AWS_ACCESS_KEY_ID",
-		xai: "XAI_API_KEY",
-		groq: "GROQ_API_KEY",
-		cerebras: "CEREBRAS_API_KEY",
-		mistral: "MISTRAL_API_KEY",
-		openrouter: "OPENROUTER_API_KEY",
-	};
-	return envVars[provider] || `${provider.toUpperCase().replace(/-/g, "_")}_API_KEY`;
+/**
+ * Get the canonical env var name(s) for a provider's API key.
+ * Must stay in sync with getEnvApiKey() in the AI package (source of truth).
+ *
+ * Returns an array because some providers check multiple env vars
+ * (e.g., anthropic checks ANTHROPIC_OAUTH_TOKEN and ANTHROPIC_API_KEY).
+ * The first entry is the primary var where we SET the key.
+ */
+function getProviderEnvVars(provider: string): string[] {
+	switch (provider) {
+		case "anthropic":
+			return ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"];
+		case "openai":
+			return ["OPENAI_API_KEY"];
+		case "google":
+			return ["GEMINI_API_KEY"];
+		case "google-gemini-cli":
+			return ["GEMINI_API_KEY"];
+		case "google-vertex":
+			return ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS"];
+		case "amazon-bedrock":
+			return [
+				"AWS_ACCESS_KEY_ID",
+				"AWS_SECRET_ACCESS_KEY",
+				"AWS_SESSION_TOKEN",
+				"AWS_REGION",
+				"AWS_DEFAULT_REGION",
+				"AWS_PROFILE",
+				"AWS_BEARER_TOKEN_BEDROCK",
+				"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+				"AWS_CONTAINER_CREDENTIALS_FULL_URI",
+				"AWS_WEB_IDENTITY_TOKEN_FILE",
+			];
+		case "github-copilot":
+			return ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
+		case "xai":
+			return ["XAI_API_KEY"];
+		case "groq":
+			return ["GROQ_API_KEY"];
+		case "cerebras":
+			return ["CEREBRAS_API_KEY"];
+		case "mistral":
+			return ["MISTRAL_API_KEY"];
+		case "openrouter":
+			return ["OPENROUTER_API_KEY"];
+		case "vercel-ai-gateway":
+			return ["AI_GATEWAY_API_KEY"];
+		case "zai":
+			return ["ZAI_API_KEY"];
+		case "minimax":
+			return ["MINIMAX_API_KEY"];
+		case "minimax-cn":
+			return ["MINIMAX_CN_API_KEY"];
+		case "opencode":
+			return ["OPENCODE_API_KEY"];
+		case "kimi-for-coding":
+			return ["KIMI_API_KEY"];
+		default:
+			return [`${provider.toUpperCase().replace(/-/g, "_")}_API_KEY`];
+	}
 }
 
 /**
@@ -372,24 +417,22 @@ function buildSubprocessEnv(provider: string, apiKey: string): Record<string, st
 		}
 	}
 
-	// AWS credentials for Bedrock (needs multiple vars)
-	if (provider === "amazon-bedrock") {
-		const awsVars = [
-			"AWS_ACCESS_KEY_ID",
-			"AWS_SECRET_ACCESS_KEY",
-			"AWS_SESSION_TOKEN",
-			"AWS_REGION",
-			"AWS_DEFAULT_REGION",
-		];
-		for (const key of awsVars) {
+	// For providers that use multiple env vars (bedrock, vertex, copilot),
+	// pass through whichever vars are set in the parent process.
+	// For simple API key providers, set the primary env var.
+	const providerVars = getProviderEnvVars(provider);
+	const needsPassthrough =
+		provider === "amazon-bedrock" || provider === "google-vertex" || provider === "github-copilot";
+
+	if (needsPassthrough) {
+		for (const key of providerVars) {
 			if (process.env[key]) {
 				env[key] = process.env[key]!;
 			}
 		}
 	} else {
-		// Set the specific API key for this provider
-		const keyEnvVar = getApiKeyEnvVar(provider);
-		env[keyEnvVar] = apiKey;
+		// Set the primary env var with the resolved API key
+		env[providerVars[0]] = apiKey;
 	}
 
 	return env;
@@ -440,10 +483,46 @@ interface SubagentProgress {
 	currentThinking: string;
 }
 
+/**
+ * Parse a "provider/modelId" string into its components.
+ * Returns undefined if the string doesn't contain a slash.
+ */
+function parseModelSpec(spec: string): { provider: string; modelId: string } | undefined {
+	const slashIdx = spec.indexOf("/");
+	if (slashIdx <= 0 || slashIdx === spec.length - 1) return undefined;
+	return { provider: spec.substring(0, slashIdx), modelId: spec.substring(slashIdx + 1) };
+}
+
+/**
+ * Resolve the provider and API key for a subagent subprocess.
+ * When the agent has its own model, resolves the key for THAT provider.
+ * Otherwise falls back to the parent model's provider.
+ */
+async function resolveSubprocessAuth(
+	agent: AgentDefinition,
+	parentModel: Model<any>,
+	context: SubagentToolContext,
+): Promise<{ provider: string; modelId: string; apiKey: string }> {
+	if (agent.model) {
+		const parsed = parseModelSpec(agent.model);
+		if (parsed) {
+			const apiKey = await context.getApiKeyForProvider(parsed.provider);
+			return { provider: parsed.provider, modelId: parsed.modelId, apiKey };
+		}
+		// No slash — treat entire string as model ID, use parent provider
+		const apiKey = await context.getApiKey(parentModel);
+		return { provider: parentModel.provider, modelId: agent.model, apiKey };
+	}
+	// No agent model — use parent model
+	const apiKey = await context.getApiKey(parentModel);
+	return { provider: parentModel.provider, modelId: parentModel.id, apiKey };
+}
+
 async function runSubagent(
 	agent: AgentDefinition,
 	task: string,
-	model: Model<any>,
+	provider: string,
+	modelId: string,
 	apiKey: string,
 	cwd: string,
 	signal: AbortSignal | undefined,
@@ -458,18 +537,14 @@ async function runSubagent(
 		messages: [],
 		stderr: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-		model: agent.model || model.id,
+		model: agent.model || modelId,
 		step,
 	};
 
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
 
-	// Use agent's preferred model if specified, otherwise use current model
-	if (agent.model) {
-		args.push("--model", agent.model);
-	} else {
-		args.push("--model", `${model.provider}/${model.id}`);
-	}
+	// Pass --provider and --model as separate flags so the subprocess resolves correctly
+	args.push("--provider", provider, "--model", modelId);
 
 	// Use agent's preferred tools if specified
 	if (agent.tools && agent.tools.length > 0) {
@@ -495,7 +570,7 @@ async function runSubagent(
 	args.push(`Task: ${task}`);
 
 	// [P1-SEC-001] Use minimal env vars instead of spreading process.env
-	const env = buildSubprocessEnv(model.provider, apiKey);
+	const env = buildSubprocessEnv(provider, apiKey);
 
 	return new Promise((resolve, reject) => {
 		const proc = spawn("phi", args, { cwd, env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
@@ -742,6 +817,7 @@ const SubagentParams = Type.Object({
 export interface SubagentToolContext {
 	getModel(): Model<any> | undefined;
 	getApiKey(model: Model<any>): Promise<string>;
+	getApiKeyForProvider(provider: string): Promise<string>;
 	getWorkingDir(): string;
 }
 
@@ -770,6 +846,46 @@ function getFinalOutput(messages: Message[]): string {
 		}
 	}
 	return "";
+}
+
+/**
+ * Check if an execution result represents a failure.
+ * Returns true for non-zero exit codes, error stop reasons, or aborted runs.
+ */
+function isFailedResult(result: ExecutionResult): boolean {
+	return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+}
+
+/**
+ * Build an error-aware tool result from a subprocess execution.
+ * Includes stderr and error details when the subprocess failed.
+ */
+function buildToolResult(
+	output: string,
+	result: ExecutionResult,
+	mode: SubagentDetails["mode"],
+	details: Partial<SubagentDetails>,
+): AgentToolResult<SubagentDetails> {
+	const failed = isFailedResult(result);
+	let text = output;
+
+	if (!text && failed) {
+		// Subprocess failed with no assistant output — surface the error
+		const parts: string[] = [`${LOG_PREFIX} Subprocess failed (exit code ${result.exitCode})`];
+		if (result.errorMessage) parts.push(`Error: ${result.errorMessage}`);
+		if (result.stderr.trim()) {
+			const stderrLines = result.stderr.trim().split("\n").slice(0, 10);
+			parts.push(`Stderr:\n${stderrLines.join("\n")}`);
+		}
+		text = parts.join("\n");
+	} else if (!text) {
+		text = "(no output)";
+	}
+
+	return {
+		content: [{ type: "text", text }],
+		details: { mode, results: [result], ...details } as SubagentDetails,
+	};
 }
 
 // ─── Tool Factory ───────────────────────────────────────────────────────────
@@ -888,12 +1004,13 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 						: undefined;
 
 					try {
-						const apiKey = await context.getApiKey(model);
+						const auth = await resolveSubprocessAuth(agent, model, context);
 						const result = await runSubagent(
 							agent,
 							taskWithContext,
-							model,
-							apiKey,
+							auth.provider,
+							auth.modelId,
+							auth.apiKey,
 							step.cwd || context.getWorkingDir(),
 							signal,
 							chainUpdate,
@@ -901,11 +1018,9 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 						);
 						results.push(result);
 
-						const isError =
-							result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-						if (isError) {
+						if (isFailedResult(result)) {
 							const errorMsg =
-								result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+								result.errorMessage || result.stderr.trim() || getFinalOutput(result.messages) || "(no output)";
 							return {
 								content: [
 									{
@@ -973,7 +1088,16 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 					}
 				};
 
-				const apiKey = await context.getApiKey(model);
+				// Pre-resolve auth for all agents before spawning subprocesses.
+				// This prevents leaking running subprocesses if one agent's key fails.
+				const parallelAuth = new Map<string, Awaited<ReturnType<typeof resolveSubprocessAuth>>>();
+				for (const t of params.parallel) {
+					if (!parallelAuth.has(t.agent)) {
+						const agent = registry.get(t.agent)!;
+						parallelAuth.set(t.agent, await resolveSubprocessAuth(agent, model, context));
+					}
+				}
+
 				// Use configurable concurrency limit
 				const concurrencyLimit = Math.min(
 					params.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY,
@@ -982,11 +1106,13 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 
 				const results = await mapWithConcurrencyLimit(params.parallel, concurrencyLimit, async (t, index) => {
 					const agent = registry.get(t.agent)!;
+					const auth = parallelAuth.get(t.agent)!;
 					const result = await runSubagent(
 						agent,
 						t.task,
-						model,
-						apiKey,
+						auth.provider,
+						auth.modelId,
+						auth.apiKey,
 						t.cwd || context.getWorkingDir(),
 						signal,
 						(progress) => {
@@ -1045,12 +1171,13 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 				// Direct execution without UI overlay
 				// Status updates are sent via onUpdate callback for inline display
 				try {
-					const apiKey = await context.getApiKey(model);
+					const auth = await resolveSubprocessAuth(agent, model, context);
 					const result = await runSubagent(
 						agent,
 						params.task,
-						model,
-						apiKey,
+						auth.provider,
+						auth.modelId,
+						auth.apiKey,
 						params.cwd || context.getWorkingDir(),
 						signal,
 						onUpdate
@@ -1082,15 +1209,7 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 							: undefined,
 					);
 
-					return {
-						content: [
-							{
-								type: "text",
-								text: getFinalOutput(result.messages) || "(no output)",
-							},
-						],
-						details: { mode: "single", results: [result] },
-					};
+					return buildToolResult(getFinalOutput(result.messages), result, "single", {});
 				} catch (err) {
 					extensionsLog.error(`${LOG_PREFIX} Single execution failed`, {
 						agent: params.agent,

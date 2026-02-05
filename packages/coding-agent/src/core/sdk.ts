@@ -726,6 +726,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				if (!key) throw new Error(`No API key for ${m.provider}`);
 				return key;
 			},
+			getApiKeyForProvider: async (provider) => {
+				const key = await modelRegistry.getApiKeyForProvider(provider);
+				if (!key) throw new Error(`No API key for provider: ${provider}`);
+				return key;
+			},
 			getWorkingDir: () => cwd,
 		},
 	});
