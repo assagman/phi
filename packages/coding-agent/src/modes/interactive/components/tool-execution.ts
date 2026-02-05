@@ -110,6 +110,8 @@ export class ToolExecutionComponent extends Container {
 	private onInvalidate?: () => void;
 	/** Last known content width from render(), used for split-pane column math. */
 	private lastContentWidth = 0;
+	/** Once split-pane layout is shown, preserve it even when right pane temporarily empties between turns. */
+	private hadSplitLayout = false;
 
 	constructor(toolName: string, args: Record<string, unknown> = {}, ui?: TUI, onInvalidate?: () => void) {
 		super();
@@ -450,8 +452,20 @@ export class ToolExecutionComponent extends Container {
 		// ── Fixed: task summary ─────────────────────────────────────────
 		const subprocessActive = details?.allTools && details.allTools.length > 0;
 		if (this.running && !subprocessActive && taskText.length > 0) {
-			for (const tl of taskText.split("\n").filter((l) => l.trim())) {
-				fixedTop.push(`${indent}${theme.fg("dim", tl)}`);
+			// Use LiveFeed to cap streaming task text to a sliding window
+			const taskLines = taskText.split("\n").filter((l) => l.trim());
+			const maxTaskLines = 6;
+			const taskFeed = new LiveFeed({
+				maxLines: maxTaskLines,
+				overflowText: (n) => theme.fg("muted", `… ${n} lines above`),
+			});
+			for (let idx = 0; idx < taskLines.length; idx++) {
+				taskFeed.addItem({ id: `task:${idx}`, text: theme.fg("dim", taskLines[idx]) });
+			}
+			const contentWidth = this.lastContentWidth || 74;
+			const taskWidth = Math.max(1, contentWidth - 3);
+			for (const line of taskFeed.render(taskWidth)) {
+				fixedTop.push(`${indent}${line}`);
 			}
 		} else {
 			const summaryText = details?.summary ?? taskText;
@@ -559,6 +573,13 @@ export class ToolExecutionComponent extends Container {
 		const hasLeft = leftItems.length > 0;
 		const hasRight = rightItems.length > 0;
 
+		// Once split-pane has been shown, keep using it even when right pane
+		// temporarily empties between turns (prevents layout flicker).
+		if (hasLeft && hasRight) {
+			this.hadSplitLayout = true;
+		}
+		const useSplit = (hasLeft && hasRight) || (this.hadSplitLayout && hasLeft && this.running);
+
 		if (!hasLeft && !hasRight) {
 			return [...fixedTop, ...fixedBottom].join("\n");
 		}
@@ -566,8 +587,8 @@ export class ToolExecutionComponent extends Container {
 		const paneBudget = Math.max(1, MAX_SUBAGENT_BOX_LINES - fixedTop.length - fixedBottom.length);
 		const overflowFn = (n: number) => theme.fg("muted", `\u2026 ${n} lines above`);
 
-		// If only one side has content, use full-width single column via LiveFeed
-		if (!hasRight || !hasLeft) {
+		// If only one side has content and split isn't locked, use full-width single column
+		if (!useSplit) {
 			const items = hasLeft ? leftItems : rightItems;
 			const feed = new LiveFeed({ maxLines: paneBudget, overflowText: overflowFn });
 			feed.setItems(items);
