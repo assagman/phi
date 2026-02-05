@@ -3,7 +3,7 @@
  */
 
 import stripAnsi from "strip-ansi";
-import { Container, Loader, Spacer, Text, type TUI } from "tui";
+import { Container, LiveFeed, Loader, Spacer, Text, type TUI } from "tui";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -13,7 +13,6 @@ import {
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { editorKey } from "./keybinding-hints.js";
-import { truncateToVisualLines } from "./visual-truncate.js";
 
 // Preview line limit when not expanded (matches tool execution behavior)
 const PREVIEW_LINES = 20;
@@ -147,15 +146,19 @@ export class BashExecutionComponent extends Container {
 				const displayText = availableLines.map((line) => theme.fg("muted", line)).join("\n");
 				this.contentContainer.addChild(new Text(`\n${displayText}`, 1, 0));
 			} else {
-				// Use shared visual truncation utility
-				const styledOutput = previewLogicalLines.map((line) => theme.fg("muted", line)).join("\n");
-				const { visualLines } = truncateToVisualLines(
-					`\n${styledOutput}`,
-					PREVIEW_LINES,
-					this.ui.terminal.columns,
-					1, // padding
-				);
-				this.contentContainer.addChild({ render: () => visualLines, invalidate: () => {} });
+				// Use LiveFeed for tail-windowed preview of output
+				const feed = new LiveFeed({
+					maxLines: PREVIEW_LINES,
+					overflowText: (n) => theme.fg("muted", `… ${n} lines above`),
+				});
+				for (let idx = 0; idx < previewLogicalLines.length; idx++) {
+					feed.addItem({ id: `out:${idx}`, text: theme.fg("muted", previewLogicalLines[idx]) });
+				}
+				const feedLines = feed.render(Math.max(1, this.ui.terminal.columns - 4));
+				this.contentContainer.addChild({
+					render: () => (feedLines.length > 0 ? ["", ...feedLines] : []),
+					invalidate: () => {},
+				});
 			}
 		}
 

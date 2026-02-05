@@ -450,8 +450,20 @@ export class ToolExecutionComponent extends Container {
 		// ── Fixed: task summary ─────────────────────────────────────────
 		const subprocessActive = details?.allTools && details.allTools.length > 0;
 		if (this.running && !subprocessActive && taskText.length > 0) {
-			for (const tl of taskText.split("\n").filter((l) => l.trim())) {
-				fixedTop.push(`${indent}${theme.fg("dim", tl)}`);
+			// Use LiveFeed to cap streaming task text to a sliding window
+			const taskLines = taskText.split("\n").filter((l) => l.trim());
+			const maxTaskLines = 6;
+			const taskFeed = new LiveFeed({
+				maxLines: maxTaskLines,
+				overflowText: (n) => theme.fg("muted", `… ${n} lines above`),
+			});
+			for (let idx = 0; idx < taskLines.length; idx++) {
+				taskFeed.addItem({ id: `task:${idx}`, text: theme.fg("dim", taskLines[idx]) });
+			}
+			const contentWidth = this.lastContentWidth || 74;
+			const taskWidth = Math.max(1, contentWidth - 3);
+			for (const line of taskFeed.render(taskWidth)) {
+				fixedTop.push(`${indent}${line}`);
 			}
 		} else {
 			const summaryText = details?.summary ?? taskText;
