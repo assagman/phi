@@ -172,7 +172,7 @@ ${chalk.bold("Options:")}
   --session <path>               Use specific session file
   --session-dir <dir>            Directory for session storage and lookup
   --no-session                   Don't save session (ephemeral)
-  --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
+  --models <patterns>            Comma-separated model patterns for model cycling
                                  Supports globs (anthropic/*, *sonnet*) and fuzzy matching
   --no-tools                     Disable all built-in tools
   --tools <tools>                Comma-separated list of tools to enable (default: read,bash,edit,write)

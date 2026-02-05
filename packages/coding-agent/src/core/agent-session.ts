@@ -105,7 +105,7 @@ export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
-	/** Models to cycle through with Ctrl+P (from --models flag) */
+	/** Models to cycle through (from --models flag) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel: ThinkingLevel }>;
 	/** File-based prompt templates for expansion */
 	promptTemplates?: PromptTemplate[];

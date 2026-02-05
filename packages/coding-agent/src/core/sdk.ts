@@ -99,7 +99,7 @@ export interface CreateAgentSessionOptions {
 	model?: Model<any>;
 	/** Thinking level. Default: from settings, else 'off' (clamped to model capabilities) */
 	thinkingLevel?: ThinkingLevel;
-	/** Models available for cycling (Ctrl+P in interactive mode) */
+	/** Models available for cycling */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel: ThinkingLevel }>;
 
 	/** System prompt. String replaces default, function receives default and returns final. */
@@ -134,6 +134,14 @@ export interface CreateAgentSessionOptions {
 
 	/** Settings manager. Default: SettingsManager.create(cwd, agentDir) */
 	settingsManager?: SettingsManager;
+
+	/**
+	 * Whether this is an interactive session.
+	 * Controls which builtin tools and prompt injections are included:
+	 * - true (default): sigma, handoff, subagent tools + delegation block + sigma instructions
+	 * - false: subagent tool only, delta + epsilon prompt injections, no delegation block
+	 */
+	interactive?: boolean;
 }
 
 /** Result from createAgentSession */
@@ -676,6 +684,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Create builtin tools lifecycle (delta, epsilon, sigma, handoff)
 	// These need agent for dynamic model access
 	builtinToolsLifecycle = createBuiltinToolsLifecycle({
+		interactive: options.interactive ?? true,
 		getSessionBranch: () => sessionManager.getBranch(),
 		ui: builtinUIContext,
 		handoffContext: {
