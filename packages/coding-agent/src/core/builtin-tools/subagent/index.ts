@@ -99,6 +99,8 @@ export interface SubagentDetails {
 	agentName?: string;
 	/** Task description */
 	task?: string;
+	/** Short ~50-char summary for collapsed display after delegation completes */
+	summary?: string;
 	/** Completed turns so far */
 	turns?: number;
 	/** Agent metadata for display */
@@ -707,6 +709,11 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
 const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent name (for single mode)" })),
 	task: Type.Optional(Type.String({ description: "Task description (for single mode)" })),
+	summary: Type.Optional(
+		Type.String({
+			description: "Short ~50-char summary of the task for display (shown after delegation completes)",
+		}),
+	),
 	parallel: Type.Optional(
 		Type.Array(
 			Type.Object({
@@ -783,6 +790,7 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 			params: {
 				agent?: string;
 				task?: string;
+				summary?: string;
 				parallel?: Array<{ agent: string; task: string; cwd?: string }>;
 				chain?: Array<{ agent: string; task: string; cwd?: string }>;
 				cwd?: string;
@@ -1028,6 +1036,7 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 							results: [],
 							agentName: agent.name,
 							task: params.task,
+							summary: params.summary,
 							...agentMeta(agent, model),
 						},
 					});
@@ -1065,6 +1074,7 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 											currentThinking: progress.currentThinking,
 											agentName: agent.name,
 											task: params.task,
+											summary: params.summary,
 											turns: progress.result.usage.turns,
 											...agentMeta(agent, model),
 										},

@@ -715,24 +715,28 @@ export class ToolExecutionComponent extends Container {
 
 		// Task text display:
 		// - Streaming (subprocess hasn't produced tool events yet): sliding window of last 5 lines
-		// - Subprocess active or done: single-line preview
+		// - Subprocess active or done: short summary (from LLM) or truncated first line fallback
 		const subprocessActive = details?.allTools && details.allTools.length > 0;
-		if (taskText.length > 0) {
-			if (this.running && !subprocessActive) {
-				// Args still streaming or subprocess just started — show sliding window
-				const taskLines = taskText.split("\n").filter((l) => l.trim());
-				const MAX_TASK_LINES = 5;
-				const skipped = Math.max(0, taskLines.length - MAX_TASK_LINES);
-				if (skipped > 0) {
-					lines.push(`${indent}${theme.fg("muted", `… ${skipped} lines above`)}`);
-				}
-				const visible = taskLines.slice(-MAX_TASK_LINES);
-				for (const tl of visible) {
-					const trimmed = tl.length > 100 ? `${tl.slice(0, 97)}...` : tl;
-					lines.push(`${indent}${theme.fg("dim", trimmed)}`);
-				}
-			} else {
-				// Collapsed: single-line preview
+		if (this.running && !subprocessActive && taskText.length > 0) {
+			// Args still streaming or subprocess just started — show sliding window
+			const taskLines = taskText.split("\n").filter((l) => l.trim());
+			const MAX_TASK_LINES = 5;
+			const skipped = Math.max(0, taskLines.length - MAX_TASK_LINES);
+			if (skipped > 0) {
+				lines.push(`${indent}${theme.fg("muted", `… ${skipped} lines above`)}`);
+			}
+			const visible = taskLines.slice(-MAX_TASK_LINES);
+			for (const tl of visible) {
+				const trimmed = tl.length > 100 ? `${tl.slice(0, 97)}...` : tl;
+				lines.push(`${indent}${theme.fg("dim", trimmed)}`);
+			}
+		} else {
+			// Collapsed: prefer LLM-generated summary, fall back to truncated first line
+			const summaryText = details?.summary;
+			if (summaryText) {
+				const preview = summaryText.length > 60 ? `${summaryText.slice(0, 57)}...` : summaryText;
+				lines.push(`${indent}${theme.fg("muted", `"${preview}"`)}`);
+			} else if (taskText.length > 0) {
 				const firstLine = taskText.split("\n")[0] || "";
 				const preview = firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
 				if (preview) {
