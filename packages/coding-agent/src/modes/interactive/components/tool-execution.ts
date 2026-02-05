@@ -110,6 +110,8 @@ export class ToolExecutionComponent extends Container {
 	private onInvalidate?: () => void;
 	/** Last known content width from render(), used for split-pane column math. */
 	private lastContentWidth = 0;
+	/** Once split-pane layout is shown, preserve it even when right pane temporarily empties between turns. */
+	private hadSplitLayout = false;
 
 	constructor(toolName: string, args: Record<string, unknown> = {}, ui?: TUI, onInvalidate?: () => void) {
 		super();
@@ -571,6 +573,13 @@ export class ToolExecutionComponent extends Container {
 		const hasLeft = leftItems.length > 0;
 		const hasRight = rightItems.length > 0;
 
+		// Once split-pane has been shown, keep using it even when right pane
+		// temporarily empties between turns (prevents layout flicker).
+		if (hasLeft && hasRight) {
+			this.hadSplitLayout = true;
+		}
+		const useSplit = (hasLeft && hasRight) || (this.hadSplitLayout && hasLeft && this.running);
+
 		if (!hasLeft && !hasRight) {
 			return [...fixedTop, ...fixedBottom].join("\n");
 		}
@@ -578,8 +587,8 @@ export class ToolExecutionComponent extends Container {
 		const paneBudget = Math.max(1, MAX_SUBAGENT_BOX_LINES - fixedTop.length - fixedBottom.length);
 		const overflowFn = (n: number) => theme.fg("muted", `\u2026 ${n} lines above`);
 
-		// If only one side has content, use full-width single column via LiveFeed
-		if (!hasRight || !hasLeft) {
+		// If only one side has content and split isn't locked, use full-width single column
+		if (!useSplit) {
 			const items = hasLeft ? leftItems : rightItems;
 			const feed = new LiveFeed({ maxLines: paneBudget, overflowText: overflowFn });
 			feed.setItems(items);
