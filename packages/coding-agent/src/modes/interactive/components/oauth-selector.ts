@@ -1,25 +1,26 @@
-import { getOAuthProviders, type OAuthProviderInfo } from "ai";
+import { getLoginProviders, type LoginProviderInfo } from "ai";
 import { Container, getEditorKeybindings, Spacer, TruncatedText } from "tui";
 import type { AuthStorage } from "../../../core/auth-storage.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 
 /**
- * Component that renders an OAuth provider selector
+ * Provider selector component for /login and /logout.
+ * Shows OAuth providers (interactive login) and env-var providers (API key guidance).
  */
 export class OAuthSelectorComponent extends Container {
 	private listContainer: Container;
-	private allProviders: OAuthProviderInfo[] = [];
+	private allProviders: LoginProviderInfo[] = [];
 	private selectedIndex: number = 0;
 	private mode: "login" | "logout";
 	private authStorage: AuthStorage;
-	private onSelectCallback: (providerId: string) => void;
+	private onSelectCallback: (provider: LoginProviderInfo) => void;
 	private onCancelCallback: () => void;
 
 	constructor(
 		mode: "login" | "logout",
 		authStorage: AuthStorage,
-		onSelect: (providerId: string) => void,
+		onSelect: (provider: LoginProviderInfo) => void,
 		onCancel: () => void,
 	) {
 		super();
@@ -29,92 +30,121 @@ export class OAuthSelectorComponent extends Container {
 		this.onSelectCallback = onSelect;
 		this.onCancelCallback = onCancel;
 
-		// Load all OAuth providers
 		this.loadProviders();
 
-		// Add top border
+		// Top border
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 
-		// Add title
-		const title = mode === "login" ? "Select provider to login:" : "Select provider to logout:";
+		// Title
+		const title = mode === "login" ? "Select provider to configure:" : "Select provider to logout:";
 		this.addChild(new TruncatedText(theme.bold(title)));
 		this.addChild(new Spacer(1));
 
-		// Create list container
+		// List
 		this.listContainer = new Container();
 		this.addChild(this.listContainer);
 
 		this.addChild(new Spacer(1));
 
-		// Add bottom border
+		// Bottom border
 		this.addChild(new DynamicBorder());
 
-		// Initial render
 		this.updateList();
 	}
 
 	private loadProviders(): void {
-		this.allProviders = getOAuthProviders();
+		const all = getLoginProviders();
+		if (this.mode === "logout") {
+			// Logout only shows OAuth providers that are logged in
+			this.allProviders = all.filter((p) => p.kind === "oauth" && this.authStorage.get(p.id)?.type === "oauth");
+		} else {
+			this.allProviders = all;
+		}
 	}
 
 	private updateList(): void {
 		this.listContainer.clear();
 
+		// Section headers tracking
+		let lastKind: "oauth" | "env" | null = null;
+
 		for (let i = 0; i < this.allProviders.length; i++) {
 			const provider = this.allProviders[i];
 			if (!provider) continue;
 
-			const isSelected = i === this.selectedIndex;
-			const isAvailable = provider.available;
-
-			// Check if user is logged in for this provider
-			const credentials = this.authStorage.get(provider.id);
-			const isLoggedIn = credentials?.type === "oauth";
-			const statusIndicator = isLoggedIn ? theme.fg("success", " ✓ logged in") : "";
-
-			let line = "";
-			if (isSelected) {
-				const prefix = theme.fg("accent", "→ ");
-				const text = isAvailable ? theme.fg("accent", provider.name) : theme.fg("dim", provider.name);
-				line = prefix + text + statusIndicator;
-			} else {
-				const text = isAvailable ? `  ${provider.name}` : theme.fg("dim", `  ${provider.name}`);
-				line = text + statusIndicator;
+			// Section header when switching from OAuth to Env
+			if (provider.kind !== lastKind) {
+				if (lastKind !== null) {
+					this.listContainer.addChild(new Spacer(1));
+				}
+				const header =
+					provider.kind === "oauth"
+						? theme.fg("dim", "  OAuth (interactive login)")
+						: theme.fg("dim", "  API Key (environment variable)");
+				this.listContainer.addChild(new TruncatedText(header, 0, 0));
+				lastKind = provider.kind;
 			}
+
+			const isSelected = i === this.selectedIndex;
+			const line =
+				provider.kind === "oauth"
+					? this.renderOAuthRow(provider, isSelected)
+					: this.renderEnvRow(provider, isSelected);
 
 			this.listContainer.addChild(new TruncatedText(line, 0, 0));
 		}
 
-		// Show "no providers" if empty
 		if (this.allProviders.length === 0) {
 			const message =
-				this.mode === "login" ? "No OAuth providers available" : "No OAuth providers logged in. Use /login first.";
+				this.mode === "login" ? "No providers available" : "No OAuth providers logged in. Use /login first.";
 			this.listContainer.addChild(new TruncatedText(theme.fg("muted", `  ${message}`), 0, 0));
 		}
 	}
 
+	private renderOAuthRow(provider: LoginProviderInfo & { kind: "oauth" }, isSelected: boolean): string {
+		const credentials = this.authStorage.get(provider.id);
+		const isLoggedIn = credentials?.type === "oauth";
+		const status = isLoggedIn ? theme.fg("success", " ✓ logged in") : "";
+
+		if (isSelected) {
+			const prefix = theme.fg("accent", "→ ");
+			const text = provider.available ? theme.fg("accent", provider.name) : theme.fg("dim", provider.name);
+			return prefix + text + status;
+		}
+		const text = provider.available ? `  ${provider.name}` : theme.fg("dim", `  ${provider.name}`);
+		return text + status;
+	}
+
+	private renderEnvRow(provider: LoginProviderInfo & { kind: "env" }, isSelected: boolean): string {
+		const status = provider.isSet ? theme.fg("success", " ✓ set") : theme.fg("dim", " ✗ not set");
+		const envHint = theme.fg("dim", ` (${provider.envVar})`);
+
+		if (isSelected) {
+			const prefix = theme.fg("accent", "→ ");
+			const text = theme.fg("accent", provider.name);
+			return prefix + text + envHint + status;
+		}
+		return `  ${provider.name}${envHint}${status}`;
+	}
+
 	handleInput(keyData: string): void {
 		const kb = getEditorKeybindings();
-		// Up arrow
+
 		if (kb.matches(keyData, "selectUp")) {
 			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
 			this.updateList();
-		}
-		// Down arrow
-		else if (kb.matches(keyData, "selectDown")) {
+		} else if (kb.matches(keyData, "selectDown")) {
 			this.selectedIndex = Math.min(this.allProviders.length - 1, this.selectedIndex + 1);
 			this.updateList();
-		}
-		// Enter
-		else if (kb.matches(keyData, "selectConfirm")) {
-			const selectedProvider = this.allProviders[this.selectedIndex];
-			if (selectedProvider?.available) {
-				this.onSelectCallback(selectedProvider.id);
-			}
-		}
-		// Escape or Ctrl+C
-		else if (kb.matches(keyData, "selectCancel")) {
+		} else if (kb.matches(keyData, "selectConfirm")) {
+			const selected = this.allProviders[this.selectedIndex];
+			if (!selected) return;
+
+			if (selected.kind === "oauth" && !selected.available) return;
+
+			this.onSelectCallback(selected);
+		} else if (kb.matches(keyData, "selectCancel")) {
 			this.onCancelCallback();
 		}
 	}
