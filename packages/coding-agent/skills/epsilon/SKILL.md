@@ -1,10 +1,9 @@
 ---
-name: phi_epsilon
+name: epsilon
 description: >-
   Task management CLI. Create, track, and manage tasks with status, priority,
   tags, and subtasks. No JSON arguments, no enums - just simple CLI.
   Triggers: task, todo, create task, mark done, progress, epsilon.
-version: "2.0"
 ---
 
 # phi_epsilon - Task CLI

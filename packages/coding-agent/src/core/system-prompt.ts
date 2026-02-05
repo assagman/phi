@@ -5,7 +5,7 @@
 import chalk from "chalk";
 import { existsSync, readFileSync } from "fs";
 import { join, resolve } from "path";
-import { getAgentDir, getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
+import { getAgentDir } from "../config.js";
 import type { SkillsSettings } from "./settings-manager.js";
 import { formatSkillsForPrompt, loadSkills, type Skill } from "./skills.js";
 import type { ToolName } from "./tools/index.js";
@@ -200,11 +200,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		return prompt;
 	}
 
-	// Get absolute paths to documentation and examples
-	const readmePath = getReadmePath();
-	const docsPath = getDocsPath();
-	const examplesPath = getExamplesPath();
-
 	// Build tools list based on selected tools
 	const tools = selectedTools || (["read", "bash", "edit", "write"] as ToolName[]);
 	const toolsList = tools.length > 0 ? tools.map((t) => `- ${t}: ${toolDescriptions[t]}`).join("\n") : "(none)";
@@ -226,7 +221,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 
 	// File exploration guidelines
 	if (hasBash) {
-		guidelinesList.push("Use bash for file operations like ls, fd");
+		guidelinesList.push("Use bash for file operations like ls, rg, fd, sg");
 		guidelinesList.push(
 			"**ALWAYS use ast-grep (sg) for code search** — NEVER use rg/grep for searching code patterns. " +
 				"ast-grep understands code structure (AST), not just text. " +
@@ -253,20 +248,13 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		guidelinesList.push("Use write only for new files or complete rewrites");
 	}
 
-	// Output guideline (only when actually writing/executing)
-	if (hasEdit || hasWrite) {
-		guidelinesList.push(
-			"When summarizing your actions, output plain text directly - do NOT use cat or bash to display what you did",
-		);
-	}
-
 	// Always include these
-	guidelinesList.push("Be concise in your responses");
+	guidelinesList.push("Be extremeley concise in your responses");
 	guidelinesList.push("Show file paths clearly when working with files");
 
 	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 
-	let prompt = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+	let prompt = `You are an expert coding assistant operating inside phi, a coding agent harness.
 
 Available tools:
 ${toolsList}
@@ -276,20 +264,23 @@ In addition to the tools above, you may have access to other custom tools depend
 Guidelines:
 ${guidelines}
 
-Pi documentation (only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
-- Main documentation: ${readmePath}
-- Additional docs: ${docsPath}
-- Examples: ${examplesPath} (extensions, custom tools, SDK)
-- When asked to create: custom models/providers (README.md), extensions (docs/extensions.md, examples/extensions/), themes (docs/theme.md), skills (docs/skills.md), TUI components (docs/tui.md - has copy-paste patterns)
-- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing
-
-Multi-file and complex tasks:
-For features touching multiple files, security-sensitive changes, refactoring, or architectural work,
-break down the task into clear steps and validate each change carefully before proceeding.
-
 Agent delegation:
-When committing changes, ALWAYS use the committer agent via the subagent tool. Never commit directly.
-Example: subagent({ agent: "committer", task: "Commit the current session changes" })`;
+You have access to specialized subagents via the subagent tool. You MUST delegate to them instead of doing the work yourself when the situation matches. Do NOT attempt these tasks inline.
+
+| Agent      | When to use                                                                 | Example                                                                                          |
+|------------|-----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| committer  | Committing changes. NEVER run git commit directly.                          | subagent({ agent: "committer", task: "Commit the current session changes" })                     |
+| explorer   | You need to understand an unfamiliar codebase, module, or feature area.     | subagent({ agent: "explorer", task: "Map the auth module structure and key types" })              |
+| planner    | A task involves 3+ files or needs a step-by-step plan before coding.        | subagent({ agent: "planner", task: "Plan adding OAuth2 support to the auth module" })            |
+| reviewer   | Code changes are complete and need review before committing.                | subagent({ agent: "reviewer", task: "Review the changes in packages/ai/src/providers/" })        |
+
+Rules:
+- ALWAYS delegate commits to committer. Never run git commit yourself.
+- ALWAYS delegate to explorer when you are unfamiliar with a codebase area and need orientation before making changes.
+- ALWAYS delegate to planner when the user asks to plan, or when a task touches 3+ files and you have not yet planned.
+- ALWAYS delegate to reviewer when the user asks for review, or before committing multi-file changes.
+- You may skip explorer/planner for trivial single-file changes where you already have full context.
+- Subagents run in isolated contexts. Pass them all the context they need in the task description.`;
 
 	if (appendSection) {
 		prompt += appendSection;

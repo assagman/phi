@@ -1,10 +1,9 @@
 ---
-name: phi_delta
+name: delta
 description: >-
   Persistent memory CLI. Store, search, and manage memories with importance levels
   and tags. No JSON arguments, no enums - just simple CLI.
   Triggers: remember, recall, memory, what did I decide, preferences, delta.
-version: "2.0"
 ---
 
 # phi_delta - Memory CLI
