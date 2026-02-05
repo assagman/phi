@@ -19,6 +19,27 @@ const toolDescriptions: Record<ToolName, string> = {
 	ls: "List directory contents",
 };
 
+/** Subagent delegation rules — appended last in prompt for recency bias */
+export const DELEGATION_BLOCK = `
+# MANDATORY: Agent Delegation
+
+You have access to specialized subagents via the subagent tool. You MUST delegate to them instead of doing the work yourself when the situation matches. Do NOT attempt these tasks inline. VIOLATION of these rules degrades output quality.
+
+| Agent      | When to use                                                                 | Example                                                                                          |
+|------------|-----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| committer  | Committing changes. NEVER run git commit directly.                          | subagent({ agent: "committer", task: "Commit the current session changes" })                     |
+| explorer   | You need to understand an unfamiliar codebase, module, or feature area.     | subagent({ agent: "explorer", task: "Map the auth module structure and key types" })              |
+| planner    | A task involves 3+ files or needs a step-by-step plan before coding.        | subagent({ agent: "planner", task: "Plan adding OAuth2 support to the auth module" })            |
+| reviewer   | Code changes are complete and need review before committing.                | subagent({ agent: "reviewer", task: "Review the changes in packages/ai/src/providers/" })        |
+
+Rules:
+- ALWAYS delegate commits to committer. Never run git commit yourself.
+- ALWAYS delegate to explorer when you are unfamiliar with a codebase area and need orientation before making changes.
+- ALWAYS delegate to planner when the user asks to plan, or when a task touches 3+ files and you have not yet planned.
+- ALWAYS delegate to reviewer when the user asks for review, or before committing multi-file changes.
+- You may skip explorer/planner for trivial single-file changes where you already have full context.
+- Subagents run in isolated contexts. Pass them all the context they need in the task description.`;
+
 /** Resolve input as file path or literal string */
 export function resolvePromptInput(input: string | undefined, description: string): string | undefined {
 	if (!input) {
@@ -193,7 +214,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 			prompt += formatSkillsForPrompt(skills);
 		}
 
-		// Add date/time and working directory last
+		// Add date/time and working directory
 		prompt += `\nCurrent date and time: ${dateTime}`;
 		prompt += `\nCurrent working directory: ${resolvedCwd}`;
 
@@ -262,25 +283,7 @@ ${toolsList}
 In addition to the tools above, you may have access to other custom tools depending on the project.
 
 Guidelines:
-${guidelines}
-
-Agent delegation:
-You have access to specialized subagents via the subagent tool. You MUST delegate to them instead of doing the work yourself when the situation matches. Do NOT attempt these tasks inline.
-
-| Agent      | When to use                                                                 | Example                                                                                          |
-|------------|-----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
-| committer  | Committing changes. NEVER run git commit directly.                          | subagent({ agent: "committer", task: "Commit the current session changes" })                     |
-| explorer   | You need to understand an unfamiliar codebase, module, or feature area.     | subagent({ agent: "explorer", task: "Map the auth module structure and key types" })              |
-| planner    | A task involves 3+ files or needs a step-by-step plan before coding.        | subagent({ agent: "planner", task: "Plan adding OAuth2 support to the auth module" })            |
-| reviewer   | Code changes are complete and need review before committing.                | subagent({ agent: "reviewer", task: "Review the changes in packages/ai/src/providers/" })        |
-
-Rules:
-- ALWAYS delegate commits to committer. Never run git commit yourself.
-- ALWAYS delegate to explorer when you are unfamiliar with a codebase area and need orientation before making changes.
-- ALWAYS delegate to planner when the user asks to plan, or when a task touches 3+ files and you have not yet planned.
-- ALWAYS delegate to reviewer when the user asks for review, or before committing multi-file changes.
-- You may skip explorer/planner for trivial single-file changes where you already have full context.
-- Subagents run in isolated contexts. Pass them all the context they need in the task description.`;
+${guidelines}`;
 
 	if (appendSection) {
 		prompt += appendSection;
@@ -300,7 +303,7 @@ Rules:
 		prompt += formatSkillsForPrompt(skills);
 	}
 
-	// Add date/time and working directory last
+	// Add date/time and working directory
 	prompt += `\nCurrent date and time: ${dateTime}`;
 	prompt += `\nCurrent working directory: ${resolvedCwd}`;
 

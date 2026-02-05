@@ -15,10 +15,10 @@ import { join } from "node:path";
 const DELTA_WRITE_PATTERNS = ["phi_delta remember", "phi_delta tag"];
 
 /** Turns of inactivity before injecting a nudge message */
-const IDLE_THRESHOLD = 4;
+const IDLE_THRESHOLD = 3;
 
 /** Minimum turns between consecutive nudge messages */
-const NUDGE_COOLDOWN = 4;
+const NUDGE_COOLDOWN = 3;
 
 /** Cached help text (loaded once from shell script) */
 let cachedHelp: string | null = null;
@@ -167,9 +167,15 @@ function buildMemoryPrompt(ctx: MemoryContext, sessionWrites: number, idle: numb
 	const lines: string[] = ["<delta_memory>", ""];
 
 	// Header
-	lines.push("## Memory (mandatory)");
-	lines.push('- **BEFORE** work: `phi_delta search "query"` to check past context');
-	lines.push('- **AFTER** decisions, bugs, patterns: `phi_delta remember "content" --importance N` to persist');
+	lines.push("## REQUIRED: Delta Memory System");
+	lines.push("");
+	lines.push("You MUST use delta memory every session. Failure to use it means lost context across sessions.");
+	lines.push(
+		'- **BEFORE any work**: Run `phi_delta search "relevant query"` to check past context. This is NOT optional.',
+	);
+	lines.push(
+		'- **AFTER decisions, bugs, patterns**: Run `phi_delta remember "content" --importance N` to persist them.',
+	);
 	lines.push(`- Status: ${sessionWrites} writes this session · ${idle} turns idle`);
 	lines.push("");
 
@@ -296,7 +302,7 @@ export function createDeltaLifecycle(): DeltaLifecycle {
 				lastNudgeTurn = turnCount;
 				result.message = {
 					customType: "delta-nudge",
-					content: `⚠ No memory writes in ${turnsIdle()} turns. If you've made decisions, found bugs, or learned patterns — use \`phi_delta remember "content" --importance N\` to persist them.`,
+					content: `MANDATORY: You have not written to delta memory in ${turnsIdle()} turns. You MUST persist any decisions, discoveries, bugs, or patterns NOW using \`phi_delta remember "content" --importance N\`. Ignoring this degrades future session quality.`,
 					display: false,
 				};
 			}

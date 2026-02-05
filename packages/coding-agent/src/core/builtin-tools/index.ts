@@ -50,6 +50,7 @@ export {
 import type { AgentTool } from "agent";
 import type { Component, OverlayOptions, TUI } from "tui";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
+import { DELEGATION_BLOCK } from "../system-prompt.js";
 import { createDeltaLifecycle } from "./delta/index.js";
 import { createEpsilonLifecycle } from "./epsilon/index.js";
 import { createHandoffTool, type HandoffToolContext } from "./handoff/index.js";
@@ -179,8 +180,8 @@ export function createBuiltinToolsLifecycle(config: BuiltinToolsConfig): Builtin
 			// Apply epsilon (adds task context)
 			const epsilonResult = epsilonLifecycle.onBeforeAgentStart(deltaResult.systemPrompt);
 
-			// Add sigma instructions
-			const finalPrompt = `${epsilonResult.systemPrompt}\n\n${SIGMA_SYSTEM_PROMPT}`;
+			// Add sigma instructions, then delegation rules last (recency bias)
+			const finalPrompt = `${epsilonResult.systemPrompt}\n\n${SIGMA_SYSTEM_PROMPT}\n${DELEGATION_BLOCK}`;
 
 			return {
 				systemPrompt: finalPrompt,
