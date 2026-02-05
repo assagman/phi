@@ -10,8 +10,10 @@ import * as path from "node:path";
 import type { AgentMessage } from "agent";
 import {
 	type AssistantMessage,
+	type EnvLoginProviderInfo,
 	getOAuthProviders,
 	type ImageContent,
+	type LoginProviderInfo,
 	type Message,
 	type Model,
 	type OAuthProvider,
@@ -344,7 +346,7 @@ export class InteractiveMode {
 			{ name: "hotkeys", description: "Show all keyboard shortcuts" },
 			{ name: "fork", description: "Create a new fork from a previous message" },
 			{ name: "tree", description: "Navigate session tree (switch branches)" },
-			{ name: "login", description: "Login with OAuth provider" },
+			{ name: "login", description: "Configure provider (OAuth or API key)" },
 			{ name: "logout", description: "Logout from OAuth provider" },
 			{ name: "new", description: "Start a new session" },
 			{ name: "compact", description: "Manually compact the session context" },
@@ -3222,18 +3224,22 @@ export class InteractiveMode {
 			const selector = new OAuthSelectorComponent(
 				mode,
 				this.session.modelRegistry.authStorage,
-				async (providerId: string) => {
+				async (selected: LoginProviderInfo) => {
 					done();
 
 					if (mode === "login") {
-						await this.showLoginDialog(providerId);
+						if (selected.kind === "oauth") {
+							await this.showLoginDialog(selected.id);
+						} else {
+							this.showEnvVarSetupHelp(selected);
+						}
 					} else {
-						// Logout flow
-						const providerInfo = getOAuthProviders().find((p) => p.id === providerId);
-						const providerName = providerInfo?.name || providerId;
+						// Logout flow — only OAuth providers
+						const providerInfo = getOAuthProviders().find((p) => p.id === selected.id);
+						const providerName = providerInfo?.name || selected.id;
 
 						try {
-							this.session.modelRegistry.authStorage.logout(providerId);
+							this.session.modelRegistry.authStorage.logout(selected.id);
 							this.session.modelRegistry.refresh();
 							this.showStatus(`Logged out of ${providerName}`);
 						} catch (error: unknown) {
@@ -3248,6 +3254,21 @@ export class InteractiveMode {
 			);
 			return { component: selector, focus: selector };
 		});
+	}
+
+	private showEnvVarSetupHelp(provider: EnvLoginProviderInfo): void {
+		const status = provider.isSet ? "currently set" : "not set";
+		const lines = [
+			`${provider.name} uses an API key via environment variable.`,
+			"",
+			`  Variable: ${provider.envVar} (${status})`,
+			"",
+			"  To configure, add to your shell profile:",
+			`    export ${provider.envVar}="your-api-key"`,
+			"",
+			"  Then restart phi for the change to take effect.",
+		];
+		this.showStatus(lines.join("\n"));
 	}
 
 	private async showLoginDialog(providerId: string): Promise<void> {
