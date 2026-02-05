@@ -479,19 +479,9 @@ async function runSubagent(
 	let wasAborted = false;
 
 	// Build system prompt
-	let systemPrompt = agent.systemPrompt;
-
-	// For presets, inject tool usage and epsilon instructions
-	if (agent.source === "preset") {
-		const presetInfo = PRESET_MAP[agent.name];
-		if (presetInfo) {
-			const preset = agentsPkg.createPreset(presetInfo.template, model, {
-				injectToolUsage: true,
-				injectEpsilon: true,
-			});
-			systemPrompt = preset.systemPrompt;
-		}
-	}
+	// Delta and epsilon are injected by the builtin tools lifecycle for all modes,
+	// so we don't inject abbreviated versions here (avoids duplication/conflict)
+	const systemPrompt = agent.systemPrompt;
 
 	if (systemPrompt.trim()) {
 		const tmp = createTempPromptFile(agent.name, systemPrompt);

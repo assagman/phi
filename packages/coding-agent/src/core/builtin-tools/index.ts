@@ -107,6 +107,14 @@ export interface BuiltinToolsConfig {
 	handoffContext: HandoffToolContext;
 	/** Subagent tool context */
 	subagentContext: SubagentToolContext;
+	/**
+	 * Whether this is an interactive session.
+	 * Controls which tools and prompt injections are included:
+	 * - interactive: sigma, handoff, subagent tools + delegation block
+	 * - non-interactive: subagent tool only, no sigma/handoff/delegation
+	 * Delta and epsilon are always injected regardless of mode.
+	 */
+	interactive?: boolean;
 }
 
 export interface BuiltinToolsLifecycle {
@@ -134,22 +142,29 @@ export interface BuiltinToolsLifecycle {
 /**
  * Create the combined lifecycle manager for all builtin tools.
  *
- * Tools registered: sigma, handoff, subagent
- * Lifecycles (no tools, just prompt injection): delta, epsilon
+ * Interactive mode:
+ *   Tools: sigma, handoff, subagent
+ *   Prompt: delta + epsilon + sigma instructions + DELEGATION_BLOCK
+ *
+ * Non-interactive mode (print/json/rpc, including subagent subprocesses):
+ *   Tools: subagent
+ *   Prompt: delta + epsilon (no sigma instructions, no delegation block)
  */
 export function createBuiltinToolsLifecycle(config: BuiltinToolsConfig): BuiltinToolsLifecycle {
+	const interactive = config.interactive ?? true;
 	const deltaLifecycle = createDeltaLifecycle();
 	const epsilonLifecycle = createEpsilonLifecycle();
 
-	// Create tools
-	const sigmaTool = createSigmaTool(config.getSessionBranch, config.ui);
-	const handoffTool = createHandoffTool(config.handoffContext, config.ui);
-	// Subagent no longer uses UI overlay - runs inline with status updates
+	// Subagent tool is always available (even subagents can delegate further if needed)
 	const subagentTool = createSubagentTool(config.subagentContext);
 
-	// Registered tools: sigma, handoff, subagent
-	// Delta and epsilon are accessed via bash: phi_delta, phi_epsilon
-	const tools: AgentTool<any>[] = [sigmaTool, handoffTool, subagentTool];
+	// Sigma and handoff are interactive-only (they require UI)
+	const tools: AgentTool<any>[] = [subagentTool];
+	if (interactive) {
+		const sigmaTool = createSigmaTool(config.getSessionBranch, config.ui);
+		const handoffTool = createHandoffTool(config.handoffContext, config.ui);
+		tools.push(sigmaTool, handoffTool);
+	}
 
 	return {
 		tools,
@@ -174,14 +189,18 @@ export function createBuiltinToolsLifecycle(config: BuiltinToolsConfig): Builtin
 		},
 
 		onBeforeAgentStart(systemPrompt) {
-			// Apply delta first (adds memory context)
+			// Delta memory context (always injected)
 			const deltaResult = deltaLifecycle.onBeforeAgentStart(systemPrompt);
 
-			// Apply epsilon (adds task context)
+			// Epsilon task context (always injected)
 			const epsilonResult = epsilonLifecycle.onBeforeAgentStart(deltaResult.systemPrompt);
 
-			// Add sigma instructions, then delegation rules last (recency bias)
-			const finalPrompt = `${epsilonResult.systemPrompt}\n\n${SIGMA_SYSTEM_PROMPT}\n${DELEGATION_BLOCK}`;
+			let finalPrompt = epsilonResult.systemPrompt;
+
+			// Interactive-only: sigma instructions + delegation rules (recency bias — last in prompt)
+			if (interactive) {
+				finalPrompt = `${finalPrompt}\n\n${SIGMA_SYSTEM_PROMPT}\n${DELEGATION_BLOCK}`;
+			}
 
 			return {
 				systemPrompt: finalPrompt,
