@@ -303,6 +303,15 @@ async function executeToolCalls(
 	let steeringMessages: AgentMessage[] | undefined;
 
 	for (let index = 0; index < toolCalls.length; index++) {
+		// Check if signal is aborted before starting each tool (#301)
+		if (signal?.aborted) {
+			const remainingCalls = toolCalls.slice(index);
+			for (const skipped of remainingCalls) {
+				results.push(skipToolCall(skipped, stream));
+			}
+			break;
+		}
+
 		const toolCall = toolCalls[index];
 		const tool = tools?.find((t) => t.name === toolCall.name);
 

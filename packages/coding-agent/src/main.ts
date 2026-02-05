@@ -264,7 +264,7 @@ function buildSessionOptions(
 		options.thinkingLevel = parsed.thinking;
 	}
 
-	// Scoped models for Ctrl+P cycling - fill in default thinking level for models without explicit level
+	// Scoped models for model cycling - fill in default thinking level for models without explicit level
 	if (scopedModels.length > 0) {
 		const defaultThinkingLevel = settingsManager.getDefaultThinkingLevel() ?? "off";
 		options.scopedModels = scopedModels.map((sm) => ({
@@ -461,6 +461,7 @@ export async function main(args: string[]) {
 	sessionOptions.authStorage = authStorage;
 	sessionOptions.modelRegistry = modelRegistry;
 	sessionOptions.eventBus = eventBus;
+	sessionOptions.interactive = isInteractive;
 
 	// Handle CLI --api-key as runtime override (not persisted)
 	if (parsed.apiKey) {
@@ -472,7 +473,7 @@ export async function main(args: string[]) {
 	}
 
 	time("buildSessionOptions");
-	const { session, modelFallbackMessage } = await createAgentSession(sessionOptions);
+	const { session, modelFallbackMessage, builtinToolsLifecycle } = await createAgentSession(sessionOptions);
 	time("createAgentSession");
 
 	if (!isInteractive && !session.model) {
@@ -506,7 +507,7 @@ export async function main(args: string[]) {
 					return `${sm.model.id}${thinkingStr}`;
 				})
 				.join(", ");
-			console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`));
+			console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(/model to switch)")}`));
 		}
 
 		printTimings();
@@ -516,6 +517,7 @@ export async function main(args: string[]) {
 			initialMessage,
 			initialImages,
 			initialMessages: parsed.messages,
+			builtinToolsLifecycle,
 		});
 		await mode.run();
 	} else {

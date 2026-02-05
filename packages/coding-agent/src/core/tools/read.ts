@@ -4,6 +4,7 @@ import type { ImageContent, TextContent } from "ai";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
+import { toolsLog } from "../../utils/logger.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import { resolveReadPath } from "./path-utils.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
@@ -58,6 +59,7 @@ export function createReadTool(cwd: string, options?: ReadToolOptions): AgentToo
 			{ path, offset, limit }: { path: string; offset?: number; limit?: number },
 			signal?: AbortSignal,
 		) => {
+			toolsLog.debug("read execute started", { path, offset, limit, cwd });
 			const absolutePath = resolveReadPath(path, cwd);
 
 			return new Promise<{ content: (TextContent | ImageContent)[]; details: ReadToolDetails | undefined }>(
@@ -198,15 +200,27 @@ export function createReadTool(cwd: string, options?: ReadToolOptions): AgentToo
 								signal.removeEventListener("abort", onAbort);
 							}
 
+							toolsLog.debug("read execute completed", {
+								path,
+								absolutePath,
+								contentBlocks: content.length,
+								hasTruncation: !!details?.truncation,
+							});
 							resolve({ content, details });
-						} catch (error: any) {
+						} catch (error: unknown) {
 							// Clean up abort handler
 							if (signal) {
 								signal.removeEventListener("abort", onAbort);
 							}
 
 							if (!aborted) {
-								reject(error);
+								// Type-safe error handling (#177)
+								const errorMessage = error instanceof Error ? error.message : String(error);
+								toolsLog.debug("read execute error", {
+									path,
+									error: errorMessage,
+								});
+								reject(error instanceof Error ? error : new Error(errorMessage));
 							}
 						}
 					})();

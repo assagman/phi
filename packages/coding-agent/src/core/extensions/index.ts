@@ -59,11 +59,9 @@ export type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
-	FindToolResultEvent,
 	GetActiveToolsHandler,
 	GetAllToolsHandler,
 	GetThinkingLevelHandler,
-	GrepToolResultEvent,
 	// Events - Input
 	InputEvent,
 	InputEventResult,
@@ -121,15 +119,7 @@ export type {
 	WriteToolResultEvent,
 } from "./types.js";
 // Type guards
-export {
-	isBashToolResult,
-	isEditToolResult,
-	isFindToolResult,
-	isGrepToolResult,
-	isLsToolResult,
-	isReadToolResult,
-	isWriteToolResult,
-} from "./types.js";
+export { isBashToolResult, isEditToolResult, isLsToolResult, isReadToolResult, isWriteToolResult } from "./types.js";
 export {
 	wrapRegisteredTool,
 	wrapRegisteredTools,

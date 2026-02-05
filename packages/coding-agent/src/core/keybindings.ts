@@ -20,9 +20,6 @@ export type AppAction =
 	| "exit"
 	| "suspend"
 	| "cycleThinkingLevel"
-	| "cycleModelForward"
-	| "cycleModelBackward"
-	| "selectModel"
 	| "expandTools"
 	| "toggleThinking"
 	| "externalEditor"
@@ -57,9 +54,6 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	exit: "ctrl+d",
 	suspend: "ctrl+z",
 	cycleThinkingLevel: "shift+tab",
-	cycleModelForward: "ctrl+p",
-	cycleModelBackward: "shift+ctrl+p",
-	selectModel: "ctrl+l",
 	expandTools: "ctrl+o",
 	toggleThinking: "ctrl+t",
 	externalEditor: "ctrl+g",
@@ -89,9 +83,6 @@ const APP_ACTIONS: AppAction[] = [
 	"exit",
 	"suspend",
 	"cycleThinkingLevel",
-	"cycleModelForward",
-	"cycleModelBackward",
-	"selectModel",
 	"expandTools",
 	"toggleThinking",
 	"externalEditor",

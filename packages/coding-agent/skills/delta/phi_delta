@@ -1,0 +1,371 @@
+#!/usr/bin/env bash
+#
+# phi_delta - Persistent memory CLI for AI agents
+# Compatible with existing phi delta.db schema (TEXT columns, FTS5)
+#
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────
+# Configuration
+# ─────────────────────────────────────────────────────────────────
+if [[ -n "${PHI_DELTA_DATA_DIR:-}" ]]; then
+    DATA_DIR="$PHI_DELTA_DATA_DIR"
+else
+    # Project-specific storage: ~/.local/share/phi/projects/<project-root-dir>/
+    # Use git common dir for worktree support, fallback to pwd
+    if GIT_ROOT="$(git rev-parse --git-common-dir 2>/dev/null)" && [[ "$GIT_ROOT" != ".git" ]]; then
+        PROJECT_ROOT_DIR="$(cd "$GIT_ROOT" && pwd | sed 's|^/||; s|/|_|g')"
+    else
+        PROJECT_ROOT_DIR="$(pwd | sed 's|^/||; s|/|_|g')"
+    fi
+    DATA_DIR="$HOME/.local/share/phi/projects/${PROJECT_ROOT_DIR}"
+fi
+DB_FILE="${DATA_DIR}/delta.db"
+
+EXIT_OK=0
+EXIT_INVALID_ARGS=1
+EXIT_NOT_FOUND=2
+EXIT_DB_ERROR=3
+
+# Importance: 1=low, 2=normal, 3=high, 4=critical
+IMPORTANCE_NAMES=("" "low" "normal" "high" "critical")
+
+# ─────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────
+die() { echo "error: $1" >&2; exit "${2:-$EXIT_INVALID_ARGS}"; }
+
+ensure_db() {
+    mkdir -p "$DATA_DIR"
+    if [[ ! -f "$DB_FILE" ]]; then
+        init_db
+        echo "Initialized: $DB_FILE"
+    fi
+}
+
+# SQLite with WAL mode and busy timeout for concurrent access
+# PRAGMAs output suppressed via .output, then restored for actual query
+sql() { sqlite3 -batch -noheader -cmd ".output /dev/null" -cmd "PRAGMA busy_timeout = 5000;" -cmd "PRAGMA journal_mode = WAL;" -cmd ".output stdout" "$DB_FILE" "$@"; }
+sql_pretty() { sqlite3 -batch -header -column -cmd ".output /dev/null" -cmd "PRAGMA busy_timeout = 5000;" -cmd "PRAGMA journal_mode = WAL;" -cmd ".output stdout" "$DB_FILE" "$@"; }
+
+importance_name() { echo "${IMPORTANCE_NAMES[$1]:-}"; }
+
+importance_num() {
+    case "$1" in
+        low|1) echo 1 ;; normal|2) echo 2 ;; high|3) echo 3 ;; critical|4) echo 4 ;; *) echo "" ;;
+    esac
+}
+
+validate_importance() {
+    [[ "$1" =~ ^[1-4]$ ]] || die "invalid importance '$1' (1=low, 2=normal, 3=high, 4=critical)"
+}
+
+escape() { printf '%s' "$1" | sed "s/'/''/g"; }
+
+now() { date +%s; }
+
+# ─────────────────────────────────────────────────────────────────
+# Database (compatible with existing schema)
+# ─────────────────────────────────────────────────────────────────
+init_db() {
+    sql <<'SQL'
+CREATE TABLE IF NOT EXISTS schema_version (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    version INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 1);
+
+CREATE TABLE IF NOT EXISTS memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content TEXT NOT NULL,
+    tags TEXT,
+    importance TEXT NOT NULL DEFAULT 'normal',
+    context TEXT,
+    session_id TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    last_accessed INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance);
+CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
+CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
+CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+    content,
+    tags,
+    context,
+    content=memories,
+    content_rowid=id
+);
+
+-- Triggers for FTS sync
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts(rowid, content, tags, context) VALUES (new.id, new.content, new.tags, new.context);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, content, tags, context) VALUES ('delete', old.id, old.content, old.tags, old.context);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, content, tags, context) VALUES ('delete', old.id, old.content, old.tags, old.context);
+    INSERT INTO memories_fts(rowid, content, tags, context) VALUES (new.id, new.content, new.tags, new.context);
+END;
+SQL
+}
+
+# ─────────────────────────────────────────────────────────────────
+# Commands
+# ─────────────────────────────────────────────────────────────────
+
+cmd_remember() {
+    local content="" importance="normal" context="" session=""
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --importance) shift; validate_importance "$1"; importance="${IMPORTANCE_NAMES[$1]}" ;;
+            --context) shift; context="$1" ;;
+            --session) shift; session="$1" ;;
+            -*) die "unknown option: $1" ;;
+            *) [[ -z "$content" ]] && content="$1" || content="$content $1" ;;
+        esac
+        shift
+    done
+    
+    [[ -n "$content" ]] || die "usage: phi_delta remember <content> [--importance N] [--context TEXT] [--session ID]"
+    
+    local ts; ts=$(now)
+    local sql_ctx="NULL"
+    local sql_sess="NULL"
+    [[ -n "$context" ]] && sql_ctx="'$(escape "$context")'"
+    [[ -n "$session" ]] && sql_sess="'$(escape "$session")'"
+    
+    local id
+    id=$(sql "INSERT INTO memories (content, importance, context, session_id, created_at, updated_at, last_accessed)
+              VALUES ('$(escape "$content")', '$importance', $sql_ctx, $sql_sess, $ts, $ts, $ts)
+              RETURNING id;")
+    
+    echo "remembered #${id} [${importance}]: ${content:0:60}..."
+}
+
+cmd_search() {
+    local query="" importance="" tag="" limit=20 session_only=false
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --importance) shift; validate_importance "$1"; importance="${IMPORTANCE_NAMES[$1]}" ;;
+            --tag) shift; tag="$1" ;;
+            --limit) shift; limit="$1" ;;
+            --session-only) session_only=true ;;
+            -*) die "unknown option: $1" ;;
+            *) [[ -z "$query" ]] && query="$1" || query="$query $1" ;;
+        esac
+        shift
+    done
+    
+    local where="1=1"
+    [[ -n "$importance" ]] && where="$where AND importance = '$importance'"
+    [[ -n "$tag" ]] && where="$where AND (',' || tags || ',' LIKE '%,$tag,%')"
+    
+    # Replace newlines with spaces in content preview, use tab as field separator
+    # Use '-' placeholder for empty tags to avoid IFS parsing issues
+    local select_expr="id || char(9) || importance || char(9) || COALESCE(NULLIF(tags,''),'-') || char(9) || REPLACE(SUBSTR(content,1,100), char(10), ' ')"
+    
+    local results
+    if [[ -n "$query" ]]; then
+        # FTS search
+        results=$(sql "SELECT $select_expr
+                       FROM memories m
+                       JOIN memories_fts f ON m.id = f.rowid
+                       WHERE memories_fts MATCH '$(escape "$query")' AND $where
+                       ORDER BY rank
+                       LIMIT $limit;" 2>/dev/null || \
+                  sql "SELECT $select_expr FROM memories 
+                       WHERE (content LIKE '%$(escape "$query")%' OR tags LIKE '%$(escape "$query")%') AND $where
+                       ORDER BY importance DESC, updated_at DESC LIMIT $limit;")
+    else
+        results=$(sql "SELECT $select_expr FROM memories 
+                       WHERE $where
+                       ORDER BY 
+                         CASE importance WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
+                         updated_at DESC
+                       LIMIT $limit;")
+    fi
+    
+    if [[ -z "$results" ]]; then
+        echo "(no memories found)"
+        return 0
+    fi
+    
+    while IFS=$'\t' read -r id imp tags content; do
+        local tag_str=""
+        [[ -n "$tags" && "$tags" != "-" ]] && tag_str=" {${tags}}"
+        local preview="${content:0:70}"
+        [[ ${#content} -gt 70 ]] && preview="${preview}..."
+        echo "#${id} [${imp}]${tag_str} ${preview}"
+    done <<< "$results"
+}
+
+cmd_get() {
+    local id="${1:-}"
+    [[ -n "$id" ]] || die "usage: phi_delta get <id>"
+    
+    local row
+    row=$(sql "SELECT id, content, tags, importance, context, session_id, created_at, updated_at
+               FROM memories WHERE id = $id;")
+    [[ -n "$row" ]] || die "memory #$id not found" $EXIT_NOT_FOUND
+    
+    # Update last_accessed
+    sql "UPDATE memories SET last_accessed = $(now) WHERE id = $id;"
+    
+    IFS='|' read -r id content tags imp ctx sess created updated <<< "$row"
+    
+    echo "#${id} [${imp}]"
+    [[ -n "$tags" ]] && echo "tags: ${tags}"
+    [[ -n "$ctx" ]] && echo "context: ${ctx}"
+    echo "created: $(date -r "$created" '+%Y-%m-%d %H:%M')"
+    echo ""
+    echo "$content"
+}
+
+cmd_forget() {
+    local id="${1:-}"
+    [[ -n "$id" ]] || die "usage: phi_delta forget <id>"
+    
+    local content
+    content=$(sql "SELECT content FROM memories WHERE id = $id;")
+    [[ -n "$content" ]] || die "memory #$id not found" $EXIT_NOT_FOUND
+    
+    sql "DELETE FROM memories WHERE id = $id;"
+    echo "forgot #${id}: ${content:0:50}..."
+}
+
+cmd_tag() {
+    local id="${1:-}" tag="${2:-}"
+    [[ -n "$id" && -n "$tag" ]] || die "usage: phi_delta tag <id> <tag>"
+    
+    local current
+    current=$(sql "SELECT tags FROM memories WHERE id = $id;")
+    
+    # Check if tag already exists
+    if [[ ",$current," == *",$tag,"* ]]; then
+        echo "memory #$id already has tag '$tag'"
+        return 0
+    fi
+    
+    local new_tags
+    [[ -n "$current" ]] && new_tags="${current},${tag}" || new_tags="$tag"
+    
+    sql "UPDATE memories SET tags = '$new_tags', updated_at = $(now) WHERE id = $id;"
+    echo "tagged #$id with '$tag'"
+}
+
+cmd_untag() {
+    local id="${1:-}" tag="${2:-}"
+    [[ -n "$id" && -n "$tag" ]] || die "usage: phi_delta untag <id> <tag>"
+    
+    local current
+    current=$(sql "SELECT tags FROM memories WHERE id = $id;")
+    
+    # Remove tag from comma-separated list
+    local new_tags
+    new_tags=$(echo "$current" | tr ',' '\n' | grep -v "^${tag}$" | tr '\n' ',' | sed 's/,$//')
+    
+    sql "UPDATE memories SET tags = '$new_tags', updated_at = $(now) WHERE id = $id;"
+    echo "removed tag '$tag' from #$id"
+}
+
+cmd_tags() {
+    sql "SELECT tags FROM memories WHERE tags IS NOT NULL AND tags != '';" | tr ',' '\n' | sort -u | grep -v '^$'
+}
+
+cmd_info() {
+    echo "Database: $DB_FILE"
+    echo ""
+    sql_pretty "SELECT 
+        COUNT(*) AS memories,
+        COUNT(DISTINCT tags) AS tags,
+        SUM(CASE WHEN tags IS NOT NULL AND tags != '' THEN 1 ELSE 0 END) AS tagged
+    FROM memories;"
+    echo ""
+    echo "Importance: 1=low, 2=normal, 3=high, 4=critical"
+}
+
+cmd_recent() {
+    cmd_search --limit "${1:-10}"
+}
+
+cmd_help() {
+    cat <<'EOF'
+phi_delta - Persistent memory CLI
+
+USAGE: phi_delta <command> [args] [options]
+
+IMPORTANCE: 1=low 2=normal 3=high 4=critical
+
+COMMANDS:
+  low <content>       Remember with importance 1
+  normal <content>    Remember with importance 2
+  high <content>      Remember with importance 3
+  critical <content>  Remember with importance 4
+
+  remember <content>  Store memory                        (alias: add)
+                      --importance N  --context TEXT  --session ID
+  search [query]      Search memories (FTS5)              (alias: find)
+                      --importance N  --tag TAG  --limit N
+  get <id>            Show full memory                    (alias: show)
+  forget <id>         Delete memory                       (alias: rm)
+  recent [N]          Last N memories (default 10)
+
+  tag <id> <tag>      Add tag
+  untag <id> <tag>    Remove tag
+  tags                List all tags
+  info                Database stats
+
+OUTPUT: #{id} [{importance}] {tags} {content_preview}...
+
+EXAMPLES:
+  phi_delta high "User prefers vim keybindings"
+  phi_delta critical "Found XSS in auth module"
+  phi_delta search auth --importance 4
+  phi_delta search --tag security --limit 50
+
+ENV: PHI_DELTA_DATA_DIR overrides ~/.local/share/phi/projects/<project>/
+EOF
+}
+
+# ─────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────
+main() {
+    local cmd="${1:-help}"
+    [[ $# -gt 0 ]] && shift
+    
+    case "$cmd" in
+        # Core commands
+        remember|add) ensure_db; cmd_remember "$@" ;;
+        search|find) ensure_db; cmd_search "$@" ;;
+        get|show) ensure_db; cmd_get "$@" ;;
+        forget|rm) ensure_db; cmd_forget "$@" ;;
+        tag) ensure_db; cmd_tag "$@" ;;
+        untag) ensure_db; cmd_untag "$@" ;;
+        tags) ensure_db; cmd_tags ;;
+        info) ensure_db; cmd_info ;;
+        help|--help|-h) cmd_help ;;
+        
+        # Quick importance shortcuts
+        low) ensure_db; cmd_remember "$@" --importance 1 ;;
+        normal) ensure_db; cmd_remember "$@" --importance 2 ;;
+        high) ensure_db; cmd_remember "$@" --importance 3 ;;
+        critical) ensure_db; cmd_remember "$@" --importance 4 ;;
+        
+        # List shortcuts
+        recent) ensure_db; cmd_recent "$@" ;;
+        
+        *) die "unknown command: $cmd" ;;
+    esac
+}
+
+main "$@"

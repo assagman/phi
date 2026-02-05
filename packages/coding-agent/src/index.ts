@@ -36,6 +36,16 @@ export {
 	serializeConversation,
 	shouldCompact,
 } from "./core/compaction/index.js";
+// Context analysis
+export {
+	type AnalyzeContextInput,
+	analyzeContext,
+	type ContextBreakdown,
+	type ContextBreakdownCategory,
+	type ContextBreakdownItem,
+	type ContextReductionSuggestion,
+	formatContextBreakdown,
+} from "./core/context-analyzer.js";
 export { createEventBus, type EventBus, type EventBusController } from "./core/event-bus.js";
 // Extension system
 export type {
@@ -101,8 +111,6 @@ export {
 	ExtensionRunner,
 	isBashToolResult,
 	isEditToolResult,
-	isFindToolResult,
-	isGrepToolResult,
 	isLsToolResult,
 	isReadToolResult,
 	isWriteToolResult,
@@ -127,8 +135,6 @@ export {
 	// Tool factories (for custom cwd)
 	createCodingTools,
 	createEditTool,
-	createFindTool,
-	createGrepTool,
 	createLsTool,
 	createReadOnlyTools,
 	createReadTool,
@@ -200,15 +206,7 @@ export {
 	type EditToolDetails,
 	type EditToolOptions,
 	editTool,
-	type FindOperations,
-	type FindToolDetails,
-	type FindToolOptions,
-	findTool,
 	formatSize,
-	type GrepOperations,
-	type GrepToolDetails,
-	type GrepToolOptions,
-	grepTool,
 	type LsOperations,
 	type LsToolDetails,
 	type LsToolOptions,
@@ -270,7 +268,7 @@ export {
 	ThemeSelectorComponent,
 	ThinkingSelectorComponent,
 	ToolExecutionComponent,
-	type ToolExecutionOptions,
+	type ToolResult,
 	TreeSelectorComponent,
 	truncateToVisualLines,
 	UserMessageComponent,

@@ -1,0 +1,6 @@
+name: committer
+description: Commits session changes using project commit conventions
+model: kimi-for-coding/k2p5
+thinkingLevel: medium
+temperature: 0.3
+systemPrompt: !file committer.md

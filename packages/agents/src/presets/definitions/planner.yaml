@@ -1,0 +1,6 @@
+name: planner
+description: "Create concrete implementation plans with specific files, steps, and risk analysis"
+model: openai-codex/gpt-5.2
+thinkingLevel: high
+temperature: 0.3
+systemPrompt: !file planner.md

@@ -102,13 +102,16 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 			targetHeight = opts.maxHeight;
 		}
 
-		// Helper to resize and encode in both formats, returning the smaller one
+		// Helper to resize and encode in both formats, returning the smaller one (#180)
+		// Uses explicit parameters instead of relying on closure + non-null assertions
 		function tryBothFormats(
+			photonModule: NonNullable<typeof photon>,
+			sourceImage: NonNullable<typeof image>,
 			width: number,
 			height: number,
 			jpegQuality: number,
 		): { buffer: Uint8Array; mimeType: string } {
-			const resized = photon!.resize(image!, width, height, photon!.SamplingFilter.Lanczos3);
+			const resized = photonModule.resize(sourceImage, width, height, photonModule.SamplingFilter.Lanczos3);
 
 			try {
 				const pngBuffer = resized.get_bytes();
@@ -132,7 +135,7 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 		let finalHeight = targetHeight;
 
 		// First attempt: resize to target dimensions, try both formats
-		best = tryBothFormats(targetWidth, targetHeight, opts.jpegQuality);
+		best = tryBothFormats(photon, image, targetWidth, targetHeight, opts.jpegQuality);
 
 		if (best.buffer.length <= opts.maxBytes) {
 			return {
@@ -148,7 +151,7 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 
 		// Still too large - try JPEG with decreasing quality
 		for (const quality of qualitySteps) {
-			best = tryBothFormats(targetWidth, targetHeight, quality);
+			best = tryBothFormats(photon, image, targetWidth, targetHeight, quality);
 
 			if (best.buffer.length <= opts.maxBytes) {
 				return {
@@ -173,7 +176,7 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 			}
 
 			for (const quality of qualitySteps) {
-				best = tryBothFormats(finalWidth, finalHeight, quality);
+				best = tryBothFormats(photon, image, finalWidth, finalHeight, quality);
 
 				if (best.buffer.length <= opts.maxBytes) {
 					return {

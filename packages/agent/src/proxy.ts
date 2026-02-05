@@ -16,6 +16,9 @@ import {
 	type ToolCall,
 } from "ai";
 
+// WeakMap to track partial JSON for tool calls without mutating content objects (#334)
+const partialJsonMap = new WeakMap<ToolCall, string>();
+
 // Create stream class matching ProxyMessageEventStream
 class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
 	constructor() {
@@ -61,6 +64,57 @@ export interface ProxyStreamOptions extends SimpleStreamOptions {
 	authToken: string;
 	/** Proxy server URL (e.g., "https://genai.example.com") */
 	proxyUrl: string;
+	/**
+	 * Optional list of trusted proxy hosts. If provided, proxy URL must match one of these.
+	 * Helps prevent SSRF and credential leakage (#340, #304).
+	 * Example: ["genai.example.com", "proxy.internal.corp"]
+	 */
+	trustedProxyHosts?: string[];
+}
+
+/**
+ * Validate proxy URL for security (#304, #340).
+ * Returns error message if invalid, undefined if valid.
+ */
+function validateProxyUrl(proxyUrl: string, trustedHosts?: string[]): string | undefined {
+	let url: URL;
+	try {
+		url = new URL(proxyUrl);
+	} catch {
+		return `Invalid proxy URL format: ${proxyUrl}`;
+	}
+
+	// Require HTTPS for security (credentials are sent)
+	if (url.protocol !== "https:" && url.protocol !== "http:") {
+		return `Proxy URL must use http or https protocol: ${proxyUrl}`;
+	}
+
+	// Block localhost/internal addresses that could be SSRF targets
+	const hostname = url.hostname.toLowerCase();
+	const ssrfDangerousPatterns = [
+		/^169\.254\.\d+\.\d+$/, // AWS metadata
+		/^100\.100\.\d+\.\d+$/, // Alibaba metadata
+		/^192\.0\.0\.192$/, // GCP metadata
+		/^fd00:/i, // IPv6 private
+		/^::1$/, // IPv6 localhost
+		/^0\.0\.0\.0$/, // All interfaces
+	];
+
+	for (const pattern of ssrfDangerousPatterns) {
+		if (pattern.test(hostname)) {
+			return `Proxy URL hostname blocked for security: ${hostname}`;
+		}
+	}
+
+	// If trusted hosts specified, validate against them
+	if (trustedHosts && trustedHosts.length > 0) {
+		const isHostTrusted = trustedHosts.some((trusted) => hostname === trusted.toLowerCase());
+		if (!isHostTrusted) {
+			return `Proxy URL host '${hostname}' not in trusted hosts list`;
+		}
+	}
+
+	return undefined;
 }
 
 /**
@@ -86,6 +140,32 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 	const stream = new ProxyMessageEventStream();
 
 	(async () => {
+		// Validate proxy URL for security (#304, #340)
+		const urlError = validateProxyUrl(options.proxyUrl, options.trustedProxyHosts);
+		if (urlError) {
+			const errorMessage: AssistantMessage = {
+				role: "assistant",
+				stopReason: "error",
+				content: [],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				errorMessage: urlError,
+				timestamp: Date.now(),
+			};
+			stream.push({ type: "error", reason: "error", error: errorMessage });
+			stream.end();
+			return;
+		}
+
 		// Initialize the partial message that we'll build up from events
 		const partial: AssistantMessage = {
 			role: "assistant",
@@ -149,7 +229,11 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 				throw new Error(errorMessage);
 			}
 
-			reader = response.body!.getReader();
+			// Validate response body exists (#333)
+			if (!response.body) {
+				throw new Error("No response body received from proxy");
+			}
+			reader = response.body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
 			const decoder = new TextDecoder();
 			let buffer = "";
 
@@ -169,10 +253,17 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 					if (line.startsWith("data: ")) {
 						const data = line.slice(6).trim();
 						if (data) {
-							const proxyEvent = JSON.parse(data) as ProxyAssistantMessageEvent;
-							const event = processProxyEvent(proxyEvent, partial);
-							if (event) {
-								stream.push(event);
+							try {
+								const proxyEvent = JSON.parse(data) as ProxyAssistantMessageEvent;
+								const event = processProxyEvent(proxyEvent, partial);
+								if (event) {
+									stream.push(event);
+								}
+							} catch (parseError) {
+								// Skip malformed JSON chunks (#305) - log but don't fail the stream
+								console.warn(
+									`Proxy stream: failed to parse SSE data: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
+								);
 							}
 						}
 					}
@@ -280,21 +371,27 @@ function processProxyEvent(
 			throw new Error("Received thinking_end for non-thinking content");
 		}
 
-		case "toolcall_start":
-			partial.content[proxyEvent.contentIndex] = {
+		case "toolcall_start": {
+			const toolCall: ToolCall = {
 				type: "toolCall",
 				id: proxyEvent.id,
 				name: proxyEvent.toolName,
 				arguments: {},
-				partialJson: "",
-			} satisfies ToolCall & { partialJson: string } as ToolCall;
+			};
+			partial.content[proxyEvent.contentIndex] = toolCall;
+			// Track partial JSON in WeakMap instead of mutating object (#334)
+			partialJsonMap.set(toolCall, "");
 			return { type: "toolcall_start", contentIndex: proxyEvent.contentIndex, partial };
+		}
 
 		case "toolcall_delta": {
 			const content = partial.content[proxyEvent.contentIndex];
 			if (content?.type === "toolCall") {
-				(content as any).partialJson += proxyEvent.delta;
-				content.arguments = parseStreamingJson((content as any).partialJson) || {};
+				// Use WeakMap instead of mutating content object (#334)
+				const currentJson = partialJsonMap.get(content) ?? "";
+				const newJson = currentJson + proxyEvent.delta;
+				partialJsonMap.set(content, newJson);
+				content.arguments = parseStreamingJson(newJson) || {};
 				partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
 				return {
 					type: "toolcall_delta",
@@ -309,7 +406,7 @@ function processProxyEvent(
 		case "toolcall_end": {
 			const content = partial.content[proxyEvent.contentIndex];
 			if (content?.type === "toolCall") {
-				delete (content as any).partialJson;
+				// WeakMap auto-cleans when content is GC'd, no manual cleanup needed (#334)
 				return {
 					type: "toolcall_end",
 					contentIndex: proxyEvent.contentIndex,

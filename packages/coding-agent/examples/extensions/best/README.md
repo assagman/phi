@@ -1,5 +1,10 @@
 # Best Extensions for Phi
 
+> **Note:** The builtin delta and epsilon are now CLI tools (`phi_delta`, `phi_epsilon`) 
+> installed via `packages/coding-agent/skills/`. The delta and epsilon extensions below 
+> are **examples of the extension framework** - they demonstrate how to build custom 
+> MCP-style tools, not the actual builtin tools used by the agent.
+
 This directory contains advanced extensions for the Phi coding agent, all adapted for the standalone fullscreen TUI mode:
 
 - **Epsilon** - Task management with subtasks, priorities, and tags

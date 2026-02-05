@@ -47,6 +47,14 @@ const ThemeJsonSchema = Type.Object({
 		toolErrorBg: ColorValueSchema,
 		toolTitle: ColorValueSchema,
 		toolOutput: ColorValueSchema,
+		// Tool-specific colors (for compact view)
+		toolRead: ColorValueSchema,
+		toolEdit: ColorValueSchema,
+		toolWrite: ColorValueSchema,
+		toolBash: ColorValueSchema,
+		toolGrep: ColorValueSchema,
+		toolFind: ColorValueSchema,
+		toolPath: ColorValueSchema,
 		// Markdown (10 colors)
 		mdHeading: ColorValueSchema,
 		mdLink: ColorValueSchema,
@@ -112,6 +120,13 @@ export type ThemeColor =
 	| "customMessageLabel"
 	| "toolTitle"
 	| "toolOutput"
+	| "toolRead"
+	| "toolEdit"
+	| "toolWrite"
+	| "toolBash"
+	| "toolGrep"
+	| "toolFind"
+	| "toolPath"
 	| "mdHeading"
 	| "mdLink"
 	| "mdLinkUrl"
@@ -266,6 +281,56 @@ function hexTo256(hex: string): number {
 	return rgbTo256(r, g, b);
 }
 
+/**
+ * Convert a color value (hex or 256-color index) to RGB tuple.
+ * Returns undefined for empty/default colors.
+ */
+function colorValueToRgb(color: string | number): [number, number, number] | undefined {
+	if (color === "") return undefined;
+	if (typeof color === "string" && color.startsWith("#")) {
+		const { r, g, b } = hexToRgb(color);
+		return [r, g, b];
+	}
+	if (typeof color === "number") {
+		// Convert 256-color index to RGB (approximate)
+		if (color < 16) {
+			// Basic colors - use approximate values
+			const basic: [number, number, number][] = [
+				[0, 0, 0],
+				[128, 0, 0],
+				[0, 128, 0],
+				[128, 128, 0],
+				[0, 0, 128],
+				[128, 0, 128],
+				[0, 128, 128],
+				[192, 192, 192],
+				[128, 128, 128],
+				[255, 0, 0],
+				[0, 255, 0],
+				[255, 255, 0],
+				[0, 0, 255],
+				[255, 0, 255],
+				[0, 255, 255],
+				[255, 255, 255],
+			];
+			return basic[color];
+		}
+		if (color < 232) {
+			// 6x6x6 color cube
+			const idx = color - 16;
+			const r = Math.floor(idx / 36);
+			const g = Math.floor((idx % 36) / 6);
+			const b = idx % 6;
+			const toVal = (n: number) => (n === 0 ? 0 : 55 + n * 40);
+			return [toVal(r), toVal(g), toVal(b)];
+		}
+		// Grayscale
+		const gray = 8 + (color - 232) * 10;
+		return [gray, gray, gray];
+	}
+	return undefined;
+}
+
 function fgAnsi(color: string | number, mode: ColorMode): string {
 	if (color === "") return "\x1b[39m";
 	if (typeof color === "number") return `\x1b[38;5;${color}m`;
@@ -332,6 +397,7 @@ function resolveThemeColors<T extends Record<string, ColorValue>>(
 export class Theme {
 	private fgColors: Map<ThemeColor, string>;
 	private bgColors: Map<ThemeBg, string>;
+	private fgRgb: Map<ThemeColor, [number, number, number]>;
 	private mode: ColorMode;
 
 	constructor(
@@ -341,8 +407,14 @@ export class Theme {
 	) {
 		this.mode = mode;
 		this.fgColors = new Map();
+		this.fgRgb = new Map();
 		for (const [key, value] of Object.entries(fgColors) as [ThemeColor, string | number][]) {
 			this.fgColors.set(key, fgAnsi(value, mode));
+			// Store RGB values for colors that can be converted
+			const rgb = colorValueToRgb(value);
+			if (rgb) {
+				this.fgRgb.set(key, rgb);
+			}
 		}
 		this.bgColors = new Map();
 		for (const [key, value] of Object.entries(bgColors) as [ThemeBg, string | number][]) {
@@ -394,6 +466,14 @@ export class Theme {
 		return ansi;
 	}
 
+	/**
+	 * Get RGB tuple for a foreground color (for animations).
+	 * Returns undefined if color cannot be converted to RGB.
+	 */
+	getFgRgb(color: ThemeColor): [number, number, number] | undefined {
+		return this.fgRgb.get(color);
+	}
+
 	getColorMode(): ColorMode {
 		return this.mode;
 	}
@@ -434,9 +514,11 @@ function getBuiltinThemes(): Record<string, ThemeJson> {
 		const themesDir = getThemesDir();
 		const darkPath = path.join(themesDir, "dark.json");
 		const lightPath = path.join(themesDir, "light.json");
+		const orangePath = path.join(themesDir, "orange.json");
 		BUILTIN_THEMES = {
 			dark: JSON.parse(fs.readFileSync(darkPath, "utf-8")) as ThemeJson,
 			light: JSON.parse(fs.readFileSync(lightPath, "utf-8")) as ThemeJson,
+			orange: JSON.parse(fs.readFileSync(orangePath, "utf-8")) as ThemeJson,
 		};
 	}
 	return BUILTIN_THEMES;

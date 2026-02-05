@@ -8,6 +8,7 @@ export {
 	type SlashCommand,
 } from "./autocomplete.js";
 // Components
+export { BorderedBox, type BorderedBoxOptions } from "./components/bordered-box.js";
 export { Box } from "./components/box.js";
 export { CancellableLoader } from "./components/cancellable-loader.js";
 export { Editor, type EditorOptions, type EditorTheme } from "./components/editor.js";
@@ -97,6 +98,7 @@ export {
 	type Focusable,
 	isFocusable,
 	type OverlayAnchor,
+	type OverlayBorderOptions,
 	type OverlayHandle,
 	type OverlayMargin,
 	type OverlayOptions,

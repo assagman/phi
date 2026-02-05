@@ -269,6 +269,9 @@ export class Editor implements Component, Focusable {
 	// Border color (can be changed dynamically)
 	public borderColor: (str: string) => string;
 
+	// Background color (RGB tuple, can be changed dynamically)
+	public backgroundColor?: [number, number, number];
+
 	// Autocomplete support
 	private autocompleteProvider?: AutocompleteProvider;
 	private autocompleteList?: SelectList;
@@ -469,14 +472,16 @@ export class Editor implements Component, Focusable {
 					const afterGraphemes = [...segmenter.segment(after)];
 					const firstGrapheme = afterGraphemes[0]?.segment || "";
 					const restAfter = after.slice(firstGrapheme.length);
-					const cursor = `\x1b[7m${firstGrapheme}\x1b[0m`;
+					// Use \x1b[27m (disable reverse) instead of \x1b[0m (reset all) to preserve background
+					const cursor = `\x1b[7m${firstGrapheme}\x1b[27m`;
 					displayText = before + marker + cursor + restAfter;
 					// lineVisibleWidth stays the same - we're replacing, not adding
 				} else {
 					// Cursor is at the end - check if we have room for the space
 					if (lineVisibleWidth < contentWidth) {
 						// We have room - add highlighted space
-						const cursor = "\x1b[7m \x1b[0m";
+						// Use \x1b[27m (disable reverse) instead of \x1b[0m (reset all) to preserve background
+						const cursor = "\x1b[7m \x1b[27m";
 						displayText = before + marker + cursor;
 						// lineVisibleWidth increases by 1 - we're adding a space
 						lineVisibleWidth = lineVisibleWidth + 1;
@@ -486,7 +491,8 @@ export class Editor implements Component, Focusable {
 						const beforeGraphemes = [...segmenter.segment(before)];
 						if (beforeGraphemes.length > 0) {
 							const lastGrapheme = beforeGraphemes[beforeGraphemes.length - 1]?.segment || "";
-							const cursor = `\x1b[7m${lastGrapheme}\x1b[0m`;
+							// Use \x1b[27m (disable reverse) instead of \x1b[0m (reset all) to preserve background
+							const cursor = `\x1b[7m${lastGrapheme}\x1b[27m`;
 							// Rebuild 'before' without the last grapheme
 							const beforeWithoutLast = beforeGraphemes
 								.slice(0, -1)
@@ -987,8 +993,8 @@ export class Editor implements Component, Focusable {
 				if (textBeforeCursor.trimStart().startsWith("/")) {
 					this.tryTriggerAutocomplete();
 				}
-				// Check if we're in an @ file reference context
-				else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
+				// Check if we're in an @ file reference context (supports multi-token fzf queries like "@tui auto")
+				else if (textBeforeCursor.match(/(?:^|[\s])@[^@]*$/)) {
 					this.tryTriggerAutocomplete();
 				}
 			}
@@ -1172,8 +1178,8 @@ export class Editor implements Component, Focusable {
 			if (textBeforeCursor.trimStart().startsWith("/")) {
 				this.tryTriggerAutocomplete();
 			}
-			// @ file reference context
-			else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
+			// @ file reference context (supports multi-token fzf queries like "@tui auto")
+			else if (textBeforeCursor.match(/(?:^|[\s])@[^@]*$/)) {
 				this.tryTriggerAutocomplete();
 			}
 		}
@@ -1391,8 +1397,8 @@ export class Editor implements Component, Focusable {
 			if (textBeforeCursor.trimStart().startsWith("/")) {
 				this.tryTriggerAutocomplete();
 			}
-			// @ file reference context
-			else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
+			// @ file reference context (supports multi-token fzf queries like "@tui auto")
+			else if (textBeforeCursor.match(/(?:^|[\s])@[^@]*$/)) {
 				this.tryTriggerAutocomplete();
 			}
 		}

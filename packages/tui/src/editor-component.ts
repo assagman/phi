@@ -62,4 +62,7 @@ export interface EditorComponent extends Component {
 
 	/** Border color function */
 	borderColor?: (str: string) => string;
+
+	/** Background color as RGB tuple [r, g, b] - applied to content area */
+	backgroundColor?: [number, number, number];
 }

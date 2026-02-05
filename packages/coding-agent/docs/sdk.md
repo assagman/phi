@@ -58,7 +58,7 @@ The main factory function. Creates an `AgentSession` with configurable options.
 ```typescript
 import { createAgentSession } from "coding-agent";
 
-// Minimal: all defaults (discovers everything from cwd and ~/.pi/agent)
+// Minimal: all defaults (discovers everything from cwd and ~/.phi/agent)
 const { session } = await createAgentSession();
 
 // Custom: override specific options
@@ -255,14 +255,14 @@ const { session } = await createAgentSession({
   cwd: process.cwd(), // default
   
   // Global config directory
-  agentDir: "~/.pi/agent", // default (expands ~)
+  agentDir: "~/.phi/agent", // default (expands ~)
 });
 ```
 
 `cwd` is used for:
-- Project extensions (`.pi/extensions/`)
-- Project skills (`.pi/skills/`)
-- Project prompts (`.pi/prompts/`)
+- Project extensions (`.phi/extensions/`)
+- Project skills (`.phi/skills/`)
+- Project prompts (`.phi/prompts/`)
 - Context files (`AGENTS.md` walking up from cwd)
 - Session directory naming
 
@@ -329,7 +329,7 @@ API key resolution priority (handled by AuthStorage):
 ```typescript
 import { AuthStorage, ModelRegistry, discoverAuthStorage, discoverModels } from "coding-agent";
 
-// Default: uses ~/.pi/agent/auth.json and ~/.pi/agent/models.json
+// Default: uses ~/.phi/agent/auth.json and ~/.phi/agent/models.json
 const authStorage = discoverAuthStorage();
 const modelRegistry = discoverModels(authStorage);
 
@@ -379,9 +379,8 @@ const { session } = await createAgentSession({
 ```typescript
 import {
   codingTools,   // read, bash, edit, write (default)
-  readOnlyTools, // read, grep, find, ls
-  readTool, bashTool, editTool, writeTool,
-  grepTool, findTool, lsTool,
+  readOnlyTools, // read, ls, ast_grep
+  readTool, bashTool, editTool, writeTool, lsTool,
 } from "coding-agent";
 
 // Use built-in tool set
@@ -389,9 +388,9 @@ const { session } = await createAgentSession({
   tools: readOnlyTools,
 });
 
-// Pick specific tools
+// Pick specific tools (use bash with rg/fd for grep/find)
 const { session } = await createAgentSession({
-  tools: [readTool, bashTool, grepTool],
+  tools: [readTool, bashTool],
 });
 ```
 
@@ -402,13 +401,11 @@ const { session } = await createAgentSession({
 ```typescript
 import {
   createCodingTools,    // Creates [read, bash, edit, write] for specific cwd
-  createReadOnlyTools,  // Creates [read, grep, find, ls] for specific cwd
+  createReadOnlyTools,  // Creates [read, ls, ast_grep] for specific cwd
   createReadTool,
   createBashTool,
   createEditTool,
   createWriteTool,
-  createGrepTool,
-  createFindTool,
   createLsTool,
 } from "coding-agent";
 
@@ -423,7 +420,7 @@ const { session } = await createAgentSession({
 // Or pick specific tools
 const { session } = await createAgentSession({
   cwd,
-  tools: [createReadTool(cwd), createBashTool(cwd), createGrepTool(cwd)],
+  tools: [createReadTool(cwd), createBashTool(cwd)],
 });
 ```
 
@@ -462,15 +459,15 @@ const { session } = await createAgentSession({
 });
 ```
 
-Custom tools passed via `customTools` are combined with extension-registered tools. Extensions discovered from `~/.pi/agent/extensions/` and `.pi/extensions/` can also register tools via `pi.registerTool()`.
+Custom tools passed via `customTools` are combined with extension-registered tools. Extensions discovered from `~/.phi/agent/extensions/` and `.phi/extensions/` can also register tools via `pi.registerTool()`.
 
 > See [examples/sdk/05-tools.ts](../examples/sdk/05-tools.ts)
 
 ### Extensions
 
 By default, extensions are discovered from multiple locations:
-- `~/.pi/agent/extensions/` (global)
-- `.pi/extensions/` (project-local)
+- `~/.phi/agent/extensions/` (global)
+- `.phi/extensions/` (project-local)
 - Paths listed in `settings.json` `"extensions"` array
 
 ```typescript
@@ -716,8 +713,8 @@ const { session } = await createAgentSession({
 **Project-specific settings:**
 
 Settings load from two locations and merge:
-1. Global: `~/.pi/agent/settings.json`
-2. Project: `<cwd>/.pi/settings.json`
+1. Global: `~/.phi/agent/settings.json`
+2. Project: `<cwd>/.phi/settings.json`
 
 Project overrides global. Nested objects merge keys. Setters only modify global (project is read-only for version control).
 
@@ -744,8 +741,8 @@ import {
 } from "coding-agent";
 
 // Auth and Models
-const authStorage = discoverAuthStorage();           // ~/.pi/agent/auth.json
-const modelRegistry = discoverModels(authStorage);   // + ~/.pi/agent/models.json
+const authStorage = discoverAuthStorage();           // ~/.phi/agent/auth.json
+const modelRegistry = discoverModels(authStorage);   // + ~/.phi/agent/models.json
 const allModels = modelRegistry.getAll();            // All models (built-in + custom)
 const available = await modelRegistry.getAvailable(); // Only models with API keys
 const model = modelRegistry.find("provider", "id");   // Find specific model
@@ -999,14 +996,12 @@ SettingsManager
 // Built-in tools (use process.cwd())
 codingTools
 readOnlyTools
-readTool, bashTool, editTool, writeTool
-grepTool, findTool, lsTool
+readTool, bashTool, editTool, writeTool, lsTool
 
 // Tool factories (for custom cwd)
 createCodingTools
 createReadOnlyTools
-createReadTool, createBashTool, createEditTool, createWriteTool
-createGrepTool, createFindTool, createLsTool
+createReadTool, createBashTool, createEditTool, createWriteTool, createLsTool
 
 // Types
 type CreateAgentSessionOptions

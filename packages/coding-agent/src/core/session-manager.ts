@@ -181,6 +181,7 @@ export type ReadonlySessionManager = Pick<
 	| "getSessionDir"
 	| "getSessionId"
 	| "getSessionFile"
+	| "getParentSession"
 	| "getLeafId"
 	| "getLeafEntry"
 	| "getEntry"
@@ -413,7 +414,7 @@ export function buildSessionContext(
 
 /**
  * Compute the default session directory for a cwd.
- * Encodes cwd into a safe directory name under ~/.pi/agent/sessions/.
+ * Encodes cwd into a safe directory name under ~/.phi/agent/sessions/.
  */
 function getDefaultSessionDir(cwd: string): string {
 	const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
@@ -730,6 +731,14 @@ export class SessionManager {
 
 	getSessionFile(): string | undefined {
 		return this.sessionFile;
+	}
+
+	/**
+	 * Get the parent session file path, if this session was created via handoff.
+	 */
+	getParentSession(): string | undefined {
+		const header = this.getHeader();
+		return header?.parentSession;
 	}
 
 	_persist(entry: SessionEntry): void {
@@ -1178,7 +1187,7 @@ export class SessionManager {
 	/**
 	 * Create a new session.
 	 * @param cwd Working directory (stored in session header)
-	 * @param sessionDir Optional session directory. If omitted, uses default (~/.pi/agent/sessions/<encoded-cwd>/).
+	 * @param sessionDir Optional session directory. If omitted, uses default (~/.phi/agent/sessions/<encoded-cwd>/).
 	 */
 	static create(cwd: string, sessionDir?: string): SessionManager {
 		const dir = sessionDir ?? getDefaultSessionDir(cwd);
@@ -1203,7 +1212,7 @@ export class SessionManager {
 	/**
 	 * Continue the most recent session, or create new if none.
 	 * @param cwd Working directory
-	 * @param sessionDir Optional session directory. If omitted, uses default (~/.pi/agent/sessions/<encoded-cwd>/).
+	 * @param sessionDir Optional session directory. If omitted, uses default (~/.phi/agent/sessions/<encoded-cwd>/).
 	 */
 	static continueRecent(cwd: string, sessionDir?: string): SessionManager {
 		const dir = sessionDir ?? getDefaultSessionDir(cwd);
@@ -1272,9 +1281,28 @@ export class SessionManager {
 	/**
 	 * List all sessions for a directory.
 	 * @param cwd Working directory (used to compute default session directory)
-	 * @param sessionDir Optional session directory. If omitted, uses default (~/.pi/agent/sessions/<encoded-cwd>/).
+	 * @param sessionDir Optional session directory. If omitted, uses default (~/.phi/agent/sessions/<encoded-cwd>/).
 	 * @param onProgress Optional callback for progress updates (loaded, total)
 	 */
+	/**
+	 * Read the session header from a JSONL file without loading the full session.
+	 */
+	static peekHeader(filePath: string): SessionHeader | null {
+		try {
+			const fd = openSync(filePath, "r");
+			const buffer = Buffer.alloc(4096);
+			const bytesRead = readSync(fd, buffer, 0, 4096, 0);
+			closeSync(fd);
+			const firstLine = buffer.toString("utf8", 0, bytesRead).split("\n")[0];
+			if (!firstLine) return null;
+			const header = JSON.parse(firstLine);
+			if (header.type !== "session") return null;
+			return header as SessionHeader;
+		} catch {
+			return null;
+		}
+	}
+
 	static async list(cwd: string, sessionDir?: string, onProgress?: SessionListProgress): Promise<SessionInfo[]> {
 		const dir = sessionDir ?? getDefaultSessionDir(cwd);
 		const sessions = await listSessionsFromDir(dir, onProgress);

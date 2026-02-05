@@ -6,8 +6,6 @@ export {
 	createBashTool,
 } from "./bash.js";
 export { createEditTool, type EditOperations, type EditToolDetails, type EditToolOptions, editTool } from "./edit.js";
-export { createFindTool, type FindOperations, type FindToolDetails, type FindToolOptions, findTool } from "./find.js";
-export { createGrepTool, type GrepOperations, type GrepToolDetails, type GrepToolOptions, grepTool } from "./grep.js";
 export { createLsTool, type LsOperations, type LsToolDetails, type LsToolOptions, lsTool } from "./ls.js";
 export {
 	createReadTool,
@@ -31,8 +29,6 @@ export { createWriteTool, type WriteOperations, type WriteToolOptions, writeTool
 import type { AgentTool } from "agent";
 import { type BashToolOptions, bashTool, createBashTool } from "./bash.js";
 import { createEditTool, editTool } from "./edit.js";
-import { createFindTool, findTool } from "./find.js";
-import { createGrepTool, grepTool } from "./grep.js";
 import { createLsTool, lsTool } from "./ls.js";
 import { createReadTool, type ReadToolOptions, readTool } from "./read.js";
 import { createWriteTool, writeTool } from "./write.js";
@@ -44,7 +40,7 @@ export type Tool = AgentTool<any>;
 export const codingTools: Tool[] = [readTool, bashTool, editTool, writeTool];
 
 // Read-only tools for exploration without modification (using process.cwd())
-export const readOnlyTools: Tool[] = [readTool, grepTool, findTool, lsTool];
+export const readOnlyTools: Tool[] = [readTool, lsTool];
 
 // All available tools (using process.cwd())
 export const allTools = {
@@ -52,8 +48,6 @@ export const allTools = {
 	bash: bashTool,
 	edit: editTool,
 	write: writeTool,
-	grep: grepTool,
-	find: findTool,
 	ls: lsTool,
 };
 
@@ -82,7 +76,7 @@ export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
  * Create read-only tools configured for a specific working directory.
  */
 export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[] {
-	return [createReadTool(cwd, options?.read), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd)];
+	return [createReadTool(cwd, options?.read), createLsTool(cwd)];
 }
 
 /**
@@ -94,8 +88,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		bash: createBashTool(cwd, options?.bash),
 		edit: createEditTool(cwd),
 		write: createWriteTool(cwd),
-		grep: createGrepTool(cwd),
-		find: createFindTool(cwd),
 		ls: createLsTool(cwd),
 	};
 }

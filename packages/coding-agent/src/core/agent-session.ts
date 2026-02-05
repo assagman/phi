@@ -20,6 +20,7 @@ import { isContextOverflow, modelsAreEqual, supportsXhigh } from "ai";
 import { getAuthPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
+import { sessionLog } from "../utils/logger.js";
 import { type BashResult, executeBash as executeBashCommand, executeBashWithOperations } from "./bash-executor.js";
 import {
 	type CompactionResult,
@@ -31,6 +32,8 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.js";
+
+import { analyzeContext, type ContextBreakdown, formatContextBreakdown } from "./context-analyzer.js";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.js";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.js";
 import type {
@@ -64,7 +67,13 @@ export type AgentSessionEvent =
 			willRetry: boolean;
 			errorMessage?: string;
 	  }
-	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
+	| {
+			type: "auto_retry_start";
+			attempt: number;
+			maxAttempts: number;
+			delayMs: number;
+			errorMessage: string;
+	  }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
 
 /** Listener function for agent session events */
@@ -97,7 +106,7 @@ export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
-	/** Models to cycle through with Ctrl+P (from --models flag) */
+	/** Models to cycle through (from --models flag) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel: ThinkingLevel }>;
 	/** File-based prompt templates for expansion */
 	promptTemplates?: PromptTemplate[];
@@ -114,6 +123,8 @@ export interface AgentSessionConfig {
 	toolRegistry?: Map<string, AgentTool>;
 	/** Function to rebuild system prompt when tools change */
 	rebuildSystemPrompt?: (toolNames: string[]) => string;
+	/** Builtin tools lifecycle (delta, epsilon, sigma, handoff) */
+	builtinToolsLifecycle?: import("./builtin-tools/index.js").BuiltinToolsLifecycle;
 }
 
 /** Options for AgentSession.prompt() */
@@ -225,6 +236,11 @@ export class AgentSession {
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt: string;
 
+	// Builtin tools lifecycle (delta, epsilon, sigma, handoff)
+	private _builtinToolsLifecycle?: import("./builtin-tools/index.js").BuiltinToolsLifecycle;
+	// Cache tool args by toolCallId for use in tool_execution_end (which doesn't have args)
+	private _toolArgsCache = new Map<string, unknown>();
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -239,6 +255,17 @@ export class AgentSession {
 		this._toolRegistry = config.toolRegistry ?? new Map();
 		this._rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this._baseSystemPrompt = config.agent.state.systemPrompt;
+		this._builtinToolsLifecycle = config.builtinToolsLifecycle;
+
+		sessionLog.info("AgentSession created", {
+			sessionId: this.sessionId,
+			model: config.agent.state.model?.id,
+			toolCount: config.agent.state.tools?.length ?? 0,
+			skillCount: this._skills.length,
+		});
+
+		// Initialize builtin tools lifecycle
+		this._builtinToolsLifecycle?.onSessionStart();
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
@@ -285,7 +312,7 @@ export class AgentSession {
 			}
 		}
 
-		// Emit to extensions first
+		// Emit to extensions
 		await this._emitExtensionEvent(event);
 
 		// Notify all listeners
@@ -373,8 +400,26 @@ export class AgentSession {
 		return undefined;
 	}
 
-	/** Emit extension events based on agent events */
+	/**
+	 * Emit extension events.
+	 */
 	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
+		// Handle builtin tools lifecycle events (delta, epsilon)
+		if (this._builtinToolsLifecycle) {
+			if (event.type === "tool_execution_start") {
+				this._toolArgsCache.set(event.toolCallId, event.args);
+				this._builtinToolsLifecycle.onToolCall({ toolName: event.toolName });
+			} else if (event.type === "tool_execution_end") {
+				const cachedArgs = this._toolArgsCache.get(event.toolCallId) ?? {};
+				this._toolArgsCache.delete(event.toolCallId);
+				this._builtinToolsLifecycle.onToolResult({
+					toolName: event.toolName,
+					input: cachedArgs,
+					content: event.result?.content ?? [],
+				});
+			}
+		}
+
 		if (!this._extensionRunner) return;
 
 		if (event.type === "agent_start") {
@@ -491,11 +536,9 @@ export class AgentSession {
 			if (index !== -1) {
 				this._eventListeners.splice(index, 1);
 			}
-			if (coalesceTimer) {
-				clearTimeout(coalesceTimer);
-				coalesceTimer = undefined;
-			}
-			pending.clear();
+			// Flush any pending coalesced events before unsubscribing
+			// to ensure final streaming chunks are not lost.
+			flushPending();
 		};
 	}
 
@@ -527,6 +570,8 @@ export class AgentSession {
 	dispose(): void {
 		this._disconnectFromAgent();
 		this._eventListeners = [];
+		// Shutdown builtin tools (closes databases)
+		this._builtinToolsLifecycle?.onSessionShutdown();
 	}
 
 	// =========================================================================
@@ -574,6 +619,13 @@ export class AgentSession {
 			name: t.name,
 			description: t.description,
 		}));
+	}
+
+	/**
+	 * Get all registered tools (full AgentTool objects).
+	 */
+	getRegisteredTools(): AgentTool[] {
+		return Array.from(this._toolRegistry.values());
 	}
 
 	/**
@@ -767,12 +819,30 @@ export class AgentSession {
 		}
 		this._pendingNextTurnMessages = [];
 
+		// Apply builtin tools system prompt modifications (delta memory, epsilon tasks, sigma)
+		let currentSystemPrompt = this._baseSystemPrompt;
+		if (this._builtinToolsLifecycle) {
+			const builtinResult = this._builtinToolsLifecycle.onBeforeAgentStart(currentSystemPrompt);
+			currentSystemPrompt = builtinResult.systemPrompt;
+			// Add builtin tool's custom message (delta welcome or nudge)
+			if (builtinResult.message) {
+				messages.push({
+					role: "custom",
+					customType: builtinResult.message.customType,
+					content: builtinResult.message.content,
+					display: builtinResult.message.display,
+					details: undefined,
+					timestamp: Date.now(),
+				});
+			}
+		}
+
 		// Emit before_agent_start extension event
 		if (this._extensionRunner) {
 			const result = await this._extensionRunner.emitBeforeAgentStart(
 				expandedText,
 				currentImages,
-				this._baseSystemPrompt,
+				currentSystemPrompt,
 			);
 			// Add all custom messages from extensions
 			if (result?.messages) {
@@ -787,13 +857,16 @@ export class AgentSession {
 					});
 				}
 			}
-			// Apply extension-modified system prompt, or reset to base
+			// Apply extension-modified system prompt, or reset to builtin-modified base
 			if (result?.systemPrompt) {
 				this.agent.setSystemPrompt(result.systemPrompt);
 			} else {
-				// Ensure we're using the base prompt (in case previous turn had modifications)
-				this.agent.setSystemPrompt(this._baseSystemPrompt);
+				// Use the builtin-modified prompt
+				this.agent.setSystemPrompt(currentSystemPrompt);
 			}
+		} else if (this._builtinToolsLifecycle) {
+			// No extensions but have builtin tools - apply their system prompt
+			this.agent.setSystemPrompt(currentSystemPrompt);
 		}
 
 		await this.agent.prompt(messages);
@@ -2371,6 +2444,34 @@ export class AgentSession {
 			trailingTokens: estimate.trailingTokens,
 			lastUsageIndex: estimate.lastUsageIndex,
 		};
+	}
+
+	/**
+	 * Analyze context token usage with per-category breakdown and reduction suggestions.
+	 * Returns undefined if no model is selected.
+	 */
+	getContextBreakdown(): ContextBreakdown | undefined {
+		const model = this.model;
+		if (!model) return undefined;
+
+		return analyzeContext({
+			systemPrompt: this.agent.state.systemPrompt,
+			tools: this.agent.state.tools,
+			messages: this.messages,
+			contextWindow: model.contextWindow ?? 0,
+			model: model.id,
+			provider: model.provider,
+		});
+	}
+
+	/**
+	 * Get a formatted string of the context token breakdown.
+	 * Returns undefined if no model is selected.
+	 */
+	getFormattedContextBreakdown(): string | undefined {
+		const breakdown = this.getContextBreakdown();
+		if (!breakdown) return undefined;
+		return formatContextBreakdown(breakdown);
 	}
 
 	/**

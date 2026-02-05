@@ -90,7 +90,7 @@ export interface ModelsCallbacks {
 }
 
 /**
- * Component for enabling/disabling models for Ctrl+P cycling.
+ * Component for enabling/disabling scoped models.
  * Changes are session-only until explicitly persisted with Ctrl+S.
  */
 export class ScopedModelsSelectorComponent extends Container implements Focusable {

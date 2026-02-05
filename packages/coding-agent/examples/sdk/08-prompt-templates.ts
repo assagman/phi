@@ -6,7 +6,7 @@
 
 import { createAgentSession, discoverPromptTemplates, type PromptTemplate, SessionManager } from "coding-agent";
 
-// Discover templates from cwd/.pi/prompts/ and ~/.pi/agent/prompts/
+// Discover templates from cwd/.phi/prompts/ and ~/.phi/agent/prompts/
 const discovered = discoverPromptTemplates();
 console.log("Discovered prompt templates:");
 for (const template of discovered) {

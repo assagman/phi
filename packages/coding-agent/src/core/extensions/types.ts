@@ -39,13 +39,7 @@ import type {
 } from "../session-manager.js";
 import type { BashOperations } from "../tools/bash.js";
 import type { EditToolDetails } from "../tools/edit.js";
-import type {
-	BashToolDetails,
-	FindToolDetails,
-	GrepToolDetails,
-	LsToolDetails,
-	ReadToolDetails,
-} from "../tools/index.js";
+import type { BashToolDetails, LsToolDetails, ReadToolDetails } from "../tools/index.js";
 
 export type { ExecOptions, ExecResult } from "../exec.js";
 export type { AgentToolResult, AgentToolUpdateCallback };
@@ -550,16 +544,6 @@ export interface WriteToolResultEvent extends ToolResultEventBase {
 	details: undefined;
 }
 
-export interface GrepToolResultEvent extends ToolResultEventBase {
-	toolName: "grep";
-	details: GrepToolDetails | undefined;
-}
-
-export interface FindToolResultEvent extends ToolResultEventBase {
-	toolName: "find";
-	details: FindToolDetails | undefined;
-}
-
 export interface LsToolResultEvent extends ToolResultEventBase {
 	toolName: "ls";
 	details: LsToolDetails | undefined;
@@ -576,8 +560,6 @@ export type ToolResultEvent =
 	| ReadToolResultEvent
 	| EditToolResultEvent
 	| WriteToolResultEvent
-	| GrepToolResultEvent
-	| FindToolResultEvent
 	| LsToolResultEvent
 	| CustomToolResultEvent;
 
@@ -593,12 +575,6 @@ export function isEditToolResult(e: ToolResultEvent): e is EditToolResultEvent {
 }
 export function isWriteToolResult(e: ToolResultEvent): e is WriteToolResultEvent {
 	return e.toolName === "write";
-}
-export function isGrepToolResult(e: ToolResultEvent): e is GrepToolResultEvent {
-	return e.toolName === "grep";
-}
-export function isFindToolResult(e: ToolResultEvent): e is FindToolResultEvent {
-	return e.toolName === "find";
 }
 export function isLsToolResult(e: ToolResultEvent): e is LsToolResultEvent {
 	return e.toolName === "ls";

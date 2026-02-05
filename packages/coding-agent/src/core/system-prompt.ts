@@ -5,7 +5,7 @@
 import chalk from "chalk";
 import { existsSync, readFileSync } from "fs";
 import { join, resolve } from "path";
-import { getAgentDir, getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
+import { getAgentDir } from "../config.js";
 import type { SkillsSettings } from "./settings-manager.js";
 import { formatSkillsForPrompt, loadSkills, type Skill } from "./skills.js";
 import type { ToolName } from "./tools/index.js";
@@ -13,13 +13,45 @@ import type { ToolName } from "./tools/index.js";
 /** Tool descriptions for system prompt */
 const toolDescriptions: Record<ToolName, string> = {
 	read: "Read file contents",
-	bash: "Execute bash commands (ls, grep, find, etc.)",
+	bash: "Execute bash commands (ls, rg, fd, etc.)",
 	edit: "Make surgical edits to files (find exact text and replace)",
 	write: "Create or overwrite files",
-	grep: "Search file contents for patterns (respects .gitignore)",
-	find: "Find files by glob pattern (respects .gitignore)",
 	ls: "List directory contents",
 };
+
+/** Mandatory git worktree rules — injected into base system prompt */
+export const GIT_WORKTREE_RULES = `
+# MANDATORY: Git Worktree Rules
+
+These rules are non-negotiable. Violation of ANY rule requires you to STOP IMMEDIATELY and inform the user.
+
+1. **Working on main branch is PROHIBITED.** Every code task MUST be done in a separate git worktree branched from main. If \`git branch --show-current\` returns \`main\` (or the repo HEAD is on main), STOP and refuse to make changes.
+2. **Main branch must stay up-to-date.** Before creating a new worktree, always pull/fetch main to ensure it is current.
+3. **Creating a worktree from another worktree is PROHIBITED.** Always create worktrees from the bare repo root, branching from main. Never nest worktrees.
+4. **Non-git codebases are PROHIBITED.** If the working directory is not inside a git repository (\`git rev-parse --is-inside-work-tree\` fails), STOP and refuse to proceed. Git must always be initialized and in use.
+5. **Projects MUST use bare repo + worktree structure.** Other git workflows (plain clone, direct branch checkout) are PROHIBITED. If the project is not a bare repo with worktrees, STOP and inform the user.
+6. **Reject alternative approaches.** Do NOT suggest or accept workarounds that bypass these rules. If a rule is violated, do NOT continue — explain the violation and halt.`;
+
+/** Subagent delegation rules — appended last in prompt for recency bias */
+export const DELEGATION_BLOCK = `
+# MANDATORY: Agent Delegation
+
+You have access to specialized subagents via the subagent tool. You MUST delegate to them instead of doing the work yourself when the situation matches. Do NOT attempt these tasks inline. VIOLATION of these rules degrades output quality.
+
+| Agent      | When to use                                                                 | Example                                                                                          |
+|------------|-----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| committer  | Committing changes. NEVER run git commit directly.                          | subagent({ agent: "committer", task: "Commit the current session changes" })                     |
+| explorer   | You need to understand an unfamiliar codebase, module, or feature area.     | subagent({ agent: "explorer", task: "Map the auth module structure and key types" })              |
+| planner    | A task involves 3+ files or needs a step-by-step plan before coding.        | subagent({ agent: "planner", task: "Plan adding OAuth2 support to the auth module" })            |
+| reviewer   | Code changes are complete and need review before committing.                | subagent({ agent: "reviewer", task: "Review the changes in packages/ai/src/providers/" })        |
+
+Rules:
+- ALWAYS delegate commits to committer. Never run git commit yourself.
+- ALWAYS delegate to explorer when you are unfamiliar with a codebase area and need orientation before making changes.
+- ALWAYS delegate to planner when the user asks to plan, or when a task touches 3+ files and you have not yet planned.
+- ALWAYS delegate to reviewer when the user asks for review, or before committing multi-file changes.
+- You may skip explorer/planner for trivial single-file changes where you already have full context.
+- Subagents run in isolated contexts. Pass them all the context they need in the task description.`;
 
 /** Resolve input as file path or literal string */
 export function resolvePromptInput(input: string | undefined, description: string): string | undefined {
@@ -180,6 +212,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 			prompt += appendSection;
 		}
 
+		// Inject mandatory git worktree rules
+		prompt += GIT_WORKTREE_RULES;
+
 		// Append project context files
 		if (contextFiles.length > 0) {
 			prompt += "\n\n# Project Context\n\n";
@@ -195,17 +230,12 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 			prompt += formatSkillsForPrompt(skills);
 		}
 
-		// Add date/time and working directory last
+		// Add date/time and working directory
 		prompt += `\nCurrent date and time: ${dateTime}`;
 		prompt += `\nCurrent working directory: ${resolvedCwd}`;
 
 		return prompt;
 	}
-
-	// Get absolute paths to documentation and examples
-	const readmePath = getReadmePath();
-	const docsPath = getDocsPath();
-	const examplesPath = getExamplesPath();
 
 	// Build tools list based on selected tools
 	const tools = selectedTools || (["read", "bash", "edit", "write"] as ToolName[]);
@@ -217,9 +247,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	const hasBash = tools.includes("bash");
 	const hasEdit = tools.includes("edit");
 	const hasWrite = tools.includes("write");
-	const hasGrep = tools.includes("grep");
-	const hasFind = tools.includes("find");
-	const hasLs = tools.includes("ls");
 	const hasRead = tools.includes("read");
 
 	// Bash without edit/write = read-only bash mode
@@ -230,10 +257,17 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	}
 
 	// File exploration guidelines
-	if (hasBash && !hasGrep && !hasFind && !hasLs) {
-		guidelinesList.push("Use bash for file operations like ls, grep, find");
-	} else if (hasBash && (hasGrep || hasFind || hasLs)) {
-		guidelinesList.push("Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)");
+	if (hasBash) {
+		guidelinesList.push("Use bash for file operations like ls, rg, fd, sg");
+		guidelinesList.push(
+			"**ALWAYS use ast-grep (sg) for code search** — NEVER use rg/grep for searching code patterns. " +
+				"ast-grep understands code structure (AST), not just text. " +
+				"Pattern syntax: $VAR (single node), $$$ARGS (multiple nodes). " +
+				"Examples: `sg -p 'console.log($$$)'`, `sg -p 'import { $$$NAMES } from \"$MOD\"'`, " +
+				"`sg -p 'async function $NAME($$$ARGS)' -l typescript`, " +
+				"`sg -p 'try { $$$BODY } catch { $$$HANDLER }'`, `sg -p 'await $EXPR'`. " +
+				"Use rg/grep ONLY for non-code text (logs, configs, docs, comments)",
+		);
 	}
 
 	// Read before edit guideline
@@ -251,20 +285,13 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		guidelinesList.push("Use write only for new files or complete rewrites");
 	}
 
-	// Output guideline (only when actually writing/executing)
-	if (hasEdit || hasWrite) {
-		guidelinesList.push(
-			"When summarizing your actions, output plain text directly - do NOT use cat or bash to display what you did",
-		);
-	}
-
 	// Always include these
-	guidelinesList.push("Be concise in your responses");
+	guidelinesList.push("Be extremeley concise in your responses");
 	guidelinesList.push("Show file paths clearly when working with files");
 
 	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 
-	let prompt = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+	let prompt = `You are an expert coding assistant operating inside phi, a coding agent harness.
 
 Available tools:
 ${toolsList}
@@ -272,18 +299,14 @@ ${toolsList}
 In addition to the tools above, you may have access to other custom tools depending on the project.
 
 Guidelines:
-${guidelines}
-
-Pi documentation (only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
-- Main documentation: ${readmePath}
-- Additional docs: ${docsPath}
-- Examples: ${examplesPath} (extensions, custom tools, SDK)
-- When asked to create: custom models/providers (README.md), extensions (docs/extensions.md, examples/extensions/), themes (docs/theme.md), skills (docs/skills.md), TUI components (docs/tui.md - has copy-paste patterns)
-- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing`;
+${guidelines}`;
 
 	if (appendSection) {
 		prompt += appendSection;
 	}
+
+	// Inject mandatory git worktree rules
+	prompt += GIT_WORKTREE_RULES;
 
 	// Append project context files
 	if (contextFiles.length > 0) {
@@ -299,7 +322,7 @@ Pi documentation (only when the user asks about pi itself, its SDK, extensions, 
 		prompt += formatSkillsForPrompt(skills);
 	}
 
-	// Add date/time and working directory last
+	// Add date/time and working directory
 	prompt += `\nCurrent date and time: ${dateTime}`;
 	prompt += `\nCurrent working directory: ${resolvedCwd}`;
 

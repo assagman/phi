@@ -63,8 +63,8 @@ import { createCompactionSummaryMessage } from "../../core/messages.js";
 import { resolveModelScope } from "../../core/model-resolver.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { loadProjectContextFiles } from "../../core/system-prompt.js";
+import { ToolExecutionStorage } from "../../core/tool-execution-storage.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
-
 import { copyToClipboard } from "../../utils/clipboard.js";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.js";
 import { ensureTool } from "../../utils/tools-manager.js";
@@ -88,7 +88,8 @@ import { OAuthSelectorComponent } from "./components/oauth-selector.js";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.js";
 import { SessionSelectorComponent } from "./components/session-selector.js";
 import { SettingsSelectorComponent } from "./components/settings-selector.js";
-import { ToolExecutionComponent } from "./components/tool-execution.js";
+import { ToolExecutionComponent, type ToolResult } from "./components/tool-execution.js";
+import { ToolHistorySelectorComponent } from "./components/tool-history-selector.js";
 import { TreeSelectorComponent } from "./components/tree-selector.js";
 import { UserMessageComponent } from "./components/user-message.js";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.js";
@@ -105,15 +106,6 @@ import {
 	Theme,
 	theme,
 } from "./theme/theme.js";
-
-/** Interface for components that can be expanded/collapsed */
-interface Expandable {
-	setExpanded(expanded: boolean): void;
-}
-
-function isExpandable(obj: unknown): obj is Expandable {
-	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
-}
 
 type CompactionQueuedMessage = {
 	text: string;
@@ -134,6 +126,8 @@ export interface InteractiveModeOptions {
 	initialImages?: ImageContent[];
 	/** Additional messages to send after the initial message */
 	initialMessages?: string[];
+	/** Builtin tools lifecycle for UI context setup */
+	builtinToolsLifecycle?: import("../../core/builtin-tools/index.js").BuiltinToolsLifecycle;
 }
 
 export class InteractiveMode {
@@ -169,6 +163,9 @@ export class InteractiveMode {
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 
+	// Tool execution storage (SQLite-backed history)
+	private toolExecutionStorage: ToolExecutionStorage | undefined = undefined;
+
 	// Tool output expansion state
 	private toolOutputExpanded = false;
 
@@ -201,9 +198,6 @@ export class InteractiveMode {
 	private retryLoader: Loader | undefined = undefined;
 	private retryEscapeHandler?: () => void;
 
-	// Rainbow border animation state (time-based, no separate timer)
-	private rainbowBorderStartTime: number | undefined = undefined;
-
 	// Messages queued while compaction is running
 	private compactionQueuedMessages: CompactionQueuedMessage[] = [];
 
@@ -217,6 +211,9 @@ export class InteractiveMode {
 	private extensionInputOverlay: OverlayHandle | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionEditorOverlay: OverlayHandle | undefined = undefined;
+
+	// Tool history popup overlay
+	private toolHistoryOverlay: OverlayHandle | undefined = undefined;
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -280,6 +277,27 @@ export class InteractiveMode {
 
 		// Initialize theme with watcher for interactive mode
 		initTheme(this.settingsManager.getTheme(), true);
+
+		// Initialize tool execution storage for history
+		this.toolExecutionStorage = new ToolExecutionStorage(session.sessionId);
+
+		// Populate builtin tools UI context (sigma, handoff need UI access)
+		if (options.builtinToolsLifecycle) {
+			const lifecycle = options.builtinToolsLifecycle;
+			lifecycle.ui.hasUI = true;
+			lifecycle.ui.custom = (factory, opts) => this.showExtensionCustom(factory, opts);
+			lifecycle.ui.editor = (title, prefill) => this.showExtensionEditor(title, prefill);
+
+			// Populate handoff context (createNewSession, setEditorText, sendMessage)
+			lifecycle.handoff.createNewSession = async (opts) => {
+				const success = await this.session.newSession({ parentSession: opts?.parentSession });
+				return { cancelled: !success };
+			};
+			lifecycle.handoff.setEditorText = (text) => this.editor.setText(text);
+			lifecycle.handoff.sendMessage = async (text) => {
+				await this.session.sendUserMessage(text);
+			};
+		}
 	}
 
 	private setupAutocomplete(fdPath: string | undefined): void {
@@ -317,7 +335,7 @@ export class InteractiveMode {
 					}));
 				},
 			},
-			{ name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },
+			{ name: "scoped-models", description: "Enable/disable scoped models" },
 			{ name: "export", description: "Export session to HTML file" },
 			{ name: "share", description: "Share session as a secret GitHub gist" },
 			{ name: "copy", description: "Copy last agent message to clipboard" },
@@ -330,7 +348,10 @@ export class InteractiveMode {
 			{ name: "logout", description: "Logout from OAuth provider" },
 			{ name: "new", description: "Start a new session" },
 			{ name: "compact", description: "Manually compact the session context" },
+			{ name: "context", description: "Show context token usage breakdown" },
 			{ name: "resume", description: "Resume a different session" },
+			{ name: "handoff", description: "Transfer context to a new focused session" },
+			{ name: "parent", description: "Switch to parent session (from handoff)" },
 		];
 
 		// Convert prompt templates to SlashCommand format for autocomplete
@@ -404,6 +425,9 @@ export class InteractiveMode {
 			} catch {
 				// Silently ignore clipboard errors
 			}
+		};
+		this.ui.onSelectionCopied = () => {
+			this.showCopiedToast();
 		};
 
 		// Create status area (holds widgets, loading indicators, pending messages between chat and input)
@@ -770,15 +794,6 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Get a registered tool definition by name (for custom rendering).
-	 */
-	private getRegisteredToolDefinition(toolName: string) {
-		const tools = this.session.extensionRunner?.getAllRegisteredTools() ?? [];
-		const registeredTool = tools.find((t) => t.definition.name === toolName);
-		return registeredTool?.definition;
-	}
-
-	/**
 	 * Set up keyboard shortcuts registered by extensions.
 	 */
 	private setupExtensionShortcuts(extensionRunner: ExtensionRunner): void {
@@ -1067,6 +1082,8 @@ export class InteractiveMode {
 				anchor: "center",
 				width: "80%",
 				maxHeight: "70%",
+				dimBackground: true,
+				border: true,
 			});
 			this.ui.setFocus(this.extensionSelector);
 			this.ui.requestRender();
@@ -1138,6 +1155,8 @@ export class InteractiveMode {
 				anchor: "center",
 				width: "80%",
 				maxHeight: "70%",
+				dimBackground: true,
+				border: true,
 			});
 			this.ui.setFocus(this.extensionInput);
 			this.ui.requestRender();
@@ -1181,6 +1200,8 @@ export class InteractiveMode {
 				anchor: "center",
 				width: "80%",
 				maxHeight: "70%",
+				dimBackground: true,
+				border: true,
 			});
 			this.ui.setFocus(this.extensionEditor);
 			this.ui.requestRender();
@@ -1313,7 +1334,8 @@ export class InteractiveMode {
 								typeof options.overlayOptions === "function"
 									? options.overlayOptions()
 									: options.overlayOptions;
-							return opts;
+							// Allow extension to control dimming, default to true
+							return { dimBackground: true, border: true, ...opts };
 						}
 						// Default: centered overlay with sensible defaults
 						const w = (component as { width?: number }).width;
@@ -1321,6 +1343,8 @@ export class InteractiveMode {
 							anchor: "center",
 							width: w ?? "80%",
 							maxHeight: "70%",
+							dimBackground: true,
+							border: true,
 						};
 					};
 					overlayHandle = this.ui.showOverlay(component, resolveOptions());
@@ -1394,13 +1418,10 @@ export class InteractiveMode {
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
 		this.defaultEditor.onAction("suspend", () => this.handleCtrlZ());
 		this.defaultEditor.onAction("cycleThinkingLevel", () => this.cycleThinkingLevel());
-		this.defaultEditor.onAction("cycleModelForward", () => this.cycleModel("forward"));
-		this.defaultEditor.onAction("cycleModelBackward", () => this.cycleModel("backward"));
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
-		this.defaultEditor.onAction("selectModel", () => this.showModelSelector());
-		this.defaultEditor.onAction("expandTools", () => this.toggleToolOutputExpansion());
+		this.defaultEditor.onAction("expandTools", () => this.showToolHistory());
 		this.defaultEditor.onAction("toggleThinking", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("externalEditor", () => this.openExternalEditor());
 		this.defaultEditor.onAction("followUp", () => this.handleFollowUp());
@@ -1533,6 +1554,11 @@ export class InteractiveMode {
 				await this.handleCompactCommand(customInstructions);
 				return;
 			}
+			if (text === "/context") {
+				this.handleContextCommand();
+				this.editor.setText("");
+				return;
+			}
 			if (text === "/debug") {
 				this.handleDebugCommand();
 				this.editor.setText("");
@@ -1546,6 +1572,17 @@ export class InteractiveMode {
 			if (text === "/resume") {
 				this.showSessionSelector();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/handoff" || text.startsWith("/handoff ")) {
+				const arg = text.startsWith("/handoff ") ? text.slice(9).trim() : undefined;
+				this.editor.setText("");
+				await this.handleHandoffCommand(arg);
+				return;
+			}
+			if (text === "/parent") {
+				this.editor.setText("");
+				await this.handleParentCommand();
 				return;
 			}
 			if (text === "/quit" || text === "/exit") {
@@ -1642,8 +1679,6 @@ export class InteractiveMode {
 					this.defaultWorkingMessage,
 				);
 				this.statusContainer.addChild(this.loadingAnimation);
-				// Start rainbow border animation while working
-				this.startRainbowBorder();
 				this.ui.requestRender();
 				break;
 
@@ -1677,14 +1712,8 @@ export class InteractiveMode {
 						if (content.type === "toolCall") {
 							if (!this.pendingTools.has(content.id)) {
 								this.addToChat(new Text("", 0, 0));
-								const component = new ToolExecutionComponent(
-									content.name,
-									content.arguments,
-									{
-										showImages: this.settingsManager.getShowImages(),
-									},
-									this.getRegisteredToolDefinition(content.name),
-									this.ui,
+								const component = new ToolExecutionComponent(content.name, content.arguments, this.ui, () =>
+									this.scrollableViewport.invalidateItemCache(component),
 								);
 								component.setExpanded(this.toolOutputExpanded);
 								this.addToChat(component);
@@ -1745,25 +1774,23 @@ export class InteractiveMode {
 				break;
 
 			case "tool_execution_start": {
+				// Standard tool handling
 				if (!this.pendingTools.has(event.toolCallId)) {
-					const component = new ToolExecutionComponent(
-						event.toolName,
-						event.args,
-						{
-							showImages: this.settingsManager.getShowImages(),
-						},
-						this.getRegisteredToolDefinition(event.toolName),
-						this.ui,
+					const component = new ToolExecutionComponent(event.toolName, event.args, this.ui, () =>
+						this.scrollableViewport.invalidateItemCache(component),
 					);
 					component.setExpanded(this.toolOutputExpanded);
 					this.addToChat(component);
 					this.pendingTools.set(event.toolCallId, component);
+					// Track start time for duration calculation
+					this.toolExecutionStorage?.startExecution(event.toolCallId);
 					this.ui.requestRender();
 				}
 				break;
 			}
 
 			case "tool_execution_update": {
+				// Standard tool update handling
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.partialResult, isError: false }, true);
@@ -1775,18 +1802,29 @@ export class InteractiveMode {
 			}
 
 			case "tool_execution_end": {
+				// Standard tool end handling
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.result, isError: event.isError });
+					// Force-expand output for commands with displayHints.forceExpand (e.g., phi_delta, phi_epsilon)
+					if (!event.isError && event.result?.details?.displayHints?.forceExpand) {
+						component.setExpanded(true);
+					}
 					this.pendingTools.delete(event.toolCallId);
+					// Record execution to storage for history popup
+					this.toolExecutionStorage?.recordExecution({
+						toolCallId: event.toolCallId,
+						toolName: event.toolName,
+						args: component.getArgs(),
+						resultContent: event.result.content ?? [],
+						isError: event.isError,
+					});
 					this.ui.requestRender();
 				}
 				break;
 			}
 
 			case "agent_end":
-				// Stop rainbow border animation
-				this.stopRainbowBorder();
 				if (this.loadingAnimation) {
 					this.loadingAnimation.stop();
 					this.loadingAnimation = undefined;
@@ -1940,6 +1978,21 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	/** Show a brief "Copied!" toast that auto-dismisses */
+	private showCopiedToast(): void {
+		const label = ` ✓ Copied `;
+		const text = new Text(theme.fg("success", label), 0, 0);
+		const handle = this.ui.showOverlay(text, {
+			anchor: "top-right",
+			offsetX: -3,
+			offsetY: 1,
+		});
+		setTimeout(() => {
+			handle.hide();
+			this.ui.requestRender();
+		}, 800);
+	}
+
 	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
 		switch (message.role) {
 			case "bashExecution": {
@@ -2031,12 +2084,8 @@ export class InteractiveMode {
 				// Render tool call components
 				for (const content of message.content) {
 					if (content.type === "toolCall") {
-						const component = new ToolExecutionComponent(
-							content.name,
-							content.arguments,
-							{ showImages: this.settingsManager.getShowImages() },
-							this.getRegisteredToolDefinition(content.name),
-							this.ui,
+						const component = new ToolExecutionComponent(content.name, content.arguments, this.ui, () =>
+							this.scrollableViewport.invalidateItemCache(component),
 						);
 						component.setExpanded(this.toolOutputExpanded);
 						this.addToChat(component);
@@ -2062,7 +2111,13 @@ export class InteractiveMode {
 				// Match tool results to pending tool components
 				const component = this.pendingTools.get(message.toolCallId);
 				if (component) {
-					component.updateResult(message);
+					// Type-safe conversion from ToolResultMessage to ToolResult (#178)
+					const toolResult: ToolResult = {
+						content: message.content,
+						isError: message.isError,
+						details: message.details as ToolResult["details"],
+					};
+					component.updateResult(toolResult);
 					this.pendingTools.delete(message.toolCallId);
 				}
 			} else {
@@ -2284,60 +2339,6 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	// Rainbow border animation colors (8 hues across spectrum)
-	private static readonly RAINBOW_COLORS: [number, number, number][] = [
-		[255, 107, 107], // red
-		[255, 159, 67], // orange
-		[255, 217, 61], // yellow
-		[111, 207, 151], // green
-		[72, 219, 251], // cyan
-		[108, 137, 227], // blue
-		[156, 109, 217], // purple
-		[243, 104, 185], // pink
-	];
-
-	private getRainbowColor(position: number): [number, number, number] {
-		const colors = InteractiveMode.RAINBOW_COLORS;
-		const scaled = position * colors.length;
-		const index = Math.floor(scaled) % colors.length;
-		const nextIndex = (index + 1) % colors.length;
-		const t = scaled - Math.floor(scaled);
-		// Linear interpolation between adjacent colors
-		const c1 = colors[index]!;
-		const c2 = colors[nextIndex]!;
-		return [
-			Math.round(c1[0] + (c2[0] - c1[0]) * t),
-			Math.round(c1[1] + (c2[1] - c1[1]) * t),
-			Math.round(c1[2] + (c2[2] - c1[2]) * t),
-		];
-	}
-
-	private startRainbowBorder(): void {
-		if (this.rainbowBorderStartTime !== undefined) return;
-
-		this.rainbowBorderStartTime = Date.now();
-		// Set borderColor to a function that calculates color based on elapsed time
-		// This piggybacks on existing Loader animation (80ms) - no extra timer needed
-		this.editor.borderColor = (str: string) => {
-			if (this.rainbowBorderStartTime === undefined) {
-				return str; // Fallback if stopped mid-render
-			}
-			const elapsed = Date.now() - this.rainbowBorderStartTime;
-			// 4 second cycle
-			const position = (elapsed % 4000) / 4000;
-			const [r, g, b] = this.getRainbowColor(position);
-			const colorCode = `\x1b[38;2;${r};${g};${b}m`;
-			const resetFg = "\x1b[39m";
-			return colorCode + str + resetFg;
-		};
-	}
-
-	private stopRainbowBorder(): void {
-		this.rainbowBorderStartTime = undefined;
-		// Restore normal border color based on current mode
-		this.updateEditorBorderColor();
-	}
-
 	private cycleThinkingLevel(): void {
 		const newLevel = this.session.cycleThinkingLevel();
 		if (newLevel === undefined) {
@@ -2348,32 +2349,41 @@ export class InteractiveMode {
 		}
 	}
 
-	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
-		try {
-			const result = await this.session.cycleModel(direction);
-			if (result === undefined) {
-				const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
-				this.showStatus(msg);
-			} else {
-				this.footer.invalidate();
-				this.updateEditorBorderColor();
-				const thinkingStr =
-					result.model.reasoning && result.thinkingLevel !== "off" ? ` (thinking: ${result.thinkingLevel})` : "";
-				this.showStatus(`Switched to ${result.model.name || result.model.id}${thinkingStr}`);
-			}
-		} catch (error) {
-			this.showError(error instanceof Error ? error.message : String(error));
+	private showToolHistory(): void {
+		if (!this.toolExecutionStorage) {
+			this.showWarning("Tool history not available");
+			return;
 		}
+
+		const count = this.toolExecutionStorage.getCount();
+		if (count === 0) {
+			this.showStatus("No tool executions recorded yet");
+			return;
+		}
+
+		const selector = new ToolHistorySelectorComponent(this.toolExecutionStorage);
+		selector.onCancel = () => {
+			this.hideToolHistory();
+		};
+		selector.onCopy = (text) => {
+			copyToClipboard(text);
+			this.showStatus("Copied to clipboard");
+		};
+
+		this.toolHistoryOverlay = this.ui.showOverlay(selector, {
+			anchor: "center",
+			width: "90%",
+			maxHeight: "80%",
+			dimBackground: true,
+			border: true,
+		});
+		this.ui.setFocus(selector);
 	}
 
-	private toggleToolOutputExpansion(): void {
-		this.toolOutputExpanded = !this.toolOutputExpanded;
-		for (const child of this.scrollableViewport.getItems()) {
-			if (isExpandable(child)) {
-				child.setExpanded(this.toolOutputExpanded);
-			}
-		}
-		this.ui.requestRender();
+	private hideToolHistory(): void {
+		this.toolHistoryOverlay?.hide();
+		this.toolHistoryOverlay = undefined;
+		this.ui.setFocus(this.editor);
 	}
 
 	private toggleThinkingBlockVisibility(): void {
@@ -2403,7 +2413,7 @@ export class InteractiveMode {
 		}
 
 		const currentText = this.editor.getExpandedText?.() ?? this.editor.getText();
-		const tmpFile = path.join(os.tmpdir(), `pi-editor-${Date.now()}.pi.md`);
+		const tmpFile = path.join(os.tmpdir(), `phi-editor-${Date.now()}.md`);
 
 		try {
 			// Write current content to temp file
@@ -2641,6 +2651,8 @@ export class InteractiveMode {
 			anchor: "center",
 			width: "80%",
 			maxHeight: "70%",
+			dimBackground: true,
+			border: true,
 		});
 
 		this.ui.setFocus(focus);
@@ -3235,6 +3247,8 @@ export class InteractiveMode {
 			anchor: "center",
 			width: "80%",
 			maxHeight: "70%",
+			dimBackground: true,
+			border: true,
 		});
 		this.ui.setFocus(dialog);
 		this.ui.requestRender();
@@ -3352,6 +3366,8 @@ export class InteractiveMode {
 			anchor: "center",
 			width: "60%",
 			maxHeight: "30%",
+			dimBackground: true,
+			border: true,
 		});
 		this.ui.setFocus(loader);
 		this.ui.requestRender();
@@ -3492,6 +3508,17 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private handleContextCommand(): void {
+		const formatted = this.session.getFormattedContextBreakdown();
+		if (!formatted) {
+			this.showWarning("No model selected. Use /model to select a model first.");
+			return;
+		}
+		this.addToChat(new Spacer(1));
+		this.addToChat(new Text(formatted, 1, 0));
+		this.ui.requestRender();
+	}
+
 	/**
 	 * Capitalize keybinding for display (e.g., "ctrl+c" -> "Ctrl+C").
 	 */
@@ -3546,7 +3573,6 @@ export class InteractiveMode {
 		const exit = this.getAppKeyDisplay("exit");
 		const suspend = this.getAppKeyDisplay("suspend");
 		const cycleThinkingLevel = this.getAppKeyDisplay("cycleThinkingLevel");
-		const cycleModelForward = this.getAppKeyDisplay("cycleModelForward");
 		const expandTools = this.getAppKeyDisplay("expandTools");
 		const toggleThinking = this.getAppKeyDisplay("toggleThinking");
 		const externalEditor = this.getAppKeyDisplay("externalEditor");
@@ -3584,8 +3610,7 @@ export class InteractiveMode {
 | \`${exit}\` | Exit (when editor is empty) |
 | \`${suspend}\` | Suspend to background |
 | \`${cycleThinkingLevel}\` | Cycle thinking level |
-| \`${cycleModelForward}\` | Cycle models |
-| \`${expandTools}\` | Toggle tool output expansion |
+| \`${expandTools}\` | Show tool history |
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${followUp}\` | Queue follow-up message |
@@ -3841,6 +3866,108 @@ export class InteractiveMode {
 		return result;
 	}
 
+	/**
+	 * Handle /parent command - switch to the parent session (from handoff).
+	 */
+	private async handleParentCommand(): Promise<void> {
+		if (this.session.isStreaming) {
+			this.showWarning("Cannot switch sessions while agent is working. Press Esc to interrupt first.");
+			return;
+		}
+
+		const parentSession = this.session.sessionManager.getParentSession();
+		if (!parentSession) {
+			this.showError("No parent session. This session was not created via handoff.");
+			return;
+		}
+
+		// Peek the parent header — also validates the file exists and is valid
+		const parentHeader = SessionManager.peekHeader(parentSession);
+		if (!parentHeader) {
+			this.showError(`Parent session file not found or invalid: ${parentSession}`);
+			return;
+		}
+
+		// Warn if parent session has a different cwd
+		const currentCwd = this.session.sessionManager.getCwd();
+		if (parentHeader.cwd !== currentCwd) {
+			this.showWarning(`Parent session was in a different directory: ${parentHeader.cwd}`);
+		}
+
+		await this.handleResumeSession(parentSession);
+		this.showStatus("Switched to parent session");
+	}
+
+	/**
+	 * Handle /handoff command - transfer context to a new focused session.
+	 */
+	private async handleHandoffCommand(goal?: string): Promise<void> {
+		const model = this.session.model;
+		if (!model) {
+			this.showError("No model configured. Use /model to select a model first.");
+			return;
+		}
+
+		// Get goal from argument or prompt
+		let userGoal = goal;
+		if (!userGoal) {
+			userGoal = await this.showExtensionInput(
+				"What's the goal for the new session?",
+				"e.g., Implement the API changes we discussed",
+			);
+			if (!userGoal) return;
+		}
+
+		// Import HandoffCommand dynamically to avoid circular imports
+		const { HandoffCommand } = await import("../../core/builtin-tools/handoff/index.js");
+
+		// Import utilities for unified serialization
+		const { serializeConversation } = await import("../../core/compaction/utils.js");
+		const { convertToLlm } = await import("../../core/messages.js");
+		const { createFileOps, extractFileOpsFromMessage, computeFileLists } = await import(
+			"../../core/compaction/utils.js"
+		);
+
+		await HandoffCommand.handler(userGoal, {
+			hasUI: true,
+			getModel: () => this.session.model,
+			getApiKey: async (m) => {
+				const key = await this.session.modelRegistry.getApiKey(m);
+				if (!key) throw new Error(`No API key for ${m.provider}`);
+				return key;
+			},
+			getConversationText: () => {
+				const llmMessages = convertToLlm(this.session.messages);
+				return serializeConversation(llmMessages);
+			},
+			getFileOperations: () => {
+				const fileOps = createFileOps();
+				for (const msg of this.session.messages) {
+					extractFileOpsFromMessage(msg, fileOps);
+				}
+				return computeFileLists(fileOps);
+			},
+			getCurrentSessionFile: () => this.session.sessionManager.getSessionFile(),
+			createNewSession: async (opts) => {
+				const success = await this.session.newSession({ parentSession: opts?.parentSession });
+				return { cancelled: !success };
+			},
+			setEditorText: (text) => this.editor.setText(text),
+			notify: (message, type) => {
+				if (type === "error") {
+					this.showError(message);
+				} else if (type === "warning") {
+					this.showWarning(message);
+				} else {
+					this.showStatus(message);
+				}
+			},
+			showCustomUI: <T>(factory: Parameters<typeof this.showExtensionCustom<T>>[0], options?: unknown) =>
+				this.showExtensionCustom<T>(factory, options as Parameters<typeof this.showExtensionCustom>[1]),
+			showEditor: (title, initialValue) => this.showExtensionEditor(title, initialValue),
+		});
+	}
+
 	stop(): void {
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
@@ -3852,6 +3979,7 @@ export class InteractiveMode {
 		}
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
+		this.toolExecutionStorage?.close();
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}

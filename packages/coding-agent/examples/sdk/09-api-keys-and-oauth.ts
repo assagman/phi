@@ -13,8 +13,8 @@ import {
 	SessionManager,
 } from "coding-agent";
 
-// Default: discoverAuthStorage() uses ~/.pi/agent/auth.json
-// discoverModels() loads built-in + custom models from ~/.pi/agent/models.json
+// Default: discoverAuthStorage() uses ~/.phi/agent/auth.json
+// discoverModels() loads built-in + custom models from ~/.phi/agent/models.json
 const authStorage = discoverAuthStorage();
 const modelRegistry = discoverModels(authStorage);
 
