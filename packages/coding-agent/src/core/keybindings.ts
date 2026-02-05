@@ -30,6 +30,7 @@ export type AppAction =
 	| "scrollDown"
 	| "scrollPageUp"
 	| "scrollPageDown"
+	| "modelSelector"
 	| "scrollToTop"
 	| "scrollToBottom";
 
@@ -60,6 +61,7 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	followUp: "alt+enter",
 	dequeue: "alt+up",
 	pasteImage: "ctrl+v",
+	modelSelector: "ctrl+s",
 	scrollUp: "shift+up",
 	scrollDown: "shift+down",
 	scrollPageUp: "pageUp",
@@ -89,6 +91,7 @@ const APP_ACTIONS: AppAction[] = [
 	"followUp",
 	"dequeue",
 	"pasteImage",
+	"modelSelector",
 	"scrollUp",
 	"scrollDown",
 	"scrollPageUp",

@@ -1425,6 +1425,7 @@ export class InteractiveMode {
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
+		this.defaultEditor.onAction("modelSelector", () => this.showModelSelector());
 		this.defaultEditor.onAction("expandTools", () => this.showToolHistory());
 		this.defaultEditor.onAction("toggleThinking", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("externalEditor", () => this.openExternalEditor());
