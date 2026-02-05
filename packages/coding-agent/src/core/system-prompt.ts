@@ -19,6 +19,19 @@ const toolDescriptions: Record<ToolName, string> = {
 	ls: "List directory contents",
 };
 
+/** Mandatory git worktree rules — injected into base system prompt */
+export const GIT_WORKTREE_RULES = `
+# MANDATORY: Git Worktree Rules
+
+These rules are non-negotiable. Violation of ANY rule requires you to STOP IMMEDIATELY and inform the user.
+
+1. **Working on main branch is PROHIBITED.** Every code task MUST be done in a separate git worktree branched from main. If \`git branch --show-current\` returns \`main\` (or the repo HEAD is on main), STOP and refuse to make changes.
+2. **Main branch must stay up-to-date.** Before creating a new worktree, always pull/fetch main to ensure it is current.
+3. **Creating a worktree from another worktree is PROHIBITED.** Always create worktrees from the bare repo root, branching from main. Never nest worktrees.
+4. **Non-git codebases are PROHIBITED.** If the working directory is not inside a git repository (\`git rev-parse --is-inside-work-tree\` fails), STOP and refuse to proceed. Git must always be initialized and in use.
+5. **Projects MUST use bare repo + worktree structure.** Other git workflows (plain clone, direct branch checkout) are PROHIBITED. If the project is not a bare repo with worktrees, STOP and inform the user.
+6. **Reject alternative approaches.** Do NOT suggest or accept workarounds that bypass these rules. If a rule is violated, do NOT continue — explain the violation and halt.`;
+
 /** Subagent delegation rules — appended last in prompt for recency bias */
 export const DELEGATION_BLOCK = `
 # MANDATORY: Agent Delegation
@@ -199,6 +212,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 			prompt += appendSection;
 		}
 
+		// Inject mandatory git worktree rules
+		prompt += GIT_WORKTREE_RULES;
+
 		// Append project context files
 		if (contextFiles.length > 0) {
 			prompt += "\n\n# Project Context\n\n";
@@ -288,6 +304,9 @@ ${guidelines}`;
 	if (appendSection) {
 		prompt += appendSection;
 	}
+
+	// Inject mandatory git worktree rules
+	prompt += GIT_WORKTREE_RULES;
 
 	// Append project context files
 	if (contextFiles.length > 0) {
