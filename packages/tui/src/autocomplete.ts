@@ -120,6 +120,12 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		this.gitRoot = findGitRoot(basePath);
 	}
 
+	/** Update the base path and re-discover git root. Used when cwd changes. */
+	setCwd(newCwd: string): void {
+		this.basePath = newCwd;
+		this.gitRoot = findGitRoot(newCwd);
+	}
+
 	getSuggestions(
 		lines: string[],
 		cursorLine: number,

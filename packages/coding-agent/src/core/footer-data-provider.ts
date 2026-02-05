@@ -85,6 +85,16 @@ export class FooterDataProvider {
 		}
 	}
 
+	/**
+	 * Reset git watcher for a new working directory.
+	 * Clears cached branch and re-establishes the git HEAD watcher
+	 * based on the current process.cwd().
+	 */
+	resetForCwd(): void {
+		this.cachedBranch = undefined;
+		this.setupGitWatcher();
+	}
+
 	/** Internal: cleanup */
 	dispose(): void {
 		if (this.gitWatcher) {

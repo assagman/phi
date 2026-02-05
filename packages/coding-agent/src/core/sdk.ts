@@ -731,7 +731,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				if (!key) throw new Error(`No API key for provider: ${provider}`);
 				return key;
 			},
-			getWorkingDir: () => cwd,
+			getWorkingDir: () => process.cwd(),
 		},
 	});
 
@@ -776,6 +776,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolRegistry: wrappedToolRegistry ?? toolRegistry,
 		rebuildSystemPrompt,
 		builtinToolsLifecycle,
+		cwd,
+		createBuiltInTools: (newCwd: string) =>
+			createAllTools(newCwd, {
+				read: { autoResizeImages },
+				bash: { commandPrefix: shellCommandPrefix },
+			}) as Record<string, AgentTool>,
 	});
 	time("createAgentSession");
 

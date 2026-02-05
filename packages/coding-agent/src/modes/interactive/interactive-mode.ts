@@ -352,6 +352,7 @@ export class InteractiveMode {
 			{ name: "resume", description: "Resume a different session" },
 			{ name: "handoff", description: "Transfer context to a new focused session" },
 			{ name: "parent", description: "Switch to parent session (from handoff)" },
+			{ name: "cd", description: "Change working directory" },
 		];
 
 		// Convert prompt templates to SlashCommand format for autocomplete
@@ -1590,6 +1591,12 @@ export class InteractiveMode {
 				await this.shutdown();
 				return;
 			}
+			if (text === "/cd" || text.startsWith("/cd ")) {
+				const arg = text.startsWith("/cd ") ? text.slice(4).trim() : undefined;
+				this.editor.setText("");
+				this.handleCdCommand(arg);
+				return;
+			}
 
 			// Handle bash command (! for normal, !! for excluded from context)
 			if (text.startsWith("!")) {
@@ -1936,6 +1943,20 @@ export class InteractiveMode {
 				if (!event.success) {
 					this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
 				}
+				this.ui.requestRender();
+				break;
+			}
+
+			case "cwd_change": {
+				// Reset footer git watcher for the new directory
+				this.footerDataProvider.resetForCwd();
+				// Update terminal title
+				this.ui.terminal.setTitle(`pi - ${path.basename(event.newCwd)}`);
+				// Rebuild autocomplete with new cwd for file path completions
+				if (this.autocompleteProvider) {
+					this.autocompleteProvider.setCwd(event.newCwd);
+				}
+				this.showStatus(`Working directory changed to ${event.newCwd}`);
 				this.ui.requestRender();
 				break;
 			}
@@ -3864,6 +3885,39 @@ export class InteractiveMode {
 		}
 		void this.flushCompactionQueue({ willRetry: false });
 		return result;
+	}
+
+	/** Handle /cd command - change working directory. */
+	private handleCdCommand(arg?: string): void {
+		if (this.session.isStreaming) {
+			this.showWarning("Cannot change directory while agent is working. Press Esc to interrupt first.");
+			return;
+		}
+
+		if (!arg) {
+			this.showStatus(`Current directory: ${this.session.cwd}`);
+			return;
+		}
+
+		// ~user expansion is not supported, only ~/...
+		if (arg.startsWith("~") && arg.length > 1 && !arg.startsWith("~/")) {
+			this.showWarning("~user expansion is not supported. Use absolute paths.");
+			return;
+		}
+
+		// Resolve path (support ~, relative paths)
+		let resolved: string;
+		if (arg.startsWith("~")) {
+			resolved = path.resolve(os.homedir(), arg.slice(1).replace(/^\//, ""));
+		} else {
+			resolved = path.resolve(this.session.cwd, arg);
+		}
+
+		try {
+			this.session.changeCwd(resolved);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
 	}
 
 	/**
