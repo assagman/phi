@@ -81,6 +81,26 @@ escape() { printf '%s' "$1" | sed "s/'/''/g"; }
 
 now() { date +%s; }
 
+relative_time() {
+    local ts=$1
+    local now_ts; now_ts=$(now)
+    local diff=$((now_ts - ts))
+    if ((diff < 60)); then echo "just now"
+    elif ((diff < 3600)); then echo "$((diff / 60))m ago"
+    elif ((diff < 86400)); then echo "$((diff / 3600))h ago"
+    elif ((diff < 604800)); then echo "$((diff / 86400))d ago"
+    elif ((diff < 2592000)); then echo "$((diff / 604800))w ago"
+    else echo "$((diff / 2592000))mo ago"
+    fi
+}
+
+fmt_ts() {
+    # Format timestamp as "YYYY-MM-DD HH:MM  (relative)"
+    local ts=$1
+    [[ -z "$ts" || "$ts" == "0" ]] && return
+    echo "$(date -r "$ts" '+%Y-%m-%d %H:%M')  ($(relative_time "$ts"))"
+}
+
 # ─────────────────────────────────────────────────────────────────
 # Database (compatible with existing schema)
 # ─────────────────────────────────────────────────────────────────
@@ -209,21 +229,35 @@ cmd_get() {
     local snum; snum=$(status_num "$status")
     local icon; icon=$(status_icon "$snum")
     
+    # Header
     echo "${icon} #${id} [${priority}] ${title}"
-    echo "  status | $(date -r "$updated" '+%Y-%m-%d %H:%M')"
-    [[ -n "$desc" ]] && echo "  $desc"
-    [[ -n "$tags" ]] && echo "  tags: $tags"
-    [[ -n "$parent_id" ]] && echo "  parent: #$parent_id"
+    echo "  ─────────────────────────────────────────────"
     
-    # Show subtasks
+    # Metadata fields (aligned)
+    printf "  %-12s%s\n" "status" "$status"
+    printf "  %-12s%s\n" "priority" "$priority"
+    [[ -n "$created" && "$created" != "0" ]] && printf "  %-12s%s\n" "created" "$(fmt_ts "$created")"
+    [[ -n "$updated" && "$updated" != "0" ]] && printf "  %-12s%s\n" "updated" "$(fmt_ts "$updated")"
+    [[ -n "$completed" && "$completed" != "0" ]] && printf "  %-12s%s\n" "completed" "$(fmt_ts "$completed")"
+    [[ -n "$tags" ]] && printf "  %-12s%s\n" "tags" "$tags"
+    [[ -n "$parent_id" ]] && printf "  %-12s%s\n" "parent" "#$parent_id"
+    
+    # Description
+    if [[ -n "$desc" ]]; then
+        echo "  ─────────────────────────────────────────────"
+        echo "  $desc"
+    fi
+    
+    # Subtasks
     local subtasks
     subtasks=$(sql "SELECT id, status, priority, title FROM tasks WHERE parent_id = $id ORDER BY id;")
     if [[ -n "$subtasks" ]]; then
+        echo "  ─────────────────────────────────────────────"
         echo "  subtasks:"
         echo "$subtasks" | while IFS='|' read -r sid sstatus spri stitle; do
             local ssnum; ssnum=$(status_num "$sstatus")
             local sicon; sicon=$(status_icon "$ssnum")
-            echo "    ${sicon} #${sid} ${stitle}"
+            echo "    ${sicon} #${sid} [${spri}] ${stitle}"
         done
     fi
 }
