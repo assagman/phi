@@ -57,6 +57,14 @@
 				"toolErrorBg",
 				"toolTitle",
 				"toolOutput",
+				"toolRead",
+				"toolEdit",
+				"toolWrite",
+				"toolBash",
+				"toolGrep",
+				"toolFind",
+				"toolSubagent",
+				"toolPath",
 				"mdHeading",
 				"mdLink",
 				"mdLinkUrl",
@@ -78,7 +86,14 @@
 				"syntaxNumber",
 				"syntaxType",
 				"syntaxOperator",
-				"syntaxPunctuation"
+				"syntaxPunctuation",
+				"thinkingOff",
+				"thinkingMinimal",
+				"thinkingLow",
+				"thinkingMedium",
+				"thinkingHigh",
+				"thinkingXhigh",
+				"bashMode"
 			],
 			"properties": {
 				"accent": {
@@ -280,6 +295,38 @@
 				"thinkingXhigh": {
 					"$ref": "#/$defs/colorValue",
 					"description": "Thinking level border: xhigh (OpenAI codex-max only)"
+				},
+				"toolRead": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool color: read operations"
+				},
+				"toolEdit": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool color: edit operations"
+				},
+				"toolWrite": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool color: write operations"
+				},
+				"toolBash": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool color: bash/shell commands"
+				},
+				"toolGrep": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool color: grep/search"
+				},
+				"toolFind": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool color: find"
+				},
+				"toolSubagent": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool color: subagent delegation"
+				},
+				"toolPath": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool color: file paths in tool output"
 				},
 				"bashMode": {
 					"$ref": "#/$defs/colorValue",

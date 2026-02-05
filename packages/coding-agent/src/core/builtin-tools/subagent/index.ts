@@ -104,6 +104,7 @@ export interface SubagentDetails {
 	/** Completed turns so far */
 	turns?: number;
 	/** Agent metadata for display */
+	agentProvider?: string;
 	agentModel?: string;
 	agentThinkingLevel?: string;
 	agentTemperature?: number;
@@ -825,9 +826,27 @@ export interface SubagentToolContext {
 function agentMeta(
 	agent: AgentDefinition,
 	model: Model<any>,
-): Pick<SubagentDetails, "agentModel" | "agentThinkingLevel" | "agentTemperature" | "agentSource"> {
+): Pick<SubagentDetails, "agentProvider" | "agentModel" | "agentThinkingLevel" | "agentTemperature" | "agentSource"> {
+	let provider: string;
+	let modelId: string;
+
+	if (agent.model) {
+		const parsed = parseModelSpec(agent.model);
+		if (parsed) {
+			provider = parsed.provider;
+			modelId = parsed.modelId;
+		} else {
+			provider = model.provider;
+			modelId = agent.model;
+		}
+	} else {
+		provider = model.provider;
+		modelId = model.id;
+	}
+
 	return {
-		agentModel: agent.model || `${model.provider}/${model.id}`,
+		agentProvider: provider,
+		agentModel: modelId,
 		agentThinkingLevel: agent.thinkingLevel,
 		agentTemperature: agent.temperature,
 		agentSource: agent.source,
