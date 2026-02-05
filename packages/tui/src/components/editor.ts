@@ -993,8 +993,8 @@ export class Editor implements Component, Focusable {
 				if (textBeforeCursor.trimStart().startsWith("/")) {
 					this.tryTriggerAutocomplete();
 				}
-				// Check if we're in an @ file reference context
-				else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
+				// Check if we're in an @ file reference context (supports multi-token fzf queries like "@tui auto")
+				else if (textBeforeCursor.match(/(?:^|[\s])@[^@]*$/)) {
 					this.tryTriggerAutocomplete();
 				}
 			}
@@ -1178,8 +1178,8 @@ export class Editor implements Component, Focusable {
 			if (textBeforeCursor.trimStart().startsWith("/")) {
 				this.tryTriggerAutocomplete();
 			}
-			// @ file reference context
-			else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
+			// @ file reference context (supports multi-token fzf queries like "@tui auto")
+			else if (textBeforeCursor.match(/(?:^|[\s])@[^@]*$/)) {
 				this.tryTriggerAutocomplete();
 			}
 		}
@@ -1397,8 +1397,8 @@ export class Editor implements Component, Focusable {
 			if (textBeforeCursor.trimStart().startsWith("/")) {
 				this.tryTriggerAutocomplete();
 			}
-			// @ file reference context
-			else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
+			// @ file reference context (supports multi-token fzf queries like "@tui auto")
+			else if (textBeforeCursor.match(/(?:^|[\s])@[^@]*$/)) {
 				this.tryTriggerAutocomplete();
 			}
 		}
