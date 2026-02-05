@@ -348,6 +348,7 @@ export class InteractiveMode {
 			{ name: "logout", description: "Logout from OAuth provider" },
 			{ name: "new", description: "Start a new session" },
 			{ name: "compact", description: "Manually compact the session context" },
+			{ name: "context", description: "Show context token usage breakdown" },
 			{ name: "resume", description: "Resume a different session" },
 			{ name: "handoff", description: "Transfer context to a new focused session" },
 			{ name: "parent", description: "Switch to parent session (from handoff)" },
@@ -1551,6 +1552,11 @@ export class InteractiveMode {
 				const customInstructions = text.startsWith("/compact ") ? text.slice(9).trim() : undefined;
 				this.editor.setText("");
 				await this.handleCompactCommand(customInstructions);
+				return;
+			}
+			if (text === "/context") {
+				this.handleContextCommand();
+				this.editor.setText("");
 				return;
 			}
 			if (text === "/debug") {
@@ -3499,6 +3505,17 @@ export class InteractiveMode {
 
 		this.addToChat(new Spacer(1));
 		this.addToChat(new Text(info, 1, 0));
+		this.ui.requestRender();
+	}
+
+	private handleContextCommand(): void {
+		const formatted = this.session.getFormattedContextBreakdown();
+		if (!formatted) {
+			this.showWarning("No model selected. Use /model to select a model first.");
+			return;
+		}
+		this.addToChat(new Spacer(1));
+		this.addToChat(new Text(formatted, 1, 0));
 		this.ui.requestRender();
 	}
 

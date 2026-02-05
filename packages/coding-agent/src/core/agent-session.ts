@@ -33,6 +33,7 @@ import {
 	shouldCompact,
 } from "./compaction/index.js";
 
+import { analyzeContext, type ContextBreakdown, formatContextBreakdown } from "./context-analyzer.js";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.js";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.js";
 import type {
@@ -2443,6 +2444,34 @@ export class AgentSession {
 			trailingTokens: estimate.trailingTokens,
 			lastUsageIndex: estimate.lastUsageIndex,
 		};
+	}
+
+	/**
+	 * Analyze context token usage with per-category breakdown and reduction suggestions.
+	 * Returns undefined if no model is selected.
+	 */
+	getContextBreakdown(): ContextBreakdown | undefined {
+		const model = this.model;
+		if (!model) return undefined;
+
+		return analyzeContext({
+			systemPrompt: this.agent.state.systemPrompt,
+			tools: this.agent.state.tools,
+			messages: this.messages,
+			contextWindow: model.contextWindow ?? 0,
+			model: model.id,
+			provider: model.provider,
+		});
+	}
+
+	/**
+	 * Get a formatted string of the context token breakdown.
+	 * Returns undefined if no model is selected.
+	 */
+	getFormattedContextBreakdown(): string | undefined {
+		const breakdown = this.getContextBreakdown();
+		if (!breakdown) return undefined;
+		return formatContextBreakdown(breakdown);
 	}
 
 	/**

@@ -36,6 +36,16 @@ export {
 	serializeConversation,
 	shouldCompact,
 } from "./core/compaction/index.js";
+// Context analysis
+export {
+	type AnalyzeContextInput,
+	analyzeContext,
+	type ContextBreakdown,
+	type ContextBreakdownCategory,
+	type ContextBreakdownItem,
+	type ContextReductionSuggestion,
+	formatContextBreakdown,
+} from "./core/context-analyzer.js";
 export { createEventBus, type EventBus, type EventBusController } from "./core/event-bus.js";
 // Extension system
 export type {
