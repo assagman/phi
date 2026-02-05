@@ -512,12 +512,8 @@ let BUILTIN_THEMES: Record<string, ThemeJson> | undefined;
 function getBuiltinThemes(): Record<string, ThemeJson> {
 	if (!BUILTIN_THEMES) {
 		const themesDir = getThemesDir();
-		const darkPath = path.join(themesDir, "dark.json");
-		const lightPath = path.join(themesDir, "light.json");
 		const orangePath = path.join(themesDir, "orange.json");
 		BUILTIN_THEMES = {
-			dark: JSON.parse(fs.readFileSync(darkPath, "utf-8")) as ThemeJson,
-			light: JSON.parse(fs.readFileSync(lightPath, "utf-8")) as ThemeJson,
 			orange: JSON.parse(fs.readFileSync(orangePath, "utf-8")) as ThemeJson,
 		};
 	}
@@ -605,7 +601,7 @@ function loadThemeJson(name: string): ThemeJson {
 			errorMessage += `\nMissing required color tokens:\n`;
 			errorMessage += missingColors.map((c) => `  - ${c}`).join("\n");
 			errorMessage += `\n\nPlease add these colors to your theme's "colors" object.`;
-			errorMessage += `\nSee the built-in themes (dark.json, light.json) for reference values.`;
+			errorMessage += `\nSee the built-in theme (orange.json) for reference values.`;
 		}
 		if (otherErrors.length > 0) {
 			errorMessage += `\n\nOther errors:\n${otherErrors.join("\n")}`;
@@ -652,23 +648,8 @@ export function getThemeByName(name: string): Theme | undefined {
 	}
 }
 
-function detectTerminalBackground(): "dark" | "light" {
-	const colorfgbg = process.env.COLORFGBG || "";
-	if (colorfgbg) {
-		const parts = colorfgbg.split(";");
-		if (parts.length >= 2) {
-			const bg = parseInt(parts[1], 10);
-			if (!Number.isNaN(bg)) {
-				const result = bg < 8 ? "dark" : "light";
-				return result;
-			}
-		}
-	}
-	return "dark";
-}
-
 function getDefaultTheme(): string {
-	return detectTerminalBackground();
+	return "orange";
 }
 
 // ============================================================================
@@ -714,9 +695,9 @@ export function initTheme(themeName?: string, enableWatcher: boolean = false): v
 			startThemeWatcher();
 		}
 	} catch (_error) {
-		// Theme is invalid - fall back to dark theme silently
-		currentThemeName = "dark";
-		setGlobalTheme(loadTheme("dark"));
+		// Theme is invalid - fall back to orange theme silently
+		currentThemeName = "orange";
+		setGlobalTheme(loadTheme("orange"));
 		// Don't start watcher for fallback theme
 	}
 }
@@ -733,9 +714,9 @@ export function setTheme(name: string, enableWatcher: boolean = false): { succes
 		}
 		return { success: true };
 	} catch (error) {
-		// Theme is invalid - fall back to dark theme
-		currentThemeName = "dark";
-		setGlobalTheme(loadTheme("dark"));
+		// Theme is invalid - fall back to orange theme
+		currentThemeName = "orange";
+		setGlobalTheme(loadTheme("orange"));
 		// Don't start watcher for fallback theme
 		return {
 			success: false,
@@ -765,7 +746,7 @@ function startThemeWatcher(): void {
 	}
 
 	// Only watch if it's a custom theme (not built-in)
-	if (!currentThemeName || currentThemeName === "dark" || currentThemeName === "light") {
+	if (!currentThemeName || currentThemeName === "orange") {
 		return;
 	}
 
@@ -797,8 +778,8 @@ function startThemeWatcher(): void {
 				// File was deleted or renamed - fall back to default theme
 				setTimeout(() => {
 					if (!fs.existsSync(themeFile)) {
-						currentThemeName = "dark";
-						setGlobalTheme(loadTheme("dark"));
+						currentThemeName = "orange";
+						setGlobalTheme(loadTheme("orange"));
 						if (themeWatcher) {
 							themeWatcher.close();
 							themeWatcher = undefined;
@@ -878,12 +859,11 @@ function ansi256ToHex(index: number): string {
  */
 export function getResolvedThemeColors(themeName?: string): Record<string, string> {
 	const name = themeName ?? getDefaultTheme();
-	const isLight = name === "light";
 	const themeJson = loadThemeJson(name);
 	const resolved = resolveThemeColors(themeJson.colors, themeJson.vars);
 
 	// Default text color for empty values (terminal uses default fg color)
-	const defaultText = isLight ? "#000000" : "#e5e5e7";
+	const defaultText = "#e5e5e7";
 
 	const cssColors: Record<string, string> = {};
 	for (const [key, value] of Object.entries(resolved)) {
@@ -897,14 +877,6 @@ export function getResolvedThemeColors(themeName?: string): Record<string, strin
 		}
 	}
 	return cssColors;
-}
-
-/**
- * Check if a theme is a "light" theme (for CSS that needs light/dark variants).
- */
-export function isLightTheme(themeName?: string): boolean {
-	// Currently just check the name - could be extended to analyze colors
-	return themeName === "light";
 }
 
 /**

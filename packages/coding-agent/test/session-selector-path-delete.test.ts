@@ -45,7 +45,7 @@ const CTRL_BACKSPACE = "\x1b[127;5u";
 describe("session selector path/delete interactions", () => {
 	beforeAll(() => {
 		// session selector uses the global theme instance
-		initTheme("dark");
+		initTheme("orange");
 	});
 	it("does not treat Ctrl+Backspace as delete when search query is non-empty", async () => {
 		const sessions = [makeSession({ id: "a" }), makeSession({ id: "b" })];

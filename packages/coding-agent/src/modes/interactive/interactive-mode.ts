@@ -2693,7 +2693,7 @@ export class InteractiveMode {
 					followUpMode: this.session.followUpMode,
 					thinkingLevel: this.session.thinkingLevel,
 					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
-					currentTheme: this.settingsManager.getTheme() || "dark",
+					currentTheme: this.settingsManager.getTheme() || "orange",
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
@@ -2740,7 +2740,7 @@ export class InteractiveMode {
 						this.settingsManager.setTheme(themeName);
 						this.ui.invalidate();
 						if (!result.success) {
-							this.showError(`Failed to load theme "${themeName}": ${result.error}\nFell back to dark theme.`);
+							this.showError(`Failed to load theme "${themeName}": ${result.error}\nFell back to orange theme.`);
 						}
 					},
 					onThemePreview: (themeName) => {
