@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import stripAnsi from "strip-ansi";
 import { Container, Text, type TUI } from "tui";
-import type { SubagentDetails, SubagentToolEvent } from "../../../core/builtin-tools/subagent/index.js";
+import type { SubagentDetails } from "../../../core/builtin-tools/subagent/index.js";
 import type { BashToolDetails } from "../../../core/tools/bash.js";
 import { sanitizeBinaryOutput } from "../../../utils/shell.js";
 import { highlightCode, type ThemeColor, theme } from "../theme/theme.js";
@@ -9,8 +9,7 @@ import { highlightCode, type ThemeColor, theme } from "../theme/theme.js";
 const MAX_ERROR_LINES = 10;
 const MAX_CMD_LINES = 10;
 const MAX_ARG_LINES = 12;
-const MAX_SUBAGENT_TOOLS = 8;
-const MAX_SUBAGENT_TEXT_LINES = 2;
+const MAX_SUBAGENT_STREAM_LINES = 10;
 const MAX_EXPANDED_OUTPUT_LINES = 20;
 const PULSE_PERIOD_MS = 1500; // Full pulse cycle duration
 
@@ -71,301 +70,6 @@ function formatSubagentToolArgs(toolName: string, args: Record<string, unknown>)
 		}
 		default:
 			return "";
-	}
-}
-
-/** Build a directory tree node from a list of file paths */
-interface TreeNode {
-	name: string;
-	children: Map<string, TreeNode>;
-	isFile: boolean;
-	isError?: boolean;
-}
-
-function buildFileTree(tools: Array<{ args: Record<string, unknown>; isError?: boolean }>): TreeNode {
-	const root: TreeNode = { name: "", children: new Map(), isFile: false };
-	for (const tool of tools) {
-		const raw = String(tool.args.path ?? "");
-		const path = shorten(raw);
-		const parts = path.split("/").filter(Boolean);
-		let node = root;
-		for (let i = 0; i < parts.length; i++) {
-			const part = parts[i];
-			if (!node.children.has(part)) {
-				node.children.set(part, {
-					name: part,
-					children: new Map(),
-					isFile: i === parts.length - 1,
-					isError: i === parts.length - 1 ? tool.isError : undefined,
-				});
-			}
-			node = node.children.get(part)!;
-		}
-	}
-	return root;
-}
-
-/** Collapse single-child directory chains: a/ -> b/ -> c.ts becomes a/b/c.ts */
-function collapseTree(node: TreeNode): TreeNode {
-	if (node.isFile) return node;
-	const collapsed = new Map<string, TreeNode>();
-	for (const [key, child] of node.children) {
-		let current = child;
-		let prefix = key;
-		while (!current.isFile && current.children.size === 1) {
-			const [nextKey, nextChild] = current.children.entries().next().value!;
-			prefix = `${prefix}/${nextKey}`;
-			current = nextChild;
-		}
-		const collapsedChild = collapseTree({ ...current, name: prefix });
-		collapsed.set(prefix, collapsedChild);
-	}
-	return { ...node, children: collapsed };
-}
-
-/** Render a file tree as indented lines with box-drawing connectors */
-function renderFileTree(root: TreeNode, indent: string): string[] {
-	const lines: string[] = [];
-	const collapsed = collapseTree(root);
-
-	function walk(node: TreeNode, prefix: string) {
-		const entries = [...node.children.entries()];
-		for (let i = 0; i < entries.length; i++) {
-			const [, child] = entries[i];
-			const isLast = i === entries.length - 1;
-			const connector = isLast ? "└─ " : "├─ ";
-			const childPrefix = isLast ? "   " : "│  ";
-
-			if (child.isFile) {
-				const color = child.isError ? "error" : "toolPath";
-				const icon = child.isError ? "✗" : "✓";
-				lines.push(`${prefix}${connector}${theme.fg("muted", icon)} ${theme.fg(color, child.name)}`);
-			} else {
-				lines.push(`${prefix}${connector}${theme.fg("muted", `${child.name}/`)}`);
-				walk(child, `${prefix}${childPrefix}`);
-			}
-		}
-	}
-
-	walk(collapsed, indent);
-	return lines;
-}
-
-// ─── Agent-specific summary renderers ────────────────────────────────────────
-
-/** Helper: partition tools by type */
-function partitionTools(allTools: SubagentToolEvent[]): {
-	fileTools: SubagentToolEvent[];
-	bashTools: SubagentToolEvent[];
-} {
-	const fileTools = allTools.filter(
-		(t) => (t.toolName === "read" || t.toolName === "edit" || t.toolName === "write") && t.args.path,
-	);
-	const bashTools = allTools.filter((t) => t.toolName === "bash");
-	return { fileTools, bashTools };
-}
-
-/** Render bash commands as compact list */
-function renderBashSummary(bashTools: SubagentToolEvent[], indent: string, label: string): string[] {
-	const lines: string[] = [];
-	if (bashTools.length === 0) return lines;
-	lines.push(`${indent}${theme.fg("muted", `${label} (${bashTools.length}):`)}`);
-	for (const tool of bashTools) {
-		const statusIcon = tool.isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-		const cmd = String(tool.args.command ?? "");
-		const firstLine = cmd.split("\n")[0];
-		const preview = firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
-		lines.push(`${indent}  ${statusIcon} ${theme.fg("dim", preview)}`);
-	}
-	return lines;
-}
-
-/** Default summary: file tree + commands (used for explorer + unknown agents) */
-function renderDefaultSummary(allTools: SubagentToolEvent[], indent: string): string[] {
-	const { fileTools, bashTools } = partitionTools(allTools);
-	const lines: string[] = [];
-
-	if (fileTools.length > 0) {
-		lines.push(`${indent}${theme.fg("muted", `files (${fileTools.length}):`)}`);
-		lines.push(...renderFileTree(buildFileTree(fileTools), indent));
-	}
-	lines.push(...renderBashSummary(bashTools, indent, "commands"));
-	return lines;
-}
-
-/**
- * Planner summary: files explored + plan steps extracted from output.
- * While running, shows files being read. When done, shows the plan outline.
- */
-function renderPlannerSummary(allTools: SubagentToolEvent[], indent: string, finalOutput?: string): string[] {
-	const { fileTools } = partitionTools(allTools);
-	const lines: string[] = [];
-
-	if (fileTools.length > 0) {
-		lines.push(`${indent}${theme.fg("muted", `explored (${fileTools.length}):`)}`);
-		lines.push(...renderFileTree(buildFileTree(fileTools), indent));
-	}
-
-	// Extract plan steps from final output (### Step N: Title)
-	if (finalOutput) {
-		const stepPattern = /^###\s+Step\s+\d+[.:]\s*(.+)$/gm;
-		const steps: string[] = [];
-		let match = stepPattern.exec(finalOutput);
-		while (match) {
-			steps.push(match[1].trim());
-			match = stepPattern.exec(finalOutput);
-		}
-		if (steps.length > 0) {
-			lines.push(`${indent}${theme.fg("muted", `plan (${steps.length} steps):`)}`);
-			for (let i = 0; i < steps.length; i++) {
-				const isLast = i === steps.length - 1;
-				const connector = isLast ? "└─" : "├─";
-				lines.push(`${indent}${connector} ${theme.fg("accent", `${i + 1}.`)} ${theme.fg("dim", steps[i])}`);
-			}
-		}
-	}
-
-	return lines;
-}
-
-/**
- * Committer summary: extract git commit commands and show them.
- * Shows staged files + commit messages.
- */
-function renderCommitterSummary(allTools: SubagentToolEvent[], indent: string): string[] {
-	const { bashTools } = partitionTools(allTools);
-	const lines: string[] = [];
-
-	// Extract git add (staged files) and git commit commands
-	const stagedFiles: string[] = [];
-	const commits: Array<{ message: string; isError: boolean }> = [];
-
-	for (const tool of bashTools) {
-		const cmd = String(tool.args.command ?? "");
-		// Extract files from git add commands
-		const addMatch = cmd.match(/git\s+add\s+(.+)/);
-		if (addMatch) {
-			const files = addMatch[1].split(/\s+/).filter((f) => !f.startsWith("-") && f.trim());
-			stagedFiles.push(...files);
-		}
-		// Extract commit messages
-		const commitMatch = cmd.match(/git\s+commit\s+.*-m\s+["']([^"']+)["']/);
-		if (commitMatch) {
-			commits.push({ message: commitMatch[1], isError: tool.isError ?? false });
-		}
-	}
-
-	if (commits.length > 0) {
-		lines.push(`${indent}${theme.fg("muted", `commits (${commits.length}):`)}`);
-		for (let i = 0; i < commits.length; i++) {
-			const c = commits[i];
-			const isLast = i === commits.length - 1;
-			const connector = isLast ? "└─" : "├─";
-			const icon = c.isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-			lines.push(`${indent}${connector} ${icon} ${theme.fg("dim", c.message)}`);
-		}
-	}
-
-	if (stagedFiles.length > 0 && commits.length === 0) {
-		// Show staged files if no commits happened yet (error case)
-		lines.push(`${indent}${theme.fg("muted", `staged (${stagedFiles.length}):`)}`);
-		for (const f of stagedFiles.slice(0, 20)) {
-			lines.push(`${indent}  ${theme.fg("toolPath", shorten(f))}`);
-		}
-		if (stagedFiles.length > 20) {
-			lines.push(`${indent}  ${theme.fg("muted", `… ${stagedFiles.length - 20} more`)}`);
-		}
-	}
-
-	// Show other git commands that aren't add/commit
-	const otherGit = bashTools.filter((t) => {
-		const cmd = String(t.args.command ?? "");
-		return cmd.includes("git") && !cmd.match(/git\s+(add|commit)\b/);
-	});
-	if (otherGit.length > 0) {
-		lines.push(...renderBashSummary(otherGit, indent, "git ops"));
-	}
-
-	return lines;
-}
-
-/**
- * Reviewer summary: file tree of reviewed files + finding categories from output.
- */
-function renderReviewerSummary(allTools: SubagentToolEvent[], indent: string, finalOutput?: string): string[] {
-	const { fileTools, bashTools } = partitionTools(allTools);
-	const lines: string[] = [];
-
-	// Show what was reviewed (reads + diffs)
-	const readFiles = fileTools.filter((t) => t.toolName === "read");
-	const diffCommands = bashTools.filter((t) => {
-		const cmd = String(t.args.command ?? "");
-		return cmd.includes("git diff") || cmd.includes("git show");
-	});
-
-	if (readFiles.length > 0 || diffCommands.length > 0) {
-		const total = readFiles.length + diffCommands.length;
-		lines.push(`${indent}${theme.fg("muted", `reviewed (${total}):`)}`);
-		if (readFiles.length > 0) {
-			lines.push(...renderFileTree(buildFileTree(readFiles), indent));
-		}
-		for (const d of diffCommands) {
-			const cmd = String(d.args.command ?? "");
-			const firstLine = cmd.split("\n")[0];
-			const preview = firstLine.length > 60 ? `${firstLine.slice(0, 57)}...` : firstLine;
-			const icon = d.isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-			lines.push(`${indent}  ${icon} ${theme.fg("dim", preview)}`);
-		}
-	}
-
-	// Extract finding counts from output sections
-	if (finalOutput) {
-		const sections: Array<{ label: string; color: ThemeColor; pattern: RegExp }> = [
-			{ label: "critical", color: "error", pattern: /^## Critical\n([\s\S]*?)(?=\n## |\n---|Z)/m },
-			{ label: "warnings", color: "warning", pattern: /^## Warnings\n([\s\S]*?)(?=\n## |\n---|Z)/m },
-			{ label: "suggestions", color: "muted", pattern: /^## Suggestions\n([\s\S]*?)(?=\n## |\n---|Z)/m },
-		];
-
-		const findings: Array<{ label: string; color: ThemeColor; count: number }> = [];
-		for (const section of sections) {
-			const match = section.pattern.exec(finalOutput);
-			if (match) {
-				const body = match[1];
-				// Count ### headings (each is a finding)
-				const count = (body.match(/^### /gm) || []).length;
-				if (count > 0) {
-					findings.push({ label: section.label, color: section.color, count });
-				}
-			}
-		}
-
-		if (findings.length > 0) {
-			const parts = findings.map((f) => theme.fg(f.color, `${f.count} ${f.label}`));
-			lines.push(`${indent}${theme.fg("muted", "findings:")} ${parts.join(theme.fg("muted", " · "))}`);
-		} else if (finalOutput.includes("No issues found")) {
-			lines.push(`${indent}${theme.fg("success", "no issues found")}`);
-		}
-	}
-
-	return lines;
-}
-
-/** Dispatch to agent-specific renderer */
-function renderAgentSummary(
-	agentName: string,
-	allTools: SubagentToolEvent[],
-	indent: string,
-	finalOutput?: string,
-): string[] {
-	switch (agentName) {
-		case "planner":
-			return renderPlannerSummary(allTools, indent, finalOutput);
-		case "committer":
-			return renderCommitterSummary(allTools, indent);
-		case "reviewer":
-			return renderReviewerSummary(allTools, indent, finalOutput);
-		default:
-			return renderDefaultSummary(allTools, indent);
 	}
 }
 
@@ -785,14 +489,9 @@ export class ToolExecutionComponent extends Container {
 			}
 		}
 
-		// When done: show agent-specific accumulated summary
-		// When running: show active tools as live progress
-		if (!this.running && details?.allTools && details.allTools.length > 0) {
-			const finalOutput = this.result?.content?.find((c) => c.type === "text")?.text;
-			lines.push(...renderAgentSummary(agentName, details.allTools, indent, finalOutput));
-		} else if (details?.activeTools && details.activeTools.length > 0) {
-			const tools = details.activeTools.slice(-MAX_SUBAGENT_TOOLS);
-			for (const tool of tools) {
+		// Accumulated tool calls — always visible (running and done)
+		if (details?.allTools && details.allTools.length > 0) {
+			for (const tool of details.allTools) {
 				const toolIcon = ICONS[tool.toolName] ?? "\uf013";
 				let statusIcon: string;
 				if (tool.running) {
@@ -805,32 +504,33 @@ export class ToolExecutionComponent extends Container {
 				const argSummary = formatSubagentToolArgs(tool.toolName, tool.args);
 				lines.push(`${indent}${statusIcon} ${toolIcon} ${theme.fg("muted", tool.toolName)} ${argSummary}`);
 			}
-			if (details.activeTools.length > MAX_SUBAGENT_TOOLS) {
-				lines.push(`${indent}${theme.fg("muted", `… ${details.activeTools.length - MAX_SUBAGENT_TOOLS} more`)}`);
-			}
 		}
 
-		// Streaming thinking: sliding window of last 5 lines (hidden when done)
-		if (this.running && details?.currentThinking) {
-			const thinkLines = details.currentThinking.split("\n").filter((l) => l.trim());
-			const MAX_THINKING_LINES = 5;
-			const skipped = Math.max(0, thinkLines.length - MAX_THINKING_LINES);
-			if (skipped > 0) {
-				lines.push(`${indent}${theme.fg("muted", `💭 … ${skipped} lines above`)}`);
-			}
-			const visible = thinkLines.slice(-MAX_THINKING_LINES);
-			for (const line of visible) {
-				lines.push(`${indent}${theme.fg("dim", `💭 ${line}`)}`);
-			}
-		}
-
-		// Streaming text (while running)
-		if (this.running && details?.currentText) {
-			const textLines = details.currentText.split("\n").filter((l) => l.trim());
-			const last = textLines.slice(-MAX_SUBAGENT_TEXT_LINES);
-			for (const line of last) {
-				const truncated = line.length > 80 ? `${line.slice(0, 77)}...` : line;
-				lines.push(`${indent}${theme.fg("dim", truncated)}`);
+		// Thinking + text: combined sliding window, always visible
+		{
+			const thinkLines = (details?.currentThinking ?? "")
+				.split("\n")
+				.filter((l) => l.trim())
+				.map((l) => ({ type: "thinking" as const, text: l }));
+			const textLines = (details?.currentText ?? "")
+				.split("\n")
+				.filter((l) => l.trim())
+				.map((l) => ({ type: "text" as const, text: l }));
+			const combined = [...thinkLines, ...textLines];
+			if (combined.length > 0) {
+				const visible = combined.slice(-MAX_SUBAGENT_STREAM_LINES);
+				const skipped = combined.length - visible.length;
+				if (skipped > 0) {
+					lines.push(`${indent}${theme.fg("muted", `… ${skipped} lines above`)}`);
+				}
+				for (const entry of visible) {
+					const truncated = entry.text.length > 80 ? `${entry.text.slice(0, 77)}...` : entry.text;
+					if (entry.type === "thinking") {
+						lines.push(`${indent}\x1b[3m${theme.fg("thinkingText", truncated)}\x1b[23m`);
+					} else {
+						lines.push(`${indent}${theme.fg("dim", truncated)}`);
+					}
+				}
 			}
 		}
 
