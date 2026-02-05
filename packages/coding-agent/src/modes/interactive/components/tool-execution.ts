@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import stripAnsi from "strip-ansi";
-import { Container, Text, type TUI } from "tui";
+import { Container, sliceByColumn, Text, type TUI, visibleWidth, wrapTextWithAnsi } from "tui";
 import type { SubagentDetails } from "../../../core/builtin-tools/subagent/index.js";
 import type { BashToolDetails } from "../../../core/tools/bash.js";
 import { sanitizeBinaryOutput } from "../../../utils/shell.js";
@@ -9,9 +9,30 @@ import { highlightCode, type ThemeColor, theme } from "../theme/theme.js";
 const MAX_ERROR_LINES = 10;
 const MAX_CMD_LINES = 10;
 const MAX_ARG_LINES = 12;
-const MAX_SUBAGENT_STREAM_LINES = 10;
+const MAX_SUBAGENT_BOX_LINES = 20;
 const MAX_EXPANDED_OUTPUT_LINES = 20;
 const PULSE_PERIOD_MS = 1500; // Full pulse cycle duration
+const BORDER_PULSE_PERIOD_MS = 3000; // Slow border pulse cycle
+const PULSE_INTERVAL_MS = 100; // Pulse animation tick (~10fps, sufficient for smooth sine)
+
+/** Per-agent hex color overrides (agent name → hex) */
+const AGENT_COLORS: Record<string, string> = {
+	reviewer: "#5E27F5",
+};
+
+/**
+ * Colorize agent name using per-agent override or toolSubagent theme color.
+ */
+function colorAgentName(name: string): string {
+	const hex = AGENT_COLORS[name];
+	if (hex) {
+		const r = parseInt(hex.slice(1, 3), 16);
+		const g = parseInt(hex.slice(3, 5), 16);
+		const b = parseInt(hex.slice(5, 7), 16);
+		return `\x1b[38;2;${r};${g};${b}m${name}\x1b[39m`;
+	}
+	return theme.fg("toolSubagent", name);
+}
 
 const ARG_TOOL_PREFIXES = ["agentsbox_", "delta_", "epsilon_"];
 
@@ -33,7 +54,7 @@ const COLORS: Record<string, ThemeColor> = {
 	bash: "toolBash",
 	ls: "toolRead",
 	find: "toolFind",
-	subagent: "accent",
+	subagent: "toolSubagent",
 	grep: "toolGrep",
 };
 
@@ -65,8 +86,7 @@ function formatSubagentToolArgs(toolName: string, args: Record<string, unknown>)
 			return args.path ? theme.fg("toolPath", shorten(String(args.path))) : "";
 		case "bash": {
 			const cmd = String(args.command ?? "");
-			const firstLine = cmd.split("\n")[0];
-			return theme.fg("dim", firstLine.length > 60 ? `${firstLine.slice(0, 57)}...` : firstLine);
+			return theme.fg("dim", cmd);
 		}
 		default:
 			return "";
@@ -87,6 +107,8 @@ export class ToolExecutionComponent extends Container {
 	private pulseTimer?: ReturnType<typeof setInterval>;
 	private ui?: TUI;
 	private onInvalidate?: () => void;
+	/** Last known content width from render(), used for split-pane column math. */
+	private lastContentWidth = 0;
 
 	constructor(toolName: string, args: Record<string, unknown> = {}, ui?: TUI, onInvalidate?: () => void) {
 		super();
@@ -120,14 +142,13 @@ export class ToolExecutionComponent extends Container {
 
 	private startPulse(): void {
 		if (this.pulseTimer || !this.ui) return;
-		// 60fps = ~16ms intervals
 		this.pulseTimer = setInterval(() => {
 			if (this.running) {
 				this.update();
 				this.onInvalidate?.();
 				this.ui?.requestRender();
 			}
-		}, 16);
+		}, PULSE_INTERVAL_MS);
 	}
 
 	private stopPulse(): void {
@@ -386,8 +407,17 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
-	 * Rich rendering for subagent tool calls.
-	 * Shows agent name, task, active subprocess tools, streaming text, and usage summary.
+	 * Rich rendering for subagent tool calls — split-pane layout.
+	 *
+	 * Layout (inside bordered box):
+	 *   Header:  icon + tool name + agent name + meta   (full width)
+	 *   Task:    summary text                           (full width)
+	 *   Split:   tool calls (left)  │  thinking+text (right)
+	 *   Footer:  usage summary when done                (full width)
+	 *
+	 * Left pane: 40% width, tool call list (sliding window).
+	 * Right pane: remaining width, thinking + assistant text (sliding window).
+	 * Both panes independently scroll within MAX_SUBAGENT_BOX_LINES budget.
 	 */
 	private formatSubagentLine(i: string, s: string): string {
 		const details = isSubagentDetails(this.result?.details) ? this.result!.details : undefined;
@@ -395,61 +425,58 @@ export class ToolExecutionComponent extends Container {
 		const taskText = details?.task || String(this.args.task ?? "");
 		const mode = details?.mode;
 
-		const lines: string[] = [];
 		const indent = "   ";
 
-		// Header: agent name + metadata inline, task text always on next line
-		const modeLabel = mode && mode !== "single" ? theme.fg("muted", ` (${mode})`) : "";
+		// ── Fixed: header ───────────────────────────────────────────────
+		const fixedTop: string[] = [];
 
-		// Build agent info for header line
+		const modeLabel = mode && mode !== "single" ? theme.fg("muted", ` (${mode})`) : "";
 		const metaParts: string[] = [];
 		if (details) {
-			if (details.agentModel) metaParts.push(details.agentModel);
+			if (details.agentProvider) metaParts.push(`provider: ${details.agentProvider}`);
+			if (details.agentModel) metaParts.push(`model: ${details.agentModel}`);
 			if (details.agentThinkingLevel) metaParts.push(`thinking:${details.agentThinkingLevel}`);
 			if (details.agentTemperature != null) metaParts.push(`temp:${details.agentTemperature}`);
-			if (details.agentSource && details.agentSource !== "preset") metaParts.push(details.agentSource);
 		}
 		const metaSuffix = metaParts.length > 0 ? ` ${theme.fg("dim", metaParts.join(" · "))}` : "";
 
 		if (agentName) {
-			lines.push(`${i} ${this.pulsed("subagent")} ${theme.fg("accent", agentName)}${modeLabel}${metaSuffix} ${s}`);
+			fixedTop.push(`${i} ${this.pulsed("subagent")} ${colorAgentName(agentName)}${modeLabel}${metaSuffix} ${s}`);
 		} else {
-			lines.push(`${i} ${this.pulsed("subagent")}${modeLabel}${metaSuffix} ${s}`);
+			fixedTop.push(`${i} ${this.pulsed("subagent")}${modeLabel}${metaSuffix} ${s}`);
 		}
 
-		// Task text display:
-		// - Streaming (subprocess hasn't produced tool events yet): sliding window of last 5 lines
-		// - Subprocess active or done: short summary (from LLM) or truncated first line fallback
+		// ── Fixed: task summary ─────────────────────────────────────────
 		const subprocessActive = details?.allTools && details.allTools.length > 0;
 		if (this.running && !subprocessActive && taskText.length > 0) {
-			// Args still streaming or subprocess just started — show sliding window
-			const taskLines = taskText.split("\n").filter((l) => l.trim());
-			const MAX_TASK_LINES = 5;
-			const skipped = Math.max(0, taskLines.length - MAX_TASK_LINES);
-			if (skipped > 0) {
-				lines.push(`${indent}${theme.fg("muted", `… ${skipped} lines above`)}`);
-			}
-			const visible = taskLines.slice(-MAX_TASK_LINES);
-			for (const tl of visible) {
-				const trimmed = tl.length > 100 ? `${tl.slice(0, 97)}...` : tl;
-				lines.push(`${indent}${theme.fg("dim", trimmed)}`);
+			for (const tl of taskText.split("\n").filter((l) => l.trim())) {
+				fixedTop.push(`${indent}${theme.fg("dim", tl)}`);
 			}
 		} else {
-			// Collapsed: prefer LLM-generated summary, fall back to truncated first line
-			const summaryText = details?.summary;
-			if (summaryText) {
-				const preview = summaryText.length > 60 ? `${summaryText.slice(0, 57)}...` : summaryText;
-				lines.push(`${indent}${theme.fg("muted", `"${preview}"`)}`);
-			} else if (taskText.length > 0) {
-				const firstLine = taskText.split("\n")[0] || "";
-				const preview = firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
-				if (preview) {
-					lines.push(`${indent}${theme.fg("muted", `"${preview}"`)}`);
+			const summaryText = details?.summary ?? taskText;
+			if (summaryText.length > 0) {
+				for (const line of summaryText.split("\n").filter((l) => l.trim())) {
+					fixedTop.push(`${indent}${theme.fg("muted", `"${line}"`)}`);
 				}
 			}
 		}
 
-		// Parallel mode: show per-agent progress
+		// ── Fixed: usage summary (bottom, when done) ────────────────────
+		const fixedBottom: string[] = [];
+		if (!this.running && details?.results && details.results.length > 0) {
+			const totalTurns = details.results.reduce((sum, r) => sum + r.usage.turns, 0);
+			const totalCost = details.results.reduce((sum, r) => sum + r.usage.cost, 0);
+			const parts: string[] = [];
+			if (totalTurns > 0) parts.push(`${totalTurns} turns`);
+			if (totalCost > 0) parts.push(`$${totalCost.toFixed(4)}`);
+			if (parts.length) {
+				fixedBottom.push(`${indent}${theme.fg("muted", parts.join(" · "))}`);
+			}
+		}
+
+		// ── Left pane: tool calls + parallel/chain progress ─────────────
+		const leftRaw: string[] = [];
+
 		if (mode === "parallel" && Array.isArray(this.args.parallel)) {
 			const tasks = this.args.parallel as Array<{ agent: string; task: string }>;
 			for (let idx = 0; idx < tasks.length; idx++) {
@@ -461,13 +488,10 @@ export class ToolExecutionComponent extends Container {
 				} else {
 					taskStatus = this.running ? theme.fg("warning", "◐") : theme.fg("muted", "○");
 				}
-				const pLine = t.task.split("\n")[0] || "";
-				const preview = pLine.length > 80 ? `${pLine.slice(0, 77)}...` : pLine;
-				lines.push(`${indent}${taskStatus} ${theme.fg("accent", t.agent)} ${theme.fg("muted", `"${preview}"`)}`);
+				leftRaw.push(`${taskStatus} ${colorAgentName(t.agent)} ${theme.fg("muted", `"${t.task}"`)}`);
 			}
 		}
 
-		// Chain mode: show step progress
 		if (mode === "chain" && Array.isArray(this.args.chain)) {
 			const steps = this.args.chain as Array<{ agent: string; task: string }>;
 			for (let idx = 0; idx < steps.length; idx++) {
@@ -481,15 +505,12 @@ export class ToolExecutionComponent extends Container {
 				} else {
 					stepStatus = theme.fg("muted", "○");
 				}
-				const sLine = step.task.split("\n")[0] || "";
-				const preview = sLine.length > 80 ? `${sLine.slice(0, 77)}...` : sLine;
-				lines.push(
-					`${indent}${stepStatus} ${theme.fg("muted", `step ${idx + 1}:`)} ${theme.fg("accent", step.agent)} ${theme.fg("muted", `"${preview}"`)}`,
+				leftRaw.push(
+					`${stepStatus} ${theme.fg("muted", `${idx + 1}:`)} ${colorAgentName(step.agent)} ${theme.fg("muted", `"${step.task}"`)}`,
 				);
 			}
 		}
 
-		// Accumulated tool calls — always visible (running and done)
 		if (details?.allTools && details.allTools.length > 0) {
 			for (const tool of details.allTools) {
 				const toolIcon = ICONS[tool.toolName] ?? "\uf013";
@@ -502,51 +523,106 @@ export class ToolExecutionComponent extends Container {
 					statusIcon = theme.fg("success", "✓");
 				}
 				const argSummary = formatSubagentToolArgs(tool.toolName, tool.args);
-				lines.push(`${indent}${statusIcon} ${toolIcon} ${theme.fg("muted", tool.toolName)} ${argSummary}`);
+				leftRaw.push(`${statusIcon} ${toolIcon} ${theme.fg("muted", tool.toolName)} ${argSummary}`);
 			}
 		}
 
-		// Thinking + text: combined sliding window, always visible
-		{
-			const thinkLines = (details?.currentThinking ?? "")
-				.split("\n")
-				.filter((l) => l.trim())
-				.map((l) => ({ type: "thinking" as const, text: l }));
-			const textLines = (details?.currentText ?? "")
-				.split("\n")
-				.filter((l) => l.trim())
-				.map((l) => ({ type: "text" as const, text: l }));
-			const combined = [...thinkLines, ...textLines];
-			if (combined.length > 0) {
-				const visible = combined.slice(-MAX_SUBAGENT_STREAM_LINES);
-				const skipped = combined.length - visible.length;
-				if (skipped > 0) {
-					lines.push(`${indent}${theme.fg("muted", `… ${skipped} lines above`)}`);
-				}
-				for (const entry of visible) {
-					const truncated = entry.text.length > 80 ? `${entry.text.slice(0, 77)}...` : entry.text;
-					if (entry.type === "thinking") {
-						lines.push(`${indent}\x1b[3m${theme.fg("thinkingText", truncated)}\x1b[23m`);
-					} else {
-						lines.push(`${indent}${theme.fg("dim", truncated)}`);
-					}
-				}
-			}
+		// ── Right pane: thinking + text streams ─────────────────────────
+		const rightRaw: string[] = [];
+
+		const thinkLines = (details?.currentThinking ?? "").split("\n").filter((l) => l.trim());
+		for (const line of thinkLines) {
+			rightRaw.push(`\x1b[3m${theme.fg("thinkingText", line)}\x1b[23m`);
 		}
 
-		// Usage summary (when done)
-		if (!this.running && details?.results && details.results.length > 0) {
-			const totalTurns = details.results.reduce((sum, r) => sum + r.usage.turns, 0);
-			const totalCost = details.results.reduce((sum, r) => sum + r.usage.cost, 0);
-			const parts: string[] = [];
-			if (totalTurns > 0) parts.push(`${totalTurns} turns`);
-			if (totalCost > 0) parts.push(`$${totalCost.toFixed(4)}`);
-			if (parts.length) {
-				lines.push(`${indent}${theme.fg("muted", parts.join(" · "))}`);
-			}
+		const textLines = (details?.currentText ?? "").split("\n").filter((l) => l.trim());
+		for (const line of textLines) {
+			rightRaw.push(line);
 		}
 
-		return lines.join("\n");
+		// ── No split content? Return simple layout ──────────────────────
+		const hasLeft = leftRaw.length > 0;
+		const hasRight = rightRaw.length > 0;
+
+		if (!hasLeft && !hasRight) {
+			return [...fixedTop, ...fixedBottom].join("\n");
+		}
+
+		// If only one side has content, use full-width single column
+		if (!hasRight) {
+			const activity = leftRaw.map((l) => `${indent}${l}`);
+			return this.assembleSingleColumn(fixedTop, activity, fixedBottom);
+		}
+		if (!hasLeft) {
+			const activity = rightRaw.map((l) => `${indent}${l}`);
+			return this.assembleSingleColumn(fixedTop, activity, fixedBottom);
+		}
+
+		// ── Split-pane: merge left and right side-by-side ───────────────
+		// Column widths derived from actual render width (stored by render()).
+		// indent(3) + leftWidth + " │ "(3) + rightWidth = contentWidth
+		const contentWidth = this.lastContentWidth || 74; // 74 = 80 - 6 fallback
+		const divider = theme.fg("dim", "│");
+		const indentWidth = 3;
+		const dividerWidth = 3; // " │ "
+		const paneSpace = Math.max(10, contentWidth - indentWidth - dividerWidth);
+		const leftWidth = Math.max(10, Math.floor(paneSpace * 0.4));
+		const rightWidth = Math.max(10, paneSpace - leftWidth);
+
+		// Wrap each pane's content to its column width
+		const leftWrapped = this.wrapPaneLines(leftRaw, leftWidth);
+		const rightWrapped = this.wrapPaneLines(rightRaw, rightWidth);
+
+		// Apply sliding window to each pane independently
+		const paneBudget = Math.max(1, MAX_SUBAGENT_BOX_LINES - fixedTop.length - fixedBottom.length);
+		const leftVisible = leftWrapped.slice(-paneBudget);
+		const rightVisible = rightWrapped.slice(-paneBudget);
+
+		// Merge side-by-side, padding shorter side
+		const maxRows = Math.max(leftVisible.length, rightVisible.length);
+		const splitLines: string[] = [];
+		for (let row = 0; row < maxRows; row++) {
+			const lLine = leftVisible[row] ?? "";
+			const rLine = rightVisible[row] ?? "";
+			const lVis = visibleWidth(lLine);
+			const lPad = Math.max(0, leftWidth - lVis);
+			const lClamped = lVis > leftWidth ? sliceByColumn(lLine, 0, leftWidth, true) : lLine;
+			const lPadded = lVis > leftWidth ? lClamped : `${lLine}${" ".repeat(lPad)}`;
+			splitLines.push(`${indent}${lPadded} ${divider} ${rLine}`);
+		}
+
+		return [...fixedTop, ...splitLines, ...fixedBottom].join("\n");
+	}
+
+	/**
+	 * Wrap raw lines to fit within a column width, preserving ANSI codes.
+	 */
+	private wrapPaneLines(rawLines: string[], width: number): string[] {
+		const result: string[] = [];
+		for (const line of rawLines) {
+			const wrapped = wrapTextWithAnsi(line, width);
+			result.push(...wrapped);
+		}
+		return result;
+	}
+
+	/**
+	 * Single-column assembly with sliding window (fallback when only one pane has content).
+	 */
+	private assembleSingleColumn(fixedTop: string[], activity: string[], fixedBottom: string[]): string {
+		const budget = Math.max(1, MAX_SUBAGENT_BOX_LINES - fixedTop.length - fixedBottom.length);
+		const indent = "   ";
+		const windowLines: string[] = [];
+
+		if (activity.length > budget) {
+			const skipped = activity.length - budget + 1;
+			windowLines.push(`${indent}${theme.fg("muted", `… ${skipped} lines above`)}`);
+			windowLines.push(...activity.slice(-(budget - 1)));
+		} else {
+			windowLines.push(...activity);
+		}
+
+		return [...fixedTop, ...windowLines, ...fixedBottom].join("\n");
 	}
 
 	private errorLines(): string[] {
@@ -592,6 +668,64 @@ export class ToolExecutionComponent extends Container {
 		if (expanded.length) sections.push(expanded.join("\n"));
 		if (errors.length) sections.push(errors.join("\n"));
 		this.text.setText(sections.join("\n"));
+	}
+
+	/**
+	 * Override render to wrap subagent output in a bordered box with pulsing border.
+	 */
+	render(width: number): string[] {
+		if (this.toolName !== "subagent") return super.render(width);
+
+		// Render children at reduced width: 2 for │ chars + 2 for inner padding
+		const innerWidth = Math.max(1, width - 4);
+		// Text component subtracts paddingX*2 (=2) for its content area.
+		// Store this so formatSubagentLine() can size split-pane columns correctly.
+		const contentWidth = Math.max(1, innerWidth - 2);
+		if (this.lastContentWidth !== contentWidth) {
+			this.lastContentWidth = contentWidth;
+			this.update();
+		}
+
+		const innerLines: string[] = [];
+		for (const child of this.children) {
+			innerLines.push(...child.render(innerWidth));
+		}
+		if (innerLines.length === 0) return [];
+
+		const bc = this.borderPulseColor();
+		const reset = "\x1b[39m";
+		const hBar = "─".repeat(width - 2);
+		const result: string[] = [`${bc}┌${hBar}┐${reset}`];
+
+		for (const line of innerLines) {
+			const vis = visibleWidth(line);
+			const pad = Math.max(0, innerWidth - vis);
+			result.push(`${bc}│${reset} ${line}${" ".repeat(pad)} ${bc}│${reset}`);
+		}
+
+		result.push(`${bc}└${hBar}┘${reset}`);
+		return result;
+	}
+
+	/**
+	 * Slow-pulsing border color for subagent box.
+	 * Uses toolSubagent RGB with a 3s sine wave cycle.
+	 * Dims to 30% when done.
+	 */
+	private borderPulseColor(): string {
+		const rgb = theme.getFgRgb("toolSubagent");
+		if (!rgb) return theme.getFgAnsi("toolSubagent");
+
+		if (!this.running) {
+			const [r, g, b] = rgb.map((c) => Math.round(c * 0.3));
+			return `\x1b[38;2;${r};${g};${b}m`;
+		}
+
+		const elapsed = Date.now() - this.startTime;
+		const t = (Math.sin((elapsed / BORDER_PULSE_PERIOD_MS) * Math.PI * 2) + 1) / 2;
+		const brightness = 0.2 + t * 0.8;
+		const [r, g, b] = rgb.map((c) => Math.round(c * brightness));
+		return `\x1b[38;2;${r};${g};${b}m`;
 	}
 
 	setExpanded(expanded: boolean): void {

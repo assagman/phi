@@ -54,6 +54,7 @@ const ThemeJsonSchema = Type.Object({
 		toolBash: ColorValueSchema,
 		toolGrep: ColorValueSchema,
 		toolFind: ColorValueSchema,
+		toolSubagent: ColorValueSchema,
 		toolPath: ColorValueSchema,
 		// Markdown (10 colors)
 		mdHeading: ColorValueSchema,
@@ -126,6 +127,7 @@ export type ThemeColor =
 	| "toolBash"
 	| "toolGrep"
 	| "toolFind"
+	| "toolSubagent"
 	| "toolPath"
 	| "mdHeading"
 	| "mdLink"
