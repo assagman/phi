@@ -181,6 +181,7 @@ export type ReadonlySessionManager = Pick<
 	| "getSessionDir"
 	| "getSessionId"
 	| "getSessionFile"
+	| "getParentSession"
 	| "getLeafId"
 	| "getLeafEntry"
 	| "getEntry"
@@ -732,6 +733,14 @@ export class SessionManager {
 		return this.sessionFile;
 	}
 
+	/**
+	 * Get the parent session file path, if this session was created via handoff.
+	 */
+	getParentSession(): string | undefined {
+		const header = this.getHeader();
+		return header?.parentSession;
+	}
+
 	_persist(entry: SessionEntry): void {
 		if (!this.persist || !this.sessionFile) return;
 
@@ -1275,6 +1284,25 @@ export class SessionManager {
 	 * @param sessionDir Optional session directory. If omitted, uses default (~/.phi/agent/sessions/<encoded-cwd>/).
 	 * @param onProgress Optional callback for progress updates (loaded, total)
 	 */
+	/**
+	 * Read the session header from a JSONL file without loading the full session.
+	 */
+	static peekHeader(filePath: string): SessionHeader | null {
+		try {
+			const fd = openSync(filePath, "r");
+			const buffer = Buffer.alloc(4096);
+			const bytesRead = readSync(fd, buffer, 0, 4096, 0);
+			closeSync(fd);
+			const firstLine = buffer.toString("utf8", 0, bytesRead).split("\n")[0];
+			if (!firstLine) return null;
+			const header = JSON.parse(firstLine);
+			if (header.type !== "session") return null;
+			return header as SessionHeader;
+		} catch {
+			return null;
+		}
+	}
+
 	static async list(cwd: string, sessionDir?: string, onProgress?: SessionListProgress): Promise<SessionInfo[]> {
 		const dir = sessionDir ?? getDefaultSessionDir(cwd);
 		const sessions = await listSessionsFromDir(dir, onProgress);

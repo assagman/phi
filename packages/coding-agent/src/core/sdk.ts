@@ -32,7 +32,12 @@ import {
 	createBuiltinToolsLifecycle,
 	createBuiltinUIContext,
 } from "./builtin-tools/index.js";
-import { serializeConversation } from "./compaction/utils.js";
+import {
+	computeFileLists,
+	createFileOps,
+	extractFileOpsFromMessage,
+	serializeConversation,
+} from "./compaction/utils.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
 import {
 	createExtensionRuntime,
@@ -684,6 +689,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const messages = agent.state.messages;
 				const llmMessages = convertToLlmMessages(messages);
 				return serializeConversation(llmMessages);
+			},
+			getFileOperations: () => {
+				const fileOps = createFileOps();
+				for (const msg of agent.state.messages) {
+					extractFileOpsFromMessage(msg, fileOps);
+				}
+				return computeFileLists(fileOps);
 			},
 			getCurrentSessionFile: () => sessionManager.getSessionFile(),
 			createNewSession: async (_opts) => {

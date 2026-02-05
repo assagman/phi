@@ -4,35 +4,41 @@
  * Transfers context to a new focused session.
  */
 
-import { complete, type Message, type Model } from "ai";
+import { completeSimple, type Message, type Model } from "ai";
 import type { Component, TUI } from "tui";
 import { BorderedLoader } from "../../../modes/interactive/components/bordered-loader.js";
 import type { Theme } from "../../../modes/interactive/theme/theme.js";
 import { extensionsLog } from "../../../utils/logger.js";
+import {
+	type EnrichedContext,
+	formatEnrichmentSections,
+	gatherEnrichmentContext,
+	truncateForSummarization,
+} from "./utils.js";
 
 // ─── System Prompt ──────────────────────────────────────────────────────────
 
-export const HANDOFF_SYSTEM_PROMPT = `You are a context transfer assistant. Given a conversation history and the user's goal for a new thread, generate a focused prompt that:
+export const HANDOFF_SYSTEM_PROMPT = `You are a context transfer assistant. Given a conversation history and the user's goal, generate a focused prompt for a new coding session.
 
-1. Summarizes relevant context from the conversation (decisions made, approaches taken, key findings)
-2. Lists any relevant files that were discussed or modified
-3. Clearly states the next task based on the user's goal
-4. Is self-contained - the new thread should be able to proceed without the old conversation
+Output EXACTLY this structure (no preamble, no wrapping):
 
-Format your response as a prompt the user can send to start the new thread. Be concise but include all necessary context. Do not include any preamble like "Here's the prompt" - just output the prompt itself.
-
-Example output format:
 ## Context
-We've been working on X. Key decisions:
-- Decision 1
-- Decision 2
+[2-5 sentences: what was being worked on, key decisions made, current state]
 
-Files involved:
-- path/to/file1.ts
-- path/to/file2.ts
+## Key Files
+[Bulleted list of files that matter for the next task, with one-line descriptions]
+
+## Decisions & Constraints
+[Bulleted list of decisions already made that the new session must respect]
 
 ## Task
-[Clear description of what to do next based on user's goal]`;
+[Clear, actionable description of what to do next based on the user's goal]
+
+Rules:
+- Be concise. The new session has no prior context.
+- Include file paths when referencing code.
+- Do not include information irrelevant to the stated goal.
+- Do not explain what you are doing. Output only the prompt.`;
 
 // ─── Command Context ────────────────────────────────────────────────────────
 
@@ -45,6 +51,8 @@ export interface HandoffCommandContext {
 	getApiKey(model: Model<any>): Promise<string>;
 	/** Get serialized conversation text */
 	getConversationText(): string;
+	/** Get file operations (read/modified) from the current session */
+	getFileOperations(): { readFiles: string[]; modifiedFiles: string[] };
 	/** Get current session file path */
 	getCurrentSessionFile(): string | undefined;
 	/** Create new session */
@@ -108,6 +116,16 @@ export const HandoffCommand = {
 
 		const currentSessionFile = ctx.getCurrentSessionFile();
 
+		// Truncate conversation to fit model context window
+		const truncatedText = truncateForSummarization(conversationText, model);
+
+		// Gather enrichment context (file ops, tasks, memories, git)
+		const enrichment: EnrichedContext = {
+			fileOps: ctx.getFileOperations(),
+			...(await gatherEnrichmentContext()),
+		};
+		const enrichmentText = formatEnrichmentSections(enrichment);
+
 		// Generate the handoff prompt with loader UI
 		const result = await ctx.showCustomUI<string | null>(
 			(tui, theme, _kb, done) => {
@@ -122,16 +140,16 @@ export const HandoffCommand = {
 						content: [
 							{
 								type: "text",
-								text: `## Conversation History\n\n${conversationText}\n\n## User's Goal for New Thread\n\n${goal}`,
+								text: `## Conversation History\n\n${truncatedText}${enrichmentText}\n\n## User's Goal for New Thread\n\n${goal}`,
 							},
 						],
 						timestamp: Date.now(),
 					};
 
-					const response = await complete(
+					const response = await completeSimple(
 						model,
 						{ systemPrompt: HANDOFF_SYSTEM_PROMPT, messages: [userMessage] },
-						{ apiKey, signal: loader.signal },
+						{ apiKey, signal: loader.signal, maxTokens: 4096 },
 					);
 
 					if (response.stopReason === "aborted") {

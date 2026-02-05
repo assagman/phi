@@ -13,9 +13,15 @@
 import { Type } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "agent";
 import type { Model } from "ai";
-import { complete, type Message } from "ai";
+import { completeSimple, type Message } from "ai";
 import { extensionsLog } from "../../../utils/logger.js";
 import { HANDOFF_SYSTEM_PROMPT } from "./command.js";
+import {
+	type EnrichedContext,
+	formatEnrichmentSections,
+	gatherEnrichmentContext,
+	truncateForSummarization,
+} from "./utils.js";
 
 export { HANDOFF_SYSTEM_PROMPT, HandoffCommand } from "./command.js";
 
@@ -39,6 +45,8 @@ export interface HandoffToolContext {
 	getModel(): Model<any> | undefined;
 	getApiKey(model: Model<any>): Promise<string>;
 	getConversationText(): string;
+	/** Get file operations (read/modified) from the current session */
+	getFileOperations(): { readFiles: string[]; modifiedFiles: string[] };
 	getCurrentSessionFile(): string | undefined;
 	createNewSession(opts: { parentSession?: string }): Promise<{ cancelled: boolean }>;
 	setEditorText(text: string): void;
@@ -102,21 +110,31 @@ export function createHandoffTool(context: HandoffToolContext, ui: HandoffUICont
 			try {
 				const apiKey = await context.getApiKey(model);
 
+				// Truncate conversation to fit model context window
+				const truncatedText = truncateForSummarization(conversationText, model);
+
+				// Gather enrichment context (file ops, tasks, memories, git)
+				const enrichment: EnrichedContext = {
+					fileOps: context.getFileOperations(),
+					...(await gatherEnrichmentContext()),
+				};
+				const enrichmentText = formatEnrichmentSections(enrichment);
+
 				const userMessage: Message = {
 					role: "user",
 					content: [
 						{
 							type: "text",
-							text: `## Conversation History\n\n${conversationText}\n\n## User's Goal for New Thread\n\n${params.goal}`,
+							text: `## Conversation History\n\n${truncatedText}${enrichmentText}\n\n## User's Goal for New Thread\n\n${params.goal}`,
 						},
 					],
 					timestamp: Date.now(),
 				};
 
-				const response = await complete(
+				const response = await completeSimple(
 					model,
 					{ systemPrompt: HANDOFF_SYSTEM_PROMPT, messages: [userMessage] },
-					{ apiKey, signal },
+					{ apiKey, signal, maxTokens: 4096 },
 				);
 
 				if (response.stopReason === "aborted") {

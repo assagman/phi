@@ -350,6 +350,7 @@ export class InteractiveMode {
 			{ name: "compact", description: "Manually compact the session context" },
 			{ name: "resume", description: "Resume a different session" },
 			{ name: "handoff", description: "Transfer context to a new focused session" },
+			{ name: "parent", description: "Switch to parent session (from handoff)" },
 		];
 
 		// Convert prompt templates to SlashCommand format for autocomplete
@@ -1576,6 +1577,11 @@ export class InteractiveMode {
 				await this.handleHandoffCommand(arg);
 				return;
 			}
+			if (text === "/parent") {
+				this.editor.setText("");
+				await this.handleParentCommand();
+				return;
+			}
 			if (text === "/quit" || text === "/exit") {
 				this.editor.setText("");
 				await this.shutdown();
@@ -1797,6 +1803,10 @@ export class InteractiveMode {
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.result, isError: event.isError });
+					// Force-expand output for commands with displayHints.forceExpand (e.g., phi_delta, phi_epsilon)
+					if (!event.isError && event.result?.details?.displayHints?.forceExpand) {
+						component.setExpanded(true);
+					}
 					this.pendingTools.delete(event.toolCallId);
 					// Record execution to storage for history popup
 					this.toolExecutionStorage?.recordExecution({
@@ -2102,7 +2112,7 @@ export class InteractiveMode {
 					const toolResult: ToolResult = {
 						content: message.content,
 						isError: message.isError,
-						details: message.details as { diff?: string } | undefined,
+						details: message.details as ToolResult["details"],
 					};
 					component.updateResult(toolResult);
 					this.pendingTools.delete(message.toolCallId);
@@ -3863,6 +3873,38 @@ export class InteractiveMode {
 	}
 
 	/**
+	 * Handle /parent command - switch to the parent session (from handoff).
+	 */
+	private async handleParentCommand(): Promise<void> {
+		if (this.session.isStreaming) {
+			this.showWarning("Cannot switch sessions while agent is working. Press Esc to interrupt first.");
+			return;
+		}
+
+		const parentSession = this.session.sessionManager.getParentSession();
+		if (!parentSession) {
+			this.showError("No parent session. This session was not created via handoff.");
+			return;
+		}
+
+		// Peek the parent header — also validates the file exists and is valid
+		const parentHeader = SessionManager.peekHeader(parentSession);
+		if (!parentHeader) {
+			this.showError(`Parent session file not found or invalid: ${parentSession}`);
+			return;
+		}
+
+		// Warn if parent session has a different cwd
+		const currentCwd = this.session.sessionManager.getCwd();
+		if (parentHeader.cwd !== currentCwd) {
+			this.showWarning(`Parent session was in a different directory: ${parentHeader.cwd}`);
+		}
+
+		await this.handleResumeSession(parentSession);
+		this.showStatus("Switched to parent session");
+	}
+
+	/**
 	 * Handle /handoff command - transfer context to a new focused session.
 	 */
 	private async handleHandoffCommand(goal?: string): Promise<void> {
@@ -3885,6 +3927,13 @@ export class InteractiveMode {
 		// Import HandoffCommand dynamically to avoid circular imports
 		const { HandoffCommand } = await import("../../core/builtin-tools/handoff/index.js");
 
+		// Import utilities for unified serialization
+		const { serializeConversation } = await import("../../core/compaction/utils.js");
+		const { convertToLlm } = await import("../../core/messages.js");
+		const { createFileOps, extractFileOpsFromMessage, computeFileLists } = await import(
+			"../../core/compaction/utils.js"
+		);
+
 		await HandoffCommand.handler(userGoal, {
 			hasUI: true,
 			getModel: () => this.session.model,
@@ -3894,19 +3943,15 @@ export class InteractiveMode {
 				return key;
 			},
 			getConversationText: () => {
-				const llmMessages = this.session.messages
-					.filter((m) => m.role === "user" || m.role === "assistant")
-					.map((m) => {
-						const content =
-							typeof m.content === "string"
-								? m.content
-								: m.content
-										.filter((c): c is { type: "text"; text: string } => c.type === "text")
-										.map((c) => c.text)
-										.join("\n");
-						return `${m.role === "user" ? "User" : "Assistant"}: ${content}`;
-					});
-				return llmMessages.join("\n\n");
+				const llmMessages = convertToLlm(this.session.messages);
+				return serializeConversation(llmMessages);
+			},
+			getFileOperations: () => {
+				const fileOps = createFileOps();
+				for (const msg of this.session.messages) {
+					extractFileOpsFromMessage(msg, fileOps);
+				}
+				return computeFileLists(fileOps);
 			},
 			getCurrentSessionFile: () => this.session.sessionManager.getSessionFile(),
 			createNewSession: async (opts) => {
