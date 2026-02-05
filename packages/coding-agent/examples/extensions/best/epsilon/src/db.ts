@@ -9,13 +9,13 @@
 
 import { Database } from "bun:sqlite";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 // ============ Constants ============
 
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 const LOCAL_SHARE = join(homedir(), ".local", "share");
 
 // ============ Repo ID Helpers (inlined from shared) ============
@@ -154,18 +154,97 @@ export function getDb(): Database {
 
 // ============ Schema ============
 
+function migrateV1ToV2(database: Database, dbPath: string): void {
+	// Backup before migration
+	copyFileSync(dbPath, `${dbPath}.bak`);
+
+	database.exec("PRAGMA foreign_keys = OFF");
+	database.exec("BEGIN IMMEDIATE");
+
+	try {
+		// Preflight: fix invalid status values
+		database.exec(`
+      UPDATE tasks SET status = CASE
+        WHEN lower(trim(status)) IN ('wip','inprogress') THEN 'in_progress'
+        WHEN lower(trim(status)) IN ('complete','completed') THEN 'done'
+        WHEN lower(trim(status)) IN ('drop','cancel','canceled') THEN 'cancelled'
+        ELSE 'todo'
+      END
+      WHERE status NOT IN ('todo','in_progress','blocked','done','cancelled');
+    `);
+
+		// Preflight: fix invalid priority values
+		database.exec(`
+      UPDATE tasks SET priority = CASE
+        WHEN lower(trim(priority)) IN ('med') THEN 'medium'
+        WHEN lower(trim(priority)) IN ('urgent') THEN 'critical'
+        ELSE 'medium'
+      END
+      WHERE priority NOT IN ('low','medium','high','critical');
+    `);
+
+		// Rebuild table with CHECK constraints
+		database.exec(`
+      DROP TABLE IF EXISTS tasks_new;
+
+      CREATE TABLE tasks_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL DEFAULT 'todo'
+          CHECK(status IN ('todo','in_progress','blocked','done','cancelled')),
+        priority TEXT DEFAULT 'medium'
+          CHECK(priority IN ('low','medium','high','critical')),
+        tags TEXT,
+        parent_id INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        FOREIGN KEY (parent_id) REFERENCES tasks_new(id) ON DELETE CASCADE
+      );
+
+      INSERT INTO tasks_new (id, title, description, status, priority, tags, parent_id, created_at, updated_at, completed_at)
+      SELECT id, title, description, status, priority, tags, parent_id, created_at, updated_at, completed_at
+      FROM tasks;
+
+      DROP TABLE tasks;
+      ALTER TABLE tasks_new RENAME TO tasks;
+
+      CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+      CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
+      CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+
+      INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 2);
+    `);
+
+		database.exec("COMMIT");
+	} catch (e) {
+		database.exec("ROLLBACK");
+		throw e;
+	} finally {
+		database.exec("PRAGMA foreign_keys = ON");
+	}
+}
+
 function initSchema(): void {
 	if (!db) throw new Error("Database not initialized");
 
-	ensureSchemaVersion(db, DB_VERSION);
+	const { current, isFresh } = ensureSchemaVersion(db, DB_VERSION);
 
+	if (!isFresh && current < 2) {
+		migrateV1ToV2(db, currentDbPath!);
+	}
+
+	// For fresh DBs, create v2 schema directly
 	db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
       description TEXT,
-      status TEXT NOT NULL DEFAULT 'todo',
-      priority TEXT DEFAULT 'medium',
+      status TEXT NOT NULL DEFAULT 'todo'
+        CHECK(status IN ('todo','in_progress','blocked','done','cancelled')),
+      priority TEXT DEFAULT 'medium'
+        CHECK(priority IN ('low','medium','high','critical')),
       tags TEXT,
       parent_id INTEGER,
       created_at INTEGER NOT NULL,
