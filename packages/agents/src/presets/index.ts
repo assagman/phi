@@ -1,41 +1,13 @@
-// Preset Templates
-export { acceptanceVerifierTemplate } from "./acceptance-verifier.js";
-export { accessibilityAuditorTemplate } from "./accessibility-auditor.js";
-export { apiContractDesignerTemplate } from "./api-contract-designer.js";
-export { apiDesignAuditorTemplate } from "./api-design-auditor.js";
-export { architectureAuditorTemplate } from "./architecture-auditor.js";
-export { changelogGeneratorTemplate } from "./changelog-generator.js";
-export { codeGeneratorTemplate } from "./code-generator.js";
-export { committerTemplate } from "./committer.js";
-export { concurrencyAuditorTemplate } from "./concurrency-auditor.js";
-export { contextAnalyzerTemplate } from "./context-analyzer.js";
-export { dataModelerTemplate } from "./data-modeler.js";
-export { dependencyAuditorTemplate } from "./dependency-auditor.js";
-export { deploymentValidatorTemplate } from "./deployment-validator.js";
-export { docsAuditorTemplate } from "./docs-auditor.js";
-export { errorHandlingAuditorTemplate } from "./error-handling-auditor.js";
-export { explorerTemplate } from "./explorer.js";
-export { i18nAuditorTemplate } from "./i18n-auditor.js";
-export { implementationStrategistTemplate } from "./implementation-strategist.js";
-export { perfAnalyzerTemplate } from "./perf-analyzer.js";
-export { plannerTemplate } from "./planner.js";
-export { privacyAuditorTemplate } from "./privacy-auditor.js";
-export { refactoringAdvisorTemplate } from "./refactoring-advisor.js";
-export { regressionAnalystTemplate } from "./regression-analyst.js";
-export { releaseCoordinatorTemplate } from "./release-coordinator.js";
-export { requirementsElicitorTemplate } from "./requirements-elicitor.js";
-export { researchSynthesizerTemplate } from "./research-synthesizer.js";
-export { reviewerTemplate } from "./reviewer.js";
-export { scopeGuardianTemplate } from "./scope-guardian.js";
-export { securityAuditorTemplate } from "./security-auditor.js";
-export { solutionArchitectTemplate } from "./solution-architect.js";
-export { stakeholderMapperTemplate } from "./stakeholder-mapper.js";
-export { systemIntegratorTemplate } from "./system-integrator.js";
-export { taskOrchestratorTemplate } from "./task-orchestrator.js";
-export { testCaseDesignerTemplate } from "./test-case-designer.js";
-export { testCoverageAuditorTemplate } from "./test-coverage-auditor.js";
-export { testStrategistTemplate } from "./test-strategist.js";
-export { typeSafetyAuditorTemplate } from "./type-safety-auditor.js";
+// Preset Templates (loaded from YAML definitions at runtime)
+export {
+	committerTemplate,
+	explorerTemplate,
+	getAllPresets,
+	getPreset,
+	loadAllPresets,
+	plannerTemplate,
+	reviewerTemplate,
+} from "./loader.js";
 
 // Types and Utilities
 export type { CreatePresetOptions, PresetTemplate } from "./types.js";

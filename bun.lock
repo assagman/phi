@@ -37,6 +37,7 @@
       "dependencies": {
         "agent": "*",
         "ai": "*",
+        "yaml": "^2.8.2",
       },
       "devDependencies": {
         "@types/node": "^24.3.0",

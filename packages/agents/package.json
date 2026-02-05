@@ -11,13 +11,14 @@
 	},
 	"scripts": {
 		"clean": "rm -rf dist",
-		"build": "tsgo -p tsconfig.build.json",
+		"build": "tsgo -p tsconfig.build.json && cp -r src/presets/definitions dist/presets/definitions",
 		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "vitest --run"
 	},
 	"dependencies": {
 		"agent": "*",
-		"ai": "*"
+		"ai": "*",
+		"yaml": "^2.8.2"
 	},
 	"devDependencies": {
 		"@types/node": "^24.3.0",

@@ -18,6 +18,10 @@ export interface PresetTemplate {
 	temperature?: number;
 	/** Recommended max tokens */
 	maxTokens?: number;
+	/** Preferred model in provider/model-id format (e.g. "openai-codex/gpt-5.2") */
+	model?: string;
+	/** Allowed tools for this agent */
+	tools?: string[];
 }
 
 /**

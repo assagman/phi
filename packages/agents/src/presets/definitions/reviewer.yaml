@@ -1,0 +1,6 @@
+name: reviewer
+description: "Code review: bugs, security, logic errors, quality - with git-diff awareness"
+model: openai-codex/gpt-5.2
+thinkingLevel: high
+temperature: 0.6
+systemPrompt: !file reviewer.md

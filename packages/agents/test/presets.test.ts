@@ -1,22 +1,32 @@
 import { getModel } from "ai";
 import { describe, expect, it } from "vitest";
-import {
-	createPreset,
-	explorerTemplate,
-	perfAnalyzerTemplate,
-	plannerTemplate,
-	reviewerTemplate,
-	securityAuditorTemplate,
-} from "../src/index.js";
+import { committerTemplate, createPreset, explorerTemplate, plannerTemplate, reviewerTemplate } from "../src/index.js";
 
 describe("Preset Templates", () => {
+	describe("committerTemplate", () => {
+		it("should have required fields", () => {
+			expect(committerTemplate.name).toBe("committer");
+			expect(committerTemplate.description).toBeDefined();
+			expect(committerTemplate.systemPrompt).toContain("commit");
+			expect(committerTemplate.model).toBe("kimi-for-coding/k2p5");
+			expect(committerTemplate.thinkingLevel).toBe("medium");
+			expect(committerTemplate.temperature).toBe(0.3);
+		});
+
+		it("should include commit workflow", () => {
+			expect(committerTemplate.systemPrompt).toContain("git log --oneline");
+			expect(committerTemplate.systemPrompt).toContain("git status");
+		});
+	});
+
 	describe("reviewerTemplate", () => {
 		it("should have required fields", () => {
 			expect(reviewerTemplate.name).toBe("reviewer");
 			expect(reviewerTemplate.description).toBeDefined();
 			expect(reviewerTemplate.systemPrompt).toContain("code reviewer");
+			expect(reviewerTemplate.model).toBe("openai-codex/gpt-5.2");
 			expect(reviewerTemplate.thinkingLevel).toBe("high");
-			expect(reviewerTemplate.temperature).toBe(0.2);
+			expect(reviewerTemplate.temperature).toBe(0.6);
 		});
 
 		it("should include output format instructions", () => {
@@ -35,8 +45,9 @@ describe("Preset Templates", () => {
 			expect(explorerTemplate.name).toBe("explorer");
 			expect(explorerTemplate.description).toBeDefined();
 			expect(explorerTemplate.systemPrompt).toContain("explorer");
-			expect(explorerTemplate.thinkingLevel).toBe("low");
-			expect(explorerTemplate.temperature).toBe(0.1);
+			expect(explorerTemplate.model).toBe("kimi-for-coding/k2p5");
+			expect(explorerTemplate.thinkingLevel).toBe("medium");
+			expect(explorerTemplate.temperature).toBe(0.6);
 		});
 
 		it("should include structured output format", () => {
@@ -51,8 +62,9 @@ describe("Preset Templates", () => {
 			expect(plannerTemplate.name).toBe("planner");
 			expect(plannerTemplate.description).toBeDefined();
 			expect(plannerTemplate.systemPrompt).toContain("planner");
+			expect(plannerTemplate.model).toBe("openai-codex/gpt-5.2");
 			expect(plannerTemplate.thinkingLevel).toBe("high");
-			expect(plannerTemplate.temperature).toBe(0.2);
+			expect(plannerTemplate.temperature).toBe(0.3);
 		});
 
 		it("should include plan structure", () => {
@@ -60,30 +72,6 @@ describe("Preset Templates", () => {
 			expect(plannerTemplate.systemPrompt).toContain("## Plan");
 			expect(plannerTemplate.systemPrompt).toContain("## Risks");
 			expect(plannerTemplate.systemPrompt).toContain("## Verification");
-		});
-	});
-
-	describe("securityAuditorTemplate", () => {
-		it("should have required fields", () => {
-			expect(securityAuditorTemplate.name).toBe("security-auditor");
-			expect(securityAuditorTemplate.description).toBeDefined();
-			expect(securityAuditorTemplate.systemPrompt).toContain("security");
-		});
-
-		it("should include security-specific guidance", () => {
-			expect(securityAuditorTemplate.systemPrompt).toContain("OWASP");
-		});
-	});
-
-	describe("perfAnalyzerTemplate", () => {
-		it("should have required fields", () => {
-			expect(perfAnalyzerTemplate.name).toBe("perf-analyzer");
-			expect(perfAnalyzerTemplate.description).toBeDefined();
-			expect(perfAnalyzerTemplate.systemPrompt).toContain("performance");
-		});
-
-		it("should include performance categories", () => {
-			expect(perfAnalyzerTemplate.systemPrompt).toContain("complexity");
 		});
 	});
 });
@@ -110,7 +98,6 @@ describe("createPreset", () => {
 
 		expect(preset.thinkingLevel).toBe("high");
 		expect(preset.temperature).toBe(0.5);
-		// Other fields unchanged
 		expect(preset.name).toBe(reviewerTemplate.name);
 		expect(preset.systemPrompt).toBe(reviewerTemplate.systemPrompt);
 	});
