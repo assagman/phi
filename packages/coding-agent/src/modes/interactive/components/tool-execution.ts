@@ -12,6 +12,7 @@ const MAX_ARG_LINES = 12;
 const MAX_SUBAGENT_BOX_LINES = 20;
 const MAX_EXPANDED_OUTPUT_LINES = 20;
 const MAX_STREAMING_PREVIEW_LINES = 8;
+const MAX_SUBAGENT_TASK_LINES = 6;
 const PULSE_PERIOD_MS = 1500; // Full pulse cycle duration
 const BORDER_PULSE_PERIOD_MS = 3000; // Slow border pulse cycle
 const PULSE_INTERVAL_MS = 100; // Pulse animation tick (~10fps, sufficient for smooth sine)
@@ -112,6 +113,8 @@ export class ToolExecutionComponent extends Container {
 	private lastContentWidth = 0;
 	/** Once split-pane layout is shown, preserve it even when right pane temporarily empties between turns. */
 	private hadSplitLayout = false;
+	/** Cached LiveFeed for subagent task summary (avoids re-creation every ~100ms render). */
+	private subagentTaskFeed?: LiveFeed;
 
 	constructor(toolName: string, args: Record<string, unknown> = {}, ui?: TUI, onInvalidate?: () => void) {
 		super();
@@ -254,7 +257,7 @@ export class ToolExecutionComponent extends Container {
 	 * Format file path with italic styling
 	 */
 	private formatPath(path: string): string {
-		return `\x1b[3m${theme.fg("toolPath", path)}\x1b[23m`;
+		return theme.italic(theme.fg("toolPath", path));
 	}
 
 	private hasArgs(): boolean {
@@ -452,19 +455,22 @@ export class ToolExecutionComponent extends Container {
 		// ── Fixed: task summary ─────────────────────────────────────────
 		const subprocessActive = details?.allTools && details.allTools.length > 0;
 		if (this.running && !subprocessActive && taskText.length > 0) {
-			// Use LiveFeed to cap streaming task text to a sliding window
-			const taskLines = taskText.split("\n").filter((l) => l.trim());
-			const maxTaskLines = 6;
-			const taskFeed = new LiveFeed({
-				maxLines: maxTaskLines,
-				overflowText: (n) => theme.fg("muted", `… ${n} lines above`),
-			});
-			for (let idx = 0; idx < taskLines.length; idx++) {
-				taskFeed.addItem({ id: `task:${idx}`, text: theme.fg("dim", taskLines[idx]) });
+			// Reuse cached LiveFeed to avoid re-allocation every ~100ms render tick
+			if (!this.subagentTaskFeed) {
+				this.subagentTaskFeed = new LiveFeed({
+					maxLines: MAX_SUBAGENT_TASK_LINES,
+					overflowText: (n) => theme.fg("muted", `… ${n} lines above`),
+				});
 			}
+			const taskLines = taskText.split("\n").filter((l) => l.trim());
+			const items: LiveFeedItem[] = taskLines.map((line, idx) => ({
+				id: `task:${idx}`,
+				text: theme.fg("dim", line),
+			}));
+			this.subagentTaskFeed.setItems(items);
 			const contentWidth = this.lastContentWidth || 74;
 			const taskWidth = Math.max(1, contentWidth - 3);
-			for (const line of taskFeed.render(taskWidth)) {
+			for (const line of this.subagentTaskFeed.render(taskWidth)) {
 				fixedTop.push(`${indent}${line}`);
 			}
 		} else {
@@ -555,7 +561,7 @@ export class ToolExecutionComponent extends Container {
 		const thinkText = (details?.currentThinking ?? "")
 			.split("\n")
 			.filter((l) => l.trim())
-			.map((line) => `\x1b[3m${theme.fg("thinkingText", line)}\x1b[23m`)
+			.map((line) => theme.italic(theme.fg("thinkingText", line)))
 			.join("\n");
 		if (thinkText) {
 			rightItems.push({ id: "thinking", text: thinkText });

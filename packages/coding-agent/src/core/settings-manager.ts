@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
+import { CONFIG_DIR_NAME, getAgentDir, getCustomThemesDir } from "../config.js";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -168,9 +168,14 @@ export class SettingsManager {
 			settings.steeringMode = settings.queueMode;
 			delete settings.queueMode;
 		}
-		// Migrate removed dark/light themes -> orange
+		// Migrate removed dark/light built-in themes -> orange.
+		// Skip if a custom theme file with that name exists (user-created replacement).
+		// TODO: add migration tests for theme clobbering edge cases (custom dark/light)
 		if (settings.theme === "dark" || settings.theme === "light") {
-			settings.theme = "orange";
+			const customThemeFile = join(getCustomThemesDir(), `${settings.theme}.json`);
+			if (!existsSync(customThemeFile)) {
+				settings.theme = "orange";
+			}
 		}
 		return settings as Settings;
 	}

@@ -23,6 +23,7 @@ export type AppAction =
 	| "expandTools"
 	| "toggleThinking"
 	| "externalEditor"
+	| "modelSelector"
 	| "followUp"
 	| "dequeue"
 	| "pasteImage"
@@ -30,7 +31,6 @@ export type AppAction =
 	| "scrollDown"
 	| "scrollPageUp"
 	| "scrollPageDown"
-	| "modelSelector"
 	| "scrollToTop"
 	| "scrollToBottom";
 
@@ -58,10 +58,13 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	expandTools: "ctrl+o",
 	toggleThinking: "ctrl+t",
 	externalEditor: "ctrl+g",
+	// Note: ctrl+s may trigger XOFF (software flow control) on some terminals.
+	// If output freezes, run `stty -ixon` to disable flow control, or rebind
+	// modelSelector to a different key in keybindings.json.
+	modelSelector: "ctrl+s",
 	followUp: "alt+enter",
 	dequeue: "alt+up",
 	pasteImage: "ctrl+v",
-	modelSelector: "ctrl+s",
 	scrollUp: "shift+up",
 	scrollDown: "shift+down",
 	scrollPageUp: "pageUp",
@@ -88,10 +91,10 @@ const APP_ACTIONS: AppAction[] = [
 	"expandTools",
 	"toggleThinking",
 	"externalEditor",
+	"modelSelector",
 	"followUp",
 	"dequeue",
 	"pasteImage",
-	"modelSelector",
 	"scrollUp",
 	"scrollDown",
 	"scrollPageUp",

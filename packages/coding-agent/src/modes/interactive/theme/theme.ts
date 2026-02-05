@@ -697,9 +697,10 @@ export function initTheme(themeName?: string, enableWatcher: boolean = false): v
 			startThemeWatcher();
 		}
 	} catch (_error) {
-		// Theme is invalid - fall back to orange theme silently
-		currentThemeName = "orange";
-		setGlobalTheme(loadTheme("orange"));
+		// Theme is invalid - fall back to default theme silently
+		const fallback = getDefaultTheme();
+		currentThemeName = fallback;
+		setGlobalTheme(loadTheme(fallback));
 		// Don't start watcher for fallback theme
 	}
 }
@@ -716,9 +717,10 @@ export function setTheme(name: string, enableWatcher: boolean = false): { succes
 		}
 		return { success: true };
 	} catch (error) {
-		// Theme is invalid - fall back to orange theme
-		currentThemeName = "orange";
-		setGlobalTheme(loadTheme("orange"));
+		// Theme is invalid - fall back to default theme
+		const fallback = getDefaultTheme();
+		currentThemeName = fallback;
+		setGlobalTheme(loadTheme(fallback));
 		// Don't start watcher for fallback theme
 		return {
 			success: false,
@@ -748,7 +750,7 @@ function startThemeWatcher(): void {
 	}
 
 	// Only watch if it's a custom theme (not built-in)
-	if (!currentThemeName || currentThemeName === "orange") {
+	if (!currentThemeName || currentThemeName === getDefaultTheme()) {
 		return;
 	}
 
@@ -780,8 +782,9 @@ function startThemeWatcher(): void {
 				// File was deleted or renamed - fall back to default theme
 				setTimeout(() => {
 					if (!fs.existsSync(themeFile)) {
-						currentThemeName = "orange";
-						setGlobalTheme(loadTheme("orange"));
+						const fallback = getDefaultTheme();
+						currentThemeName = fallback;
+						setGlobalTheme(loadTheme(fallback));
 						if (themeWatcher) {
 							themeWatcher.close();
 							themeWatcher = undefined;
@@ -864,15 +867,22 @@ export function getResolvedThemeColors(themeName?: string): Record<string, strin
 	const themeJson = loadThemeJson(name);
 	const resolved = resolveThemeColors(themeJson.colors, themeJson.vars);
 
-	// Default text color for empty values (terminal uses default fg color)
-	const defaultText = "#e5e5e7";
+	// Derive default text fallback from the theme's own "text" color.
+	// This avoids assuming dark/light mode — the theme's text color is authoritative.
+	const textColor = resolved.text;
+	const defaultText =
+		typeof textColor === "number"
+			? ansi256ToHex(textColor)
+			: typeof textColor === "string" && textColor.length > 0
+				? textColor
+				: "#e5e5e7"; // ultimate fallback if text itself is empty
 
 	const cssColors: Record<string, string> = {};
 	for (const [key, value] of Object.entries(resolved)) {
 		if (typeof value === "number") {
 			cssColors[key] = ansi256ToHex(value);
 		} else if (value === "") {
-			// Empty means default terminal color - use sensible fallback for HTML
+			// Empty means default terminal color - use theme's text color for HTML
 			cssColors[key] = defaultText;
 		} else {
 			cssColors[key] = value;

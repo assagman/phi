@@ -95,7 +95,7 @@ export function getLoginProviders(): LoginProviderInfo[] {
 		available: p.available,
 	}));
 
-	const envProviders = getEnvApiKeyProviders();
+	const envProviders = getEnvApiKeyProviders().sort((a, b) => a.name.localeCompare(b.name));
 
 	return [...oauthProviders, ...envProviders];
 }

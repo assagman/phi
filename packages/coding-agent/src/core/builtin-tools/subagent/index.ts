@@ -351,7 +351,7 @@ export function clearRegistryCache(): void {
 function getProviderEnvVars(provider: string): string[] {
 	switch (provider) {
 		case "anthropic":
-			return ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"];
+			return ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
 		case "openai":
 			return ["OPENAI_API_KEY"];
 		case "google":
@@ -418,12 +418,17 @@ function buildSubprocessEnv(provider: string, apiKey: string): Record<string, st
 		}
 	}
 
-	// For providers that use multiple env vars (bedrock, vertex, copilot),
-	// pass through whichever vars are set in the parent process.
-	// For simple API key providers, set the primary env var.
+	// Providers that use multiple env vars or non-standard auth (OAuth, ADC, IAM roles)
+	// need all their env vars passed through from the parent process.
+	// Simple API key providers just need the primary env var set.
 	const providerVars = getProviderEnvVars(provider);
-	const needsPassthrough =
-		provider === "amazon-bedrock" || provider === "google-vertex" || provider === "github-copilot";
+	const PASSTHROUGH_PROVIDERS = new Set([
+		"amazon-bedrock",
+		"google-vertex",
+		"github-copilot",
+		"google-gemini-cli", // OAuth-based, credentials stored in auth.json
+	]);
+	const needsPassthrough = PASSTHROUGH_PROVIDERS.has(provider);
 
 	if (needsPassthrough) {
 		for (const key of providerVars) {
@@ -486,7 +491,9 @@ interface SubagentProgress {
 
 /**
  * Parse a "provider/modelId" string into its components.
- * Returns undefined if the string doesn't contain a slash.
+ * Splits on the first slash only — provider is the substring before it,
+ * modelId is everything after (may contain additional slashes, e.g. "org/model/variant").
+ * Returns undefined if no slash is found or it's at position 0 or end.
  */
 function parseModelSpec(spec: string): { provider: string; modelId: string } | undefined {
 	const slashIdx = spec.indexOf("/");
@@ -504,19 +511,15 @@ async function resolveSubprocessAuth(
 	parentModel: Model<any>,
 	context: SubagentToolContext,
 ): Promise<{ provider: string; modelId: string; apiKey: string }> {
-	if (agent.model) {
-		const parsed = parseModelSpec(agent.model);
-		if (parsed) {
-			const apiKey = await context.getApiKeyForProvider(parsed.provider);
-			return { provider: parsed.provider, modelId: parsed.modelId, apiKey };
-		}
-		// No slash — treat entire string as model ID, use parent provider
-		const apiKey = await context.getApiKey(parentModel);
-		return { provider: parentModel.provider, modelId: agent.model, apiKey };
-	}
-	// No agent model — use parent model
-	const apiKey = await context.getApiKey(parentModel);
-	return { provider: parentModel.provider, modelId: parentModel.id, apiKey };
+	// Determine provider + modelId: agent-specific model takes precedence
+	const parsed = agent.model ? parseModelSpec(agent.model) : undefined;
+	const provider = parsed?.provider ?? parentModel.provider;
+	const modelId = parsed?.modelId ?? agent.model ?? parentModel.id;
+
+	// Resolve API key: use provider-specific lookup for custom provider, else parent
+	const apiKey = parsed ? await context.getApiKeyForProvider(provider) : await context.getApiKey(parentModel);
+
+	return { provider, modelId, apiKey };
 }
 
 async function runSubagent(
@@ -990,6 +993,7 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 								results: [...results],
 								agentName: step.agent,
 								task: taskWithContext,
+								summary: params.summary,
 								...agentMeta(agent, model),
 							},
 						});
@@ -1015,6 +1019,7 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 										currentThinking: progress.currentThinking,
 										agentName: step.agent,
 										task: taskWithContext,
+										summary: params.summary,
 										turns: progress.result.usage.turns,
 										...agentMeta(agent!, model),
 									},
@@ -1102,7 +1107,7 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 									text: `${LOG_PREFIX} Parallel: ${done}/${allResults.length} done, ${running} running...`,
 								},
 							],
-							details: { mode: "parallel", results: allResults.filter(Boolean) },
+							details: { mode: "parallel", results: allResults.filter(Boolean), summary: params.summary },
 						});
 					}
 				};
@@ -1158,7 +1163,7 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 							text: `${LOG_PREFIX} Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
 						},
 					],
-					details: { mode: "parallel", results },
+					details: { mode: "parallel", results, summary: params.summary },
 				};
 			}
 

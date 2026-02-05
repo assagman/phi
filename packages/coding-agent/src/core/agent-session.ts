@@ -123,8 +123,8 @@ export interface AgentSessionConfig {
 	modelRegistry: ModelRegistry;
 	/** Tool registry for extension getTools/setTools - maps name to tool */
 	toolRegistry?: Map<string, AgentTool>;
-	/** Function to rebuild system prompt when tools change */
-	rebuildSystemPrompt?: (toolNames: string[]) => string;
+	/** Function to rebuild system prompt when tools change. Optional cwd overrides process.cwd(). */
+	rebuildSystemPrompt?: (toolNames: string[], cwd?: string) => string;
 	/** Builtin tools lifecycle (delta, epsilon, sigma, handoff) */
 	builtinToolsLifecycle?: import("./builtin-tools/index.js").BuiltinToolsLifecycle;
 	/** Initial working directory */
@@ -237,7 +237,7 @@ export class AgentSession {
 	private _toolRegistry: Map<string, AgentTool>;
 
 	// Function to rebuild system prompt when tools change
-	private _rebuildSystemPrompt?: (toolNames: string[]) => string;
+	private _rebuildSystemPrompt?: (toolNames: string[], cwd?: string) => string;
 
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt: string;
@@ -450,6 +450,8 @@ export class AgentSession {
 				if (command) {
 					const worktreePath = this._detectWorktreeAdd(command);
 					if (worktreePath) {
+						// Intentional last-wins: if multiple bash commands create worktrees
+						// in a single agent turn, only the last detected path is used.
 						this._pendingCwdChange = worktreePath;
 					}
 				}
@@ -2583,19 +2585,33 @@ export class AgentSession {
 	 * Handles compound commands like `cd /bare && git worktree add <relative-path>`.
 	 */
 	private _detectWorktreeAdd(command: string): string | undefined {
-		// Match: git worktree add with flags-with-args (-b/-B/--reason take arg), flags-without-args (-f/--force/etc), and -- separator
+		// Match: git worktree add with various flags, then capture the path argument.
+		// Supports quoted paths ("..." or '...') and unquoted tokens.
+		// Flags with args: -b/-B/--reason (consume next token)
+		// Flags without args: -f/--force/--detach/--checkout/--no-checkout/--lock/--track/--no-track/--guess-remote/--no-guess-remote
+		// The -- separator ends flag parsing.
 		const match = command.match(
-			/git\s+worktree\s+add\s+(?:(?:-[bB]\s+\S+|--reason\s+\S+|-[f]|--(?:force|detach|checkout|no-checkout|lock)|--)\s+)*([^\s;|&"']+)/,
+			/git\s+worktree\s+add\s+(?:(?:-[bB]\s+\S+|--reason\s+\S+|-f|--(?:force|detach|checkout|no-checkout|lock|track|no-track|guess-remote|no-guess-remote)|--)\s+)*(?:"([^"]+)"|'([^']+)'|([^\s;|&"']+))/,
 		);
-		if (!match?.[1]) return undefined;
+		if (!match) return undefined;
+		const rawPath = match[1] ?? match[2] ?? match[3];
+		if (!rawPath) return undefined;
 
-		const rawPath = match[1];
-
-		// Determine the effective cwd by parsing any `cd <dir>` before the git command
+		// Determine the effective cwd by parsing any `cd <dir>` before the git worktree add.
+		// Use the regex match index to bound the prefix, then take the LAST cd command.
 		let effectiveCwd = this._cwd;
-		const cdMatch = command.match(/cd\s+([^\s;|&]+)\s*(?:&&|;)/);
-		if (cdMatch?.[1]) {
-			effectiveCwd = resolvePath(this._cwd, cdMatch[1]);
+		if (match.index !== undefined && match.index > 0) {
+			const prefix = command.substring(0, match.index);
+			// Find all cd commands at statement boundaries (after start, &&, or ;)
+			const cdPattern = /(?:^|&&|;)\s*cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;|&"']+))/g;
+			const cdMatches = [...prefix.matchAll(cdPattern)];
+			const last = cdMatches.at(-1);
+			if (last) {
+				const cdPath = last[1] ?? last[2] ?? last[3];
+				if (cdPath) {
+					effectiveCwd = resolvePath(this._cwd, cdPath);
+				}
+			}
 		}
 
 		const resolved = resolvePath(effectiveCwd, rawPath);
@@ -2631,7 +2647,34 @@ export class AgentSession {
 		const previousCwd = this._cwd;
 		if (previousCwd === newPath) return;
 
-		// Update process cwd (global, affects footer which reads process.cwd())
+		// Build phase — compute new tools and prompt BEFORE any side effects.
+		// This ensures we don't leave the session half-updated if rebuilding throws.
+		let newToolEntries: [string, AgentTool][] | undefined;
+		let newActiveTools: AgentTool[] | undefined;
+		if (this._createBuiltInTools) {
+			const newTools = this._createBuiltInTools(newPath);
+			newToolEntries = Object.entries(newTools);
+
+			// Pre-compute active tool list from the updated registry snapshot
+			const activeToolNames = this.getActiveToolNames();
+			const registryCopy = new Map(this._toolRegistry);
+			for (const [name, tool] of newToolEntries) {
+				registryCopy.set(name, tool);
+			}
+			newActiveTools = [];
+			for (const name of activeToolNames) {
+				const tool = registryCopy.get(name);
+				if (tool) newActiveTools.push(tool);
+			}
+		}
+
+		let newSystemPrompt: string | undefined;
+		if (this._rebuildSystemPrompt) {
+			const toolNames = this.getActiveToolNames();
+			newSystemPrompt = this._rebuildSystemPrompt(toolNames, newPath);
+		}
+
+		// Commit phase — apply all changes atomically.
 		try {
 			process.chdir(newPath);
 		} catch (err) {
@@ -2641,27 +2684,16 @@ export class AgentSession {
 		}
 		this._cwd = newPath;
 
-		// Rebuild built-in tools with new cwd
-		if (this._createBuiltInTools) {
-			const newTools = this._createBuiltInTools(newPath);
-			for (const [name, tool] of Object.entries(newTools)) {
+		if (newToolEntries) {
+			for (const [name, tool] of newToolEntries) {
 				this._toolRegistry.set(name, tool);
 			}
-
-			// Update active tools on the agent
-			const activeToolNames = this.getActiveToolNames();
-			const activeTools: AgentTool[] = [];
-			for (const name of activeToolNames) {
-				const tool = this._toolRegistry.get(name);
-				if (tool) activeTools.push(tool);
-			}
-			this.agent.setTools(activeTools);
 		}
-
-		// Rebuild system prompt (references cwd)
-		if (this._rebuildSystemPrompt) {
-			const toolNames = this.getActiveToolNames();
-			this._baseSystemPrompt = this._rebuildSystemPrompt(toolNames);
+		if (newActiveTools) {
+			this.agent.setTools(newActiveTools);
+		}
+		if (newSystemPrompt !== undefined) {
+			this._baseSystemPrompt = newSystemPrompt;
 			this.agent.setSystemPrompt(this._baseSystemPrompt);
 		}
 
