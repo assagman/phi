@@ -2,7 +2,7 @@
 name: epsilon
 description: >-
   Task management CLI. Create, track, and manage tasks with status, priority,
-  tags, and subtasks. No JSON arguments, no enums - just simple CLI.
+  tags, and subtasks. No JSON arguments - just simple CLI.
   Triggers: task, todo, create task, mark done, progress, epsilon.
 ---
 
@@ -19,7 +19,7 @@ description: >-
 ├─────────────────────────────────────────────────────────────────┤
 │ CORE COMMANDS                                                   │
 ├─────────────────────────────────────────────────────────────────┤
-│ phi_epsilon add TITLE   │ Create task (--priority N, --parent)  │
+│ phi_epsilon add TITLE   │ Create task (--priority P, --parent)  │
 │ phi_epsilon get ID      │ Show task details                     │
 │ phi_epsilon rm ID       │ Delete task                           │
 │ phi_epsilon tag ID TAG  │ Add tag                               │
@@ -32,17 +32,18 @@ description: >-
 │ phi_epsilon all         │ include done/cancelled                │
 └─────────────────────────────────────────────────────────────────┘
 
-STATUS:    1=○todo  2=◐wip  3=⊘blocked  4=✓done  5=✗drop
-PRIORITY:  1=low  2=medium  3=high  4=critical
+STATUS:    todo | in_progress | blocked | done | cancelled
+PRIORITY:  low | medium | high | critical
+ALIASES:   wip → in_progress, drop/cancel → cancelled
 ```
 
 ## Examples
 
 ```bash
 # Workflow
-phi_epsilon add "Implement auth" --priority 3    # create
-phi_epsilon wip 1                                # start working
-phi_epsilon done 1                               # complete
+phi_epsilon add "Implement auth" --priority high     # create
+phi_epsilon wip 1                                    # start working
+phi_epsilon done 1                                   # complete
 
 # Check status
 phi_epsilon todo                 # what's pending
@@ -59,13 +60,15 @@ phi_epsilon tag 1 backend        # add tag
 
 ```bash
 # List with filters
-phi_epsilon list --priority 3 --tag backend --limit 10
+phi_epsilon list --priority high --tag backend --limit 10
+phi_epsilon list --filter todo,in_progress,done
 
 # Update details
-phi_epsilon update 1 --title "New title" --priority 4
+phi_epsilon update 1 --title "New title" --priority critical
+phi_epsilon update 1 --status blocked
 
 # Subtasks
-phi_epsilon add "Feature X" --priority 3
+phi_epsilon add "Feature X" --priority high
 phi_epsilon add "Subtask" --parent 1
 phi_epsilon get 1                # shows subtasks
 ```

@@ -27,23 +27,146 @@ EXIT_INVALID_ARGS=1
 EXIT_NOT_FOUND=2
 EXIT_DB_ERROR=3
 
-# Status: 1=todo, 2=in_progress, 3=blocked, 4=done, 5=cancelled
-STATUS_NAMES=("" "todo" "in_progress" "blocked" "done" "cancelled")
-STATUS_ICONS=("" "○" "◐" "⊘" "✓" "✗")
+# Valid status and priority values (canonical strings)
+VALID_STATUSES="todo in_progress blocked done cancelled"
+VALID_PRIORITIES="low medium high critical"
 
-# Priority: 1=low, 2=medium, 3=high, 4=critical
-PRIORITY_NAMES=("" "low" "medium" "high" "critical")
+# Schema version: bump when schema changes
+SCHEMA_VERSION=2
 
 # ─────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────
 die() { echo "error: $1" >&2; exit "${2:-$EXIT_INVALID_ARGS}"; }
+log() { echo "epsilon: $*" >&2; }
+
+table_exists() {
+    [[ "$(sql "SELECT 1 FROM sqlite_master WHERE type='table' AND name='$1' LIMIT 1;")" == "1" ]]
+}
+
+get_schema_version() {
+    if ! table_exists "schema_version"; then
+        echo 0
+        return
+    fi
+    local v
+    v="$(sql "SELECT version FROM schema_version WHERE id=1 LIMIT 1;")"
+    echo "${v:-0}"
+}
+
+ensure_schema_version_table() {
+    sql "CREATE TABLE IF NOT EXISTS schema_version (
+        id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+        version INTEGER NOT NULL
+    );"
+}
+
+backup_db() {
+    local bak="${DB_FILE}.bak"
+    log "backup: $DB_FILE -> $bak"
+    cp -p "$DB_FILE" "$bak"
+}
+
+migrate_to_v2() {
+    log "migrate v1 -> v2: validating data"
+
+    # Preflight: fix any invalid status values
+    local bad_status
+    bad_status="$(sql "SELECT COUNT(*) FROM tasks WHERE status NOT IN ('todo','in_progress','blocked','done','cancelled');")"
+    if [[ "${bad_status:-0}" != "0" ]]; then
+        log "fixing $bad_status rows with invalid status"
+        sql "UPDATE tasks SET status = CASE
+            WHEN lower(trim(status)) IN ('wip','inprogress') THEN 'in_progress'
+            WHEN lower(trim(status)) IN ('complete','completed') THEN 'done'
+            WHEN lower(trim(status)) IN ('drop','cancel','canceled') THEN 'cancelled'
+            ELSE 'todo'
+        END
+        WHERE status NOT IN ('todo','in_progress','blocked','done','cancelled');"
+    fi
+
+    # Preflight: fix any invalid priority values
+    local bad_priority
+    bad_priority="$(sql "SELECT COUNT(*) FROM tasks WHERE priority NOT IN ('low','medium','high','critical');")"
+    if [[ "${bad_priority:-0}" != "0" ]]; then
+        log "fixing $bad_priority rows with invalid priority"
+        sql "UPDATE tasks SET priority = CASE
+            WHEN lower(trim(priority)) IN ('med') THEN 'medium'
+            WHEN lower(trim(priority)) IN ('urgent') THEN 'critical'
+            ELSE 'medium'
+        END
+        WHERE priority NOT IN ('low','medium','high','critical');"
+    fi
+
+    # Rebuild table with CHECK constraints inside a transaction
+    log "rebuilding tasks table with CHECK constraints"
+    sqlite3 -batch -bail -cmd ".output /dev/null" -cmd "PRAGMA busy_timeout = 5000;" -cmd "PRAGMA journal_mode = WAL;" -cmd "PRAGMA foreign_keys = OFF;" -cmd ".output stdout" "$DB_FILE" <<'MIGRATION'
+
+BEGIN IMMEDIATE;
+
+DROP TABLE IF EXISTS tasks_new;
+
+CREATE TABLE tasks_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'todo'
+        CHECK(status IN ('todo','in_progress','blocked','done','cancelled')),
+    priority TEXT DEFAULT 'medium'
+        CHECK(priority IN ('low','medium','high','critical')),
+    tags TEXT,
+    parent_id INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    FOREIGN KEY (parent_id) REFERENCES tasks_new(id) ON DELETE CASCADE
+);
+
+INSERT INTO tasks_new (id, title, description, status, priority, tags, parent_id, created_at, updated_at, completed_at)
+SELECT id, title, description, status, priority, tags, parent_id, created_at, updated_at, completed_at
+FROM tasks;
+
+DROP TABLE tasks;
+ALTER TABLE tasks_new RENAME TO tasks;
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+
+CREATE TABLE IF NOT EXISTS schema_version (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    version INTEGER NOT NULL
+);
+INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 2);
+
+COMMIT;
+MIGRATION
+
+    log "migration complete (schema_version=2)"
+}
 
 ensure_db() {
     mkdir -p "$DATA_DIR"
+
     if [[ ! -f "$DB_FILE" ]]; then
         init_db
-        echo "Initialized: $DB_FILE"
+        log "init new db (v$SCHEMA_VERSION): $DB_FILE"
+        return
+    fi
+
+    # Existing DB: check version and migrate if needed
+    local ver
+    ver="$(get_schema_version)"
+
+    # DBs without schema_version table but with tasks table are v1
+    if [[ "$ver" -eq 0 ]] && table_exists "tasks"; then
+        ensure_schema_version_table
+        sql "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 1);"
+        ver=1
+    fi
+
+    if [[ "$ver" -lt 2 ]]; then
+        backup_db
+        migrate_to_v2
     fi
 }
 
@@ -52,29 +175,39 @@ ensure_db() {
 sql() { sqlite3 -batch -noheader -cmd ".output /dev/null" -cmd "PRAGMA busy_timeout = 5000;" -cmd "PRAGMA journal_mode = WAL;" -cmd ".output stdout" "$DB_FILE" "$@"; }
 sql_pretty() { sqlite3 -batch -header -column -cmd ".output /dev/null" -cmd "PRAGMA busy_timeout = 5000;" -cmd "PRAGMA journal_mode = WAL;" -cmd ".output stdout" "$DB_FILE" "$@"; }
 
-status_name() { echo "${STATUS_NAMES[$1]:-}"; }
-status_icon() { echo "${STATUS_ICONS[$1]:-}"; }
-priority_name() { echo "${PRIORITY_NAMES[$1]:-}"; }
-
-status_num() {
+status_icon() {
     case "$1" in
-        todo|1) echo 1 ;; in_progress|2) echo 2 ;; blocked|3) echo 3 ;;
-        done|4) echo 4 ;; cancelled|5) echo 5 ;; *) echo "" ;;
+        todo) echo "○" ;; in_progress) echo "◐" ;; blocked) echo "⊘" ;;
+        done) echo "✓" ;; cancelled) echo "✗" ;; *) echo "?" ;;
     esac
 }
 
-priority_num() {
+# Normalize status aliases (wip→in_progress, drop/cancel→cancelled)
+normalize_status() {
     case "$1" in
-        low|1) echo 1 ;; medium|2) echo 2 ;; high|3) echo 3 ;; critical|4) echo 4 ;; *) echo "" ;;
+        todo) echo "todo" ;;
+        wip|in_progress) echo "in_progress" ;;
+        blocked) echo "blocked" ;;
+        done) echo "done" ;;
+        drop|cancel|cancelled) echo "cancelled" ;;
+        *) echo "" ;;
+    esac
+}
+
+normalize_priority() {
+    case "$1" in
+        low) echo "low" ;; medium) echo "medium" ;; high) echo "high" ;; critical) echo "critical" ;; *) echo "" ;;
     esac
 }
 
 validate_status() {
-    [[ "$1" =~ ^[1-5]$ ]] || die "invalid status '$1' (1=todo, 2=in_progress, 3=blocked, 4=done, 5=cancelled)"
+    local s; s=$(normalize_status "$1")
+    [[ -n "$s" ]] || die "invalid status '$1' (todo, in_progress, blocked, done, cancelled)"
 }
 
 validate_priority() {
-    [[ "$1" =~ ^[1-4]$ ]] || die "invalid priority '$1' (1=low, 2=medium, 3=high, 4=critical)"
+    local p; p=$(normalize_priority "$1")
+    [[ -n "$p" ]] || die "invalid priority '$1' (low, medium, high, critical)"
 }
 
 escape() { printf '%s' "$1" | sed "s/'/''/g"; }
@@ -102,16 +235,23 @@ fmt_ts() {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# Database (compatible with existing schema)
+# Database (v2 schema with CHECK constraints)
 # ─────────────────────────────────────────────────────────────────
 init_db() {
     sql <<'SQL'
+CREATE TABLE IF NOT EXISTS schema_version (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    version INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     description TEXT,
-    status TEXT NOT NULL DEFAULT 'todo',
-    priority TEXT DEFAULT 'medium',
+    status TEXT NOT NULL DEFAULT 'todo'
+        CHECK(status IN ('todo','in_progress','blocked','done','cancelled')),
+    priority TEXT DEFAULT 'medium'
+        CHECK(priority IN ('low','medium','high','critical')),
     tags TEXT,
     parent_id INTEGER,
     created_at INTEGER NOT NULL,
@@ -119,9 +259,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     completed_at INTEGER,
     FOREIGN KEY (parent_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
+
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+
+INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 2);
 SQL
 }
 
@@ -134,8 +277,8 @@ cmd_create() {
     
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --status) shift; validate_status "$1"; status="${STATUS_NAMES[$1]}" ;;
-            --priority) shift; validate_priority "$1"; priority="${PRIORITY_NAMES[$1]}" ;;
+            --status) shift; validate_status "$1"; status="$(normalize_status "$1")" ;;
+            --priority) shift; validate_priority "$1"; priority="$(normalize_priority "$1")" ;;
             --description) shift; description="$1" ;;
             --parent) shift; parent_id="$1" ;;
             -*) die "unknown option: $1" ;;
@@ -144,7 +287,7 @@ cmd_create() {
         shift
     done
     
-    [[ -n "$title" ]] || die "usage: phi_epsilon create <title> [--status N] [--priority N] [--description TEXT] [--parent ID]"
+    [[ -n "$title" ]] || die "usage: phi_epsilon create <title> [--status STATUS] [--priority PRIORITY] [--description TEXT] [--parent ID]"
     
     local ts; ts=$(now)
     local sql_desc="NULL"
@@ -157,7 +300,7 @@ cmd_create() {
               VALUES ('$(escape "$title")', $sql_desc, '$status', '$priority', $sql_parent, $ts, $ts)
               RETURNING id;")
     
-    local icon; icon=$(status_icon "$(status_num "$status")")
+    local icon; icon=$(status_icon "$status")
     echo "created #${id}: ${icon} [${priority}] ${title}"
 }
 
@@ -166,17 +309,17 @@ cmd_list() {
     
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --status) shift; validate_status "$1"; statuses+=("${STATUS_NAMES[$1]}") ;;
+            --status) shift; validate_status "$1"; statuses+=("$(normalize_status "$1")") ;;
             --filter) 
                 shift
-                # Parse comma-separated status numbers: --filter 1,2,4
-                IFS=',' read -ra nums <<< "$1"
-                for n in "${nums[@]}"; do
-                    validate_status "$n"
-                    statuses+=("${STATUS_NAMES[$n]}")
+                # Parse comma-separated status names: --filter todo,in_progress,done
+                IFS=',' read -ra tokens <<< "$1"
+                for t in "${tokens[@]}"; do
+                    validate_status "$t"
+                    statuses+=("$(normalize_status "$t")")
                 done
                 ;;
-            --priority) shift; validate_priority "$1"; priority="${PRIORITY_NAMES[$1]}" ;;
+            --priority) shift; validate_priority "$1"; priority="$(normalize_priority "$1")" ;;
             --tag) shift; tag="$1" ;;
             --parent) shift; parent="$1" ;;
             --limit) shift; limit="$1" ;;
@@ -207,8 +350,7 @@ cmd_list() {
          CASE status WHEN 'in_progress' THEN 1 WHEN 'blocked' THEN 2 WHEN 'todo' THEN 3 WHEN 'done' THEN 4 ELSE 5 END,
          CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
          id DESC LIMIT $limit;" | while IFS='|' read -r id status priority title tags; do
-        local snum; snum=$(status_num "$status")
-        local icon; icon=$(status_icon "$snum")
+        local icon; icon=$(status_icon "$status")
         local tag_str=""
         [[ -n "$tags" ]] && tag_str=" [${tags}]"
         echo "${icon} #${id} [${priority}] ${title}${tag_str}"
@@ -226,8 +368,7 @@ cmd_get() {
     
     IFS='|' read -r id title desc status priority tags parent_id created updated completed <<< "$row"
     
-    local snum; snum=$(status_num "$status")
-    local icon; icon=$(status_icon "$snum")
+    local icon; icon=$(status_icon "$status")
     
     # Header
     echo "${icon} #${id} [${priority}] ${title}"
@@ -255,8 +396,7 @@ cmd_get() {
         echo "  ─────────────────────────────────────────────"
         echo "  subtasks:"
         echo "$subtasks" | while IFS='|' read -r sid sstatus spri stitle; do
-            local ssnum; ssnum=$(status_num "$sstatus")
-            local sicon; sicon=$(status_icon "$ssnum")
+            local sicon; sicon=$(status_icon "$sstatus")
             echo "    ${sicon} #${sid} [${spri}] ${stitle}"
         done
     fi
@@ -266,12 +406,12 @@ cmd_update() {
     local id="" status="" priority="" title="" description=""
     
     [[ $# -gt 0 ]] && { id="$1"; shift; }
-    [[ -n "$id" ]] || die "usage: phi_epsilon update <id> [--status N] [--priority N] [--title TEXT] [--description TEXT]"
+    [[ -n "$id" ]] || die "usage: phi_epsilon update <id> [--status STATUS] [--priority PRIORITY] [--title TEXT] [--description TEXT]"
     
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --status) shift; validate_status "$1"; status="${STATUS_NAMES[$1]}" ;;
-            --priority) shift; validate_priority "$1"; priority="${PRIORITY_NAMES[$1]}" ;;
+            --status) shift; validate_status "$1"; status="$(normalize_status "$1")" ;;
+            --priority) shift; validate_priority "$1"; priority="$(normalize_priority "$1")" ;;
             --title) shift; title="$1" ;;
             --description) shift; description="$1" ;;
             -*) die "unknown option: $1" ;;
@@ -294,8 +434,7 @@ cmd_update() {
     [[ -n "$result" ]] || die "task #$id not found" $EXIT_NOT_FOUND
     
     IFS='|' read -r rid rstatus rpri rtitle <<< "$result"
-    local rnum; rnum=$(status_num "$rstatus")
-    local icon; icon=$(status_icon "$rnum")
+    local icon; icon=$(status_icon "$rstatus")
     echo "updated ${icon} #${rid} [${rpri}] ${rtitle}"
 }
 
@@ -379,8 +518,8 @@ cmd_info() {
         SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) AS cancelled
     FROM tasks;"
     echo ""
-    echo "Status:   1=○todo  2=◐in_progress  3=⊘blocked  4=✓done  5=✗cancelled"
-    echo "Priority: 1=low  2=medium  3=high  4=critical"
+    echo "Status:   ○todo  ◐in_progress  ⊘blocked  ✓done  ✗cancelled"
+    echo "Priority: low  medium  high  critical"
 }
 
 cmd_help() {
@@ -389,8 +528,9 @@ phi_epsilon - Task management CLI
 
 USAGE: phi_epsilon <command> [args] [options]
 
-STATUS: 1=○todo 2=◐wip 3=⊘blocked 4=✓done 5=✗drop
-PRIORITY: 1=low 2=medium 3=high 4=critical
+STATUS:   todo | in_progress | blocked | done | cancelled
+PRIORITY: low | medium | high | critical
+ALIASES:  wip → in_progress, drop/cancel → cancelled
 
 COMMANDS (status commands: no ID=list, with ID=transition):
   todo [ID]       List todo tasks OR mark ID as todo
@@ -399,14 +539,14 @@ COMMANDS (status commands: no ID=list, with ID=transition):
   drop [ID]       List dropped OR mark ID as dropped    (alias: x, cancel)
 
   add <title>     Create task
-                  --priority N  --status N  --parent ID  --description TEXT
+                  --priority PRIORITY  --status STATUS  --parent ID  --description TEXT
   get <id>        Show task details                     (alias: show)
   update <id>     Modify task                           (alias: set)
-                  --priority N  --status N  --title TEXT  --description TEXT
+                  --priority PRIORITY  --status STATUS  --title TEXT  --description TEXT
   rm <id>         Delete task                           (alias: delete)
 
   list            List tasks (default: active only)     (alias: ls)
-                  --status N  --filter N,N  --priority N  --tag TAG
+                  --status STATUS  --filter S,S  --priority PRIORITY  --tag TAG
                   --parent ID  --limit N  --all
   backlog [N]     wip + todo by priority (default 50)
   next            Single highest-priority todo
@@ -421,9 +561,11 @@ COMMANDS (status commands: no ID=list, with ID=transition):
 OUTPUT: {icon} #{id} [{priority}] {title} [{tags}]
 
 EXAMPLES:
-  phi_epsilon add "Fix bug" --priority 3
+  phi_epsilon add "Fix bug" --priority high
   phi_epsilon wip 42 && phi_epsilon done 42
-  phi_epsilon list --tag backend --priority 4
+  phi_epsilon list --tag backend --priority critical
+  phi_epsilon list --filter todo,in_progress
+  phi_epsilon update 1 --status blocked --priority high
   phi_epsilon todo --limit 100
 
 ENV: PHI_EPSILON_DATA_DIR overrides ~/.local/share/phi/projects/<project>/
@@ -436,17 +578,17 @@ EOF
 # Unified status commands: list if no ID, transition if ID given
 cmd_todo() {
     if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
-        cmd_update "$1" --status 1
+        cmd_update "$1" --status todo
     else
-        cmd_list --status 1 "$@"
+        cmd_list --status todo "$@"
     fi
 }
 
 cmd_wip() {
     if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
-        cmd_update "$1" --status 2
+        cmd_update "$1" --status in_progress
     else
-        cmd_list --status 2 "$@"
+        cmd_list --status in_progress "$@"
     fi
 }
 
@@ -454,15 +596,15 @@ cmd_done_or_list() {
     if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
         cmd_done "$1"
     else
-        cmd_list --status 4 "$@"
+        cmd_list --status done "$@"
     fi
 }
 
 cmd_drop() {
     if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
-        cmd_update "$1" --status 5
+        cmd_update "$1" --status cancelled
     else
-        cmd_list --status 5 "$@"
+        cmd_list --status cancelled "$@"
     fi
 }
 
@@ -487,8 +629,7 @@ cmd_backlog() {
            CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
            id DESC
          LIMIT $limit;" | while IFS='|' read -r id status priority title tags; do
-        local snum; snum=$(status_num "$status")
-        local icon; icon=$(status_icon "$snum")
+        local icon; icon=$(status_icon "$status")
         local tag_str=""
         [[ -n "$tags" ]] && tag_str=" [${tags}]"
         echo "${icon} #${id} [${priority}] ${title}${tag_str}"
@@ -519,7 +660,7 @@ main() {
         drop|x|cancel) ensure_db; cmd_drop "$@" ;;   # list cancelled OR cancel
         
         # Extra list shortcuts
-        active) ensure_db; cmd_list --filter 1,2,3 "$@" ;;
+        active) ensure_db; cmd_list --filter todo,in_progress,blocked "$@" ;;
         all) ensure_db; cmd_list --all "$@" ;;
         next) ensure_db; cmd_next ;;
         backlog) ensure_db; cmd_backlog "$@" ;;
