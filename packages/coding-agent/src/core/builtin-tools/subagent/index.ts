@@ -51,7 +51,16 @@ export interface SubagentTask {
 	cwd?: string;
 }
 
-interface ExecutionResult {
+/** A tool call happening inside a subagent subprocess */
+export interface SubagentToolEvent {
+	toolCallId: string;
+	toolName: string;
+	args: Record<string, unknown>;
+	running: boolean;
+	isError?: boolean;
+}
+
+export interface ExecutionResult {
 	agent: string;
 	source: AgentSource;
 	task: string;
@@ -75,9 +84,28 @@ interface UsageStats {
 	turns: number;
 }
 
-interface SubagentDetails {
+export interface SubagentDetails {
 	mode: "single" | "parallel" | "chain";
 	results: ExecutionResult[];
+	/** Currently running + recently completed tools inside the subprocess */
+	activeTools?: SubagentToolEvent[];
+	/** All tool events across the entire subprocess lifetime (read, bash, etc.) */
+	allTools?: SubagentToolEvent[];
+	/** Streaming assistant text from the subprocess */
+	currentText?: string;
+	/** Streaming thinking text from the subprocess */
+	currentThinking?: string;
+	/** Name of the agent being executed */
+	agentName?: string;
+	/** Task description */
+	task?: string;
+	/** Completed turns so far */
+	turns?: number;
+	/** Agent metadata for display */
+	agentModel?: string;
+	agentThinkingLevel?: string;
+	agentTemperature?: number;
+	agentSource?: AgentSource;
 }
 
 // ─── Preset Registry ────────────────────────────────────────────────────────
@@ -248,6 +276,8 @@ export function createAgentRegistry(cwd: string, scope: "preset" | "user" | "pro
 				systemPrompt: template.systemPrompt,
 				thinkingLevel: template.thinkingLevel,
 				temperature: template.temperature,
+				model: template.model,
+				tools: template.tools,
 			});
 			seen.add(name);
 		}
@@ -399,6 +429,15 @@ function cleanupTempFiles(tmpDir: string | null, tmpPromptPath: string | null): 
 	}
 }
 
+/** Progress snapshot from a running subprocess */
+interface SubagentProgress {
+	result: ExecutionResult;
+	activeTools: SubagentToolEvent[];
+	allTools: SubagentToolEvent[];
+	currentText: string;
+	currentThinking: string;
+}
+
 async function runSubagent(
 	agent: AgentDefinition,
 	task: string,
@@ -406,7 +445,7 @@ async function runSubagent(
 	apiKey: string,
 	cwd: string,
 	signal: AbortSignal | undefined,
-	onUpdate: ((result: ExecutionResult) => void) | undefined,
+	onUpdate: ((progress: SubagentProgress) => void) | undefined,
 	step?: number,
 ): Promise<ExecutionResult> {
 	const result: ExecutionResult = {
@@ -470,6 +509,29 @@ async function runSubagent(
 		const proc = spawn("phi", args, { cwd, env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
 		let buffer = "";
 
+		// Real-time progress tracking for subprocess tool calls
+		const activeTools = new Map<string, SubagentToolEvent>();
+		/** Accumulates ALL tool events across the entire subprocess lifetime */
+		const allToolsList: SubagentToolEvent[] = [];
+		let currentText = "";
+		let currentThinking = "";
+		let lastProgressEmit = 0;
+		const PROGRESS_THROTTLE_MS = 100;
+
+		const emitProgress = () => {
+			if (!onUpdate) return;
+			const now = Date.now();
+			if (now - lastProgressEmit < PROGRESS_THROTTLE_MS) return;
+			lastProgressEmit = now;
+			onUpdate({
+				result,
+				activeTools: [...activeTools.values()],
+				allTools: [...allToolsList],
+				currentText,
+				currentThinking,
+			});
+		};
+
 		const processLine = (line: string) => {
 			if (!line.trim()) return;
 			let event: unknown;
@@ -479,7 +541,51 @@ async function runSubagent(
 				return;
 			}
 
-			const evt = event as { type?: string; message?: Message };
+			const evt = event as {
+				type?: string;
+				message?: Message;
+				toolCallId?: string;
+				toolName?: string;
+				args?: Record<string, unknown>;
+				isError?: boolean;
+			};
+
+			// Track subprocess tool calls
+			if (evt.type === "tool_execution_start" && evt.toolCallId && evt.toolName) {
+				const toolEvent: SubagentToolEvent = {
+					toolCallId: evt.toolCallId,
+					toolName: evt.toolName,
+					args: evt.args ?? {},
+					running: true,
+				};
+				activeTools.set(evt.toolCallId, toolEvent);
+				allToolsList.push(toolEvent);
+				emitProgress();
+			}
+
+			if (evt.type === "tool_execution_end" && evt.toolCallId) {
+				const tool = activeTools.get(evt.toolCallId);
+				if (tool) {
+					// Same object is in allToolsList — mutation propagates
+					tool.running = false;
+					tool.isError = evt.isError;
+				}
+				emitProgress();
+			}
+
+			// Track streaming assistant text and thinking
+			if (evt.type === "message_update" && evt.message?.role === "assistant") {
+				const msg = evt.message;
+				for (const part of msg.content) {
+					if (part.type === "text") {
+						currentText = part.text;
+					} else if (part.type === "thinking") {
+						currentThinking = (part as { type: "thinking"; thinking: string }).thinking;
+					}
+				}
+				emitProgress();
+			}
+
 			if (evt.type === "message_end" && evt.message) {
 				const msg = evt.message;
 				result.messages.push(msg);
@@ -499,12 +605,30 @@ async function runSubagent(
 					if (msg.stopReason) result.stopReason = msg.stopReason;
 					if (msg.errorMessage) result.errorMessage = msg.errorMessage;
 				}
-				onUpdate?.(result);
+				// Reset streaming text/thinking and clear completed tools between turns
+				currentText = "";
+				currentThinking = "";
+				for (const [id, tool] of activeTools) {
+					if (!tool.running) activeTools.delete(id);
+				}
+				onUpdate?.({
+					result,
+					activeTools: [...activeTools.values()],
+					allTools: [...allToolsList],
+					currentText,
+					currentThinking,
+				});
 			}
 
 			if (evt.type === "tool_result_end" && evt.message) {
 				result.messages.push(evt.message);
-				onUpdate?.(result);
+				onUpdate?.({
+					result,
+					activeTools: [...activeTools.values()],
+					allTools: [...allToolsList],
+					currentText,
+					currentThinking,
+				});
 			}
 		};
 
@@ -624,6 +748,19 @@ export interface SubagentToolContext {
 	getWorkingDir(): string;
 }
 
+/** Build agent metadata fields for SubagentDetails */
+function agentMeta(
+	agent: AgentDefinition,
+	model: Model<any>,
+): Pick<SubagentDetails, "agentModel" | "agentThinkingLevel" | "agentTemperature" | "agentSource"> {
+	return {
+		agentModel: agent.model || `${model.provider}/${model.id}`,
+		agentThinkingLevel: agent.thinkingLevel,
+		agentTemperature: agent.temperature,
+		agentSource: agent.source,
+	};
+}
+
 // ─── Result Formatting ──────────────────────────────────────────────────────
 
 function getFinalOutput(messages: Message[]): string {
@@ -711,12 +848,43 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 
 					const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
 
+					// Emit initial update with agent metadata for this step
+					if (onUpdate) {
+						onUpdate({
+							content: [{ type: "text", text: "(starting...)" }],
+							details: {
+								mode: "chain",
+								results: [...results],
+								agentName: step.agent,
+								task: taskWithContext,
+								...agentMeta(agent, model),
+							},
+						});
+					}
+
 					const chainUpdate = onUpdate
-						? (current: ExecutionResult) => {
-								const allResults = [...results, current];
+						? (progress: SubagentProgress) => {
+								const allResults = [...results, progress.result];
 								onUpdate({
-									content: [{ type: "text", text: getFinalOutput(current.messages) || "(running...)" }],
-									details: { mode: "chain", results: allResults },
+									content: [
+										{
+											type: "text",
+											text:
+												progress.currentText || getFinalOutput(progress.result.messages) || "(running...)",
+										},
+									],
+									details: {
+										mode: "chain",
+										results: allResults,
+										activeTools: progress.activeTools,
+										allTools: progress.allTools,
+										currentText: progress.currentText,
+										currentThinking: progress.currentThinking,
+										agentName: step.agent,
+										task: taskWithContext,
+										turns: progress.result.usage.turns,
+										...agentMeta(agent!, model),
+									},
 								});
 							}
 						: undefined;
@@ -823,8 +991,8 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 						apiKey,
 						t.cwd || context.getWorkingDir(),
 						signal,
-						(current) => {
-							allResults[index] = current;
+						(progress) => {
+							allResults[index] = progress.result;
 							emitUpdate();
 						},
 					);
@@ -861,6 +1029,20 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 					};
 				}
 
+				// Emit initial update with agent metadata so UI shows it immediately
+				if (onUpdate) {
+					onUpdate({
+						content: [{ type: "text", text: "(starting...)" }],
+						details: {
+							mode: "single",
+							results: [],
+							agentName: agent.name,
+							task: params.task,
+							...agentMeta(agent, model),
+						},
+					});
+				}
+
 				// Direct execution without UI overlay
 				// Status updates are sent via onUpdate callback for inline display
 				try {
@@ -873,10 +1055,29 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 						params.cwd || context.getWorkingDir(),
 						signal,
 						onUpdate
-							? (current) =>
+							? (progress) =>
 									onUpdate({
-										content: [{ type: "text", text: getFinalOutput(current.messages) || "(running...)" }],
-										details: { mode: "single", results: [current] },
+										content: [
+											{
+												type: "text",
+												text:
+													progress.currentText ||
+													getFinalOutput(progress.result.messages) ||
+													"(running...)",
+											},
+										],
+										details: {
+											mode: "single",
+											results: [progress.result],
+											activeTools: progress.activeTools,
+											allTools: progress.allTools,
+											currentText: progress.currentText,
+											currentThinking: progress.currentThinking,
+											agentName: agent.name,
+											task: params.task,
+											turns: progress.result.usage.turns,
+											...agentMeta(agent, model),
+										},
 									})
 							: undefined,
 					);
