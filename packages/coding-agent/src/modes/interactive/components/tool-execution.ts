@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import stripAnsi from "strip-ansi";
-import { Container, sliceByColumn, Text, type TUI, visibleWidth, wrapTextWithAnsi } from "tui";
+import { Container, LiveFeed, type LiveFeedItem, sliceByColumn, Text, type TUI, visibleWidth } from "tui";
 import type { SubagentDetails } from "../../../core/builtin-tools/subagent/index.js";
 import type { BashToolDetails } from "../../../core/tools/bash.js";
 import { sanitizeBinaryOutput } from "../../../utils/shell.js";
@@ -11,6 +11,7 @@ const MAX_CMD_LINES = 10;
 const MAX_ARG_LINES = 12;
 const MAX_SUBAGENT_BOX_LINES = 20;
 const MAX_EXPANDED_OUTPUT_LINES = 20;
+const MAX_STREAMING_PREVIEW_LINES = 8;
 const PULSE_PERIOD_MS = 1500; // Full pulse cycle duration
 const BORDER_PULSE_PERIOD_MS = 3000; // Slow border pulse cycle
 const PULSE_INTERVAL_MS = 100; // Pulse animation tick (~10fps, sufficient for smooth sine)
@@ -474,8 +475,8 @@ export class ToolExecutionComponent extends Container {
 			}
 		}
 
-		// ── Left pane: tool calls + parallel/chain progress ─────────────
-		const leftRaw: string[] = [];
+		// ── Left pane: tool calls + parallel/chain progress (LiveFeed items) ──
+		const leftItems: LiveFeedItem[] = [];
 
 		if (mode === "parallel" && Array.isArray(this.args.parallel)) {
 			const tasks = this.args.parallel as Array<{ agent: string; task: string }>;
@@ -488,7 +489,10 @@ export class ToolExecutionComponent extends Container {
 				} else {
 					taskStatus = this.running ? theme.fg("warning", "◐") : theme.fg("muted", "○");
 				}
-				leftRaw.push(`${taskStatus} ${colorAgentName(t.agent)} ${theme.fg("muted", `"${t.task}"`)}`);
+				leftItems.push({
+					id: `parallel:${idx}`,
+					text: `${taskStatus} ${colorAgentName(t.agent)} ${theme.fg("muted", `"${t.task}"`)}`,
+				});
 			}
 		}
 
@@ -505,9 +509,10 @@ export class ToolExecutionComponent extends Container {
 				} else {
 					stepStatus = theme.fg("muted", "○");
 				}
-				leftRaw.push(
-					`${stepStatus} ${theme.fg("muted", `${idx + 1}:`)} ${colorAgentName(step.agent)} ${theme.fg("muted", `"${step.task}"`)}`,
-				);
+				leftItems.push({
+					id: `chain:${idx}`,
+					text: `${stepStatus} ${theme.fg("muted", `${idx + 1}:`)} ${colorAgentName(step.agent)} ${theme.fg("muted", `"${step.task}"`)}`,
+				});
 			}
 		}
 
@@ -523,39 +528,53 @@ export class ToolExecutionComponent extends Container {
 					statusIcon = theme.fg("success", "✓");
 				}
 				const argSummary = formatSubagentToolArgs(tool.toolName, tool.args);
-				leftRaw.push(`${statusIcon} ${toolIcon} ${theme.fg("muted", tool.toolName)} ${argSummary}`);
+				leftItems.push({
+					id: `tool:${tool.toolCallId}`,
+					text: `${statusIcon} ${toolIcon} ${theme.fg("muted", tool.toolName)} ${argSummary}`,
+				});
 			}
 		}
 
-		// ── Right pane: thinking + text streams ─────────────────────────
-		const rightRaw: string[] = [];
+		// ── Right pane: thinking + text streams (LiveFeed items) ─────────
+		const rightItems: LiveFeedItem[] = [];
 
-		const thinkLines = (details?.currentThinking ?? "").split("\n").filter((l) => l.trim());
-		for (const line of thinkLines) {
-			rightRaw.push(`\x1b[3m${theme.fg("thinkingText", line)}\x1b[23m`);
+		const thinkText = (details?.currentThinking ?? "")
+			.split("\n")
+			.filter((l) => l.trim())
+			.map((line) => `\x1b[3m${theme.fg("thinkingText", line)}\x1b[23m`)
+			.join("\n");
+		if (thinkText) {
+			rightItems.push({ id: "thinking", text: thinkText });
 		}
 
-		const textLines = (details?.currentText ?? "").split("\n").filter((l) => l.trim());
-		for (const line of textLines) {
-			rightRaw.push(line);
+		const streamText = (details?.currentText ?? "")
+			.split("\n")
+			.filter((l) => l.trim())
+			.join("\n");
+		if (streamText) {
+			rightItems.push({ id: "text", text: streamText });
 		}
 
 		// ── No split content? Return simple layout ──────────────────────
-		const hasLeft = leftRaw.length > 0;
-		const hasRight = rightRaw.length > 0;
+		const hasLeft = leftItems.length > 0;
+		const hasRight = rightItems.length > 0;
 
 		if (!hasLeft && !hasRight) {
 			return [...fixedTop, ...fixedBottom].join("\n");
 		}
 
-		// If only one side has content, use full-width single column
-		if (!hasRight) {
-			const activity = leftRaw.map((l) => `${indent}${l}`);
-			return this.assembleSingleColumn(fixedTop, activity, fixedBottom);
-		}
-		if (!hasLeft) {
-			const activity = rightRaw.map((l) => `${indent}${l}`);
-			return this.assembleSingleColumn(fixedTop, activity, fixedBottom);
+		const paneBudget = Math.max(1, MAX_SUBAGENT_BOX_LINES - fixedTop.length - fixedBottom.length);
+		const overflowFn = (n: number) => theme.fg("muted", `\u2026 ${n} lines above`);
+
+		// If only one side has content, use full-width single column via LiveFeed
+		if (!hasRight || !hasLeft) {
+			const items = hasLeft ? leftItems : rightItems;
+			const feed = new LiveFeed({ maxLines: paneBudget, overflowText: overflowFn });
+			feed.setItems(items);
+			const contentWidth = this.lastContentWidth || 74;
+			const feedWidth = Math.max(1, contentWidth - 3); // subtract indent
+			const feedLines = feed.render(feedWidth).map((l) => `${indent}${l}`);
+			return [...fixedTop, ...feedLines, ...fixedBottom].join("\n");
 		}
 
 		// ── Split-pane: merge left and right side-by-side ───────────────
@@ -569,14 +588,14 @@ export class ToolExecutionComponent extends Container {
 		const leftWidth = Math.max(10, Math.floor(paneSpace * 0.4));
 		const rightWidth = Math.max(10, paneSpace - leftWidth);
 
-		// Wrap each pane's content to its column width
-		const leftWrapped = this.wrapPaneLines(leftRaw, leftWidth);
-		const rightWrapped = this.wrapPaneLines(rightRaw, rightWidth);
+		// Use LiveFeed for each pane's sliding window
+		const leftFeed = new LiveFeed({ maxLines: paneBudget, overflowText: overflowFn });
+		leftFeed.setItems(leftItems);
+		const leftVisible = leftFeed.render(leftWidth);
 
-		// Apply sliding window to each pane independently
-		const paneBudget = Math.max(1, MAX_SUBAGENT_BOX_LINES - fixedTop.length - fixedBottom.length);
-		const leftVisible = leftWrapped.slice(-paneBudget);
-		const rightVisible = rightWrapped.slice(-paneBudget);
+		const rightFeed = new LiveFeed({ maxLines: paneBudget, overflowText: overflowFn });
+		rightFeed.setItems(rightItems);
+		const rightVisible = rightFeed.render(rightWidth);
 
 		// Merge side-by-side, padding shorter side
 		const maxRows = Math.max(leftVisible.length, rightVisible.length);
@@ -594,45 +613,15 @@ export class ToolExecutionComponent extends Container {
 		return [...fixedTop, ...splitLines, ...fixedBottom].join("\n");
 	}
 
-	/**
-	 * Wrap raw lines to fit within a column width, preserving ANSI codes.
-	 */
-	private wrapPaneLines(rawLines: string[], width: number): string[] {
-		const result: string[] = [];
-		for (const line of rawLines) {
-			const wrapped = wrapTextWithAnsi(line, width);
-			result.push(...wrapped);
-		}
-		return result;
-	}
-
-	/**
-	 * Single-column assembly with sliding window (fallback when only one pane has content).
-	 */
-	private assembleSingleColumn(fixedTop: string[], activity: string[], fixedBottom: string[]): string {
-		const budget = Math.max(1, MAX_SUBAGENT_BOX_LINES - fixedTop.length - fixedBottom.length);
-		const indent = "   ";
-		const windowLines: string[] = [];
-
-		if (activity.length > budget) {
-			const skipped = activity.length - budget + 1;
-			windowLines.push(`${indent}${theme.fg("muted", `… ${skipped} lines above`)}`);
-			windowLines.push(...activity.slice(-(budget - 1)));
-		} else {
-			windowLines.push(...activity);
-		}
-
-		return [...fixedTop, ...windowLines, ...fixedBottom].join("\n");
-	}
-
 	private errorLines(): string[] {
 		if (!this.result?.isError) return [];
 		const out = this.output();
 		if (!out) return [];
+		// Errors show head (first lines) — LiveFeed shows tail, so use manual truncation here
 		const allLines = out.split("\n");
 		const lines = allLines.slice(0, MAX_ERROR_LINES);
 		if (allLines.length > MAX_ERROR_LINES) {
-			lines.push(theme.fg("muted", `… ${allLines.length - MAX_ERROR_LINES} more`));
+			lines.push(theme.fg("muted", `\u2026 ${allLines.length - MAX_ERROR_LINES} more`));
 		}
 		return lines.map((l) => theme.fg("error", `   ${l}`));
 	}
@@ -653,18 +642,44 @@ export class ToolExecutionComponent extends Container {
 		const allLines = out.split("\n");
 		const lines = allLines.slice(0, maxLines);
 		if (allLines.length > maxLines) {
-			lines.push(theme.fg("muted", `… ${allLines.length - maxLines} more`));
+			lines.push(theme.fg("muted", `\u2026 ${allLines.length - maxLines} more`));
 		}
 		return lines.map((l) => `   ${l}`);
+	}
+
+	/**
+	 * Streaming output preview for all non-subagent tools while running.
+	 * Uses LiveFeed to show a sliding window of the latest output lines.
+	 */
+	private streamingOutputLines(): string[] {
+		// Only show for running tools with partial output, not subagent (it has its own display)
+		if (!this.running || this.toolName === "subagent") return [];
+		const out = this.output();
+		if (!out) return [];
+		const allLines = out.split("\n");
+		if (allLines.length === 0) return [];
+
+		const feed = new LiveFeed({
+			maxLines: MAX_STREAMING_PREVIEW_LINES,
+			overflowText: (n) => theme.fg("muted", `\u2026 ${n} lines above`),
+		});
+		for (let idx = 0; idx < allLines.length; idx++) {
+			feed.addItem({ id: `stream:${idx}`, text: theme.fg("dim", allLines[idx]) });
+		}
+		// Use a reasonable width; actual width is applied by Text component wrapping
+		const feedLines = feed.render(200);
+		return feedLines.map((l) => `   ${l}`);
 	}
 
 	private update(): void {
 		const main = this.formatLine();
 		const argsLines = this.formatArgsLines();
+		const streaming = this.streamingOutputLines();
 		const expanded = this.expandedOutputLines();
 		const errors = this.errorLines();
 		const sections = [main];
 		if (argsLines.length) sections.push(argsLines.join("\n"));
+		if (streaming.length) sections.push(streaming.join("\n"));
 		if (expanded.length) sections.push(expanded.join("\n"));
 		if (errors.length) sections.push(errors.join("\n"));
 		this.text.setText(sections.join("\n"));

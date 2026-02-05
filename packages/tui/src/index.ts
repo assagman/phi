@@ -15,6 +15,7 @@ export { Editor, type EditorOptions, type EditorTheme } from "./components/edito
 export { FixedLayoutContainer, type FixedLayoutOptions } from "./components/fixed-layout.js";
 export { Image, type ImageOptions, type ImageTheme } from "./components/image.js";
 export { Input } from "./components/input.js";
+export { LiveFeed, type LiveFeedItem, type LiveFeedOptions } from "./components/live-feed.js";
 export { Loader } from "./components/loader.js";
 export { type DefaultTextStyle, Markdown, type MarkdownTheme } from "./components/markdown.js";
 export { PinnedInputBar, type PinnedInputBarOptions } from "./components/pinned-input-bar.js";
