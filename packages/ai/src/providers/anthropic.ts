@@ -175,15 +175,27 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			);
 			const params = buildParams(model, context, isOAuthToken, options);
 			options?.onPayload?.(params);
-			const anthropicStream = client.messages.stream({ ...params, stream: true }, { signal: options?.signal });
+			// Use raw .create() instead of .stream() to bypass the SDK's MessageStream
+			// accumulator which throws on duplicate message_start events (#1687)
+			const streamPromise = client.messages.create({ ...params, stream: true }, { signal: options?.signal });
 			stream.push({ type: "start", partial: output });
+			const anthropicStream = await streamPromise;
 
 			// Use WeakMap for partial JSON tracking instead of mutating content objects (#179)
 			type Block = (ThinkingContent | TextContent | ToolCall) & { index: number };
 			const blocks = output.content as Block[];
 
+			// Guard against duplicate message_start events from the API (#1687)
+			let seenMessageStart = false;
+
 			for await (const event of anthropicStream) {
 				if (event.type === "message_start") {
+					if (seenMessageStart) {
+						// Skip duplicate message_start to avoid desync between
+						// block indices and content array (#1687)
+						continue;
+					}
+					seenMessageStart = true;
 					// Capture initial token usage from message_start event
 					// This ensures we have input token counts even if the stream is aborted early
 					output.usage.input = event.message.usage.input_tokens || 0;
