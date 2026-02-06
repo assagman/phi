@@ -705,7 +705,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	}
 
-	// [DISABLED] Permission wrapping disabled — being rewritten as packages/permission
+	// Permission wrapping
+	activeToolsArray = wrapToolsWithPermissions(activeToolsArray as AgentTool[], permissionManager);
+	const permissionWrappedRegistry = wrapToolRegistryWithPermissions(
+		wrappedToolRegistry ?? toolRegistry,
+		permissionManager,
+	);
 	time("wrapPermissions");
 
 	// Function to rebuild system prompt when tools change.
@@ -918,7 +923,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		skillWarnings,
 		skillsSettings: settingsManager.getSkillsSettings(),
 		modelRegistry,
-		toolRegistry: wrappedToolRegistry ?? toolRegistry,
+		toolRegistry: permissionWrappedRegistry,
 		rebuildSystemPrompt,
 		builtinToolsLifecycle,
 		permissionManager,
@@ -936,6 +941,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			} else {
 				tools = Object.values(rawTools);
 			}
+			// Re-wrap with permissions
+			tools = wrapToolsWithPermissions(tools, permissionManager);
+
 			const result: Record<string, AgentTool> = {};
 			for (const tool of tools) {
 				result[tool.name] = tool;
