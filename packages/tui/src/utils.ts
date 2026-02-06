@@ -83,6 +83,12 @@ export function visibleWidth(str: string): number {
 		return 0;
 	}
 
+	// Check cache FIRST — avoids redundant ASCII scan on repeated strings
+	const cached = widthCache.get(str);
+	if (cached !== undefined) {
+		return cached;
+	}
+
 	// Fast path: pure ASCII printable
 	let isPureAscii = true;
 	for (let i = 0; i < str.length; i++) {
@@ -94,12 +100,6 @@ export function visibleWidth(str: string): number {
 	}
 	if (isPureAscii) {
 		return str.length;
-	}
-
-	// Check cache
-	const cached = widthCache.get(str);
-	if (cached !== undefined) {
-		return cached;
 	}
 
 	// Normalize: tabs to 3 spaces, strip ANSI escape codes

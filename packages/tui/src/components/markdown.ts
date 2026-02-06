@@ -45,6 +45,14 @@ export interface MarkdownTheme {
 	codeBlockIndent?: string;
 }
 
+/**
+ * Cached per-token rendered+wrapped lines.
+ * Keyed by `${contentWidth}|${nextTokenType}`.
+ */
+interface TokenRenderEntry {
+	lines: string[];
+}
+
 export class Markdown implements Component {
 	private text: string;
 	private paddingX: number; // Left/right padding
@@ -53,10 +61,18 @@ export class Markdown implements Component {
 	private theme: MarkdownTheme;
 	private defaultStylePrefix?: string;
 
-	// Cache for rendered output
+	// Cache for final rendered output
 	private cachedText?: string;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
+
+	// Incremental lexer state
+	private lastNormalizedText?: string;
+	private stableTokens: Token[] = [];
+	private stableRawLength = 0; // byte offset where stable prefix ends
+
+	// Per-token render cache (token identity → width-keyed lines)
+	private tokenRenderCache = new Map<Token, Map<string, TokenRenderEntry>>();
 
 	constructor(
 		text: string,
@@ -74,17 +90,172 @@ export class Markdown implements Component {
 
 	setText(text: string): void {
 		this.text = text;
-		this.invalidate();
+		// Only invalidate final rendered output — preserve incremental lexer state
+		this.cachedText = undefined;
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
 	}
 
 	invalidate(): void {
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
+		// Full invalidation clears incremental state too
+		this.lastNormalizedText = undefined;
+		this.stableTokens = [];
+		this.stableRawLength = 0;
+		this.tokenRenderCache.clear();
+	}
+
+	/**
+	 * Full parse — canonical fallback. Always correct.
+	 */
+	private lexAll(normalizedText: string): Token[] {
+		const tokens = marked.lexer(normalizedText) as Token[];
+		this.tokenRenderCache.clear();
+		this.lastNormalizedText = normalizedText;
+
+		// Compute stable prefix so next incremental call can reuse it
+		const stableEnd = Markdown.findStablePrefixEnd(tokens);
+		this.stableTokens = tokens.slice(0, stableEnd);
+		this.stableRawLength = 0;
+		for (const token of this.stableTokens) {
+			this.stableRawLength += (token as Token & { raw: string }).raw?.length ?? 0;
+		}
+
+		return tokens;
+	}
+
+	/**
+	 * Find the index where the mutable tail starts.
+	 * Everything before this index is "stable" and safe to reuse.
+	 *
+	 * Strategy: walk backwards from the end, skipping space tokens,
+	 * until we hit the first non-space token. That token and everything
+	 * after it form the mutable tail (the last semantic block may be
+	 * incomplete during streaming).
+	 */
+	private static findStablePrefixEnd(tokens: Token[]): number {
+		let i = tokens.length - 1;
+		// Skip trailing space tokens
+		while (i >= 0 && tokens[i].type === "space") {
+			i--;
+		}
+		// The last non-space token is mutable (may be incomplete)
+		// Everything before it is stable
+		return Math.max(0, i);
+	}
+
+	/**
+	 * Try incremental parse; fall back to full parse on any inconsistency.
+	 *
+	 * Note: For single-block streams (e.g., one growing paragraph with no
+	 * block breaks), the stable prefix is empty and this falls back to full
+	 * parse each time. The O(n²) elimination applies to multi-block content,
+	 * which is the common case for LLM output (paragraphs, code blocks, lists).
+	 */
+	private lexIncrementalOrFallback(normalizedText: string): Token[] {
+		// No prior state or no stable prefix → full parse
+		if (!this.lastNormalizedText || this.stableTokens.length === 0) {
+			return this.lexAll(normalizedText);
+		}
+
+		// Not append-only → full parse (edit, replacement, truncation)
+		if (!normalizedText.startsWith(this.lastNormalizedText)) {
+			return this.lexAll(normalizedText);
+		}
+
+		// Text unchanged → reuse everything
+		if (normalizedText === this.lastNormalizedText) {
+			// Return last full token set by re-lexing only the tail
+			// Actually, if text is identical the render cache will catch it.
+			// But we still need to return tokens. Re-lex from stable boundary.
+		}
+
+		// Append-only: reuse stable prefix tokens, re-lex from stable boundary
+		const reLexStart = this.stableRawLength;
+		const tailSource = normalizedText.slice(reLexStart);
+
+		// Re-lex the tail portion
+		const tailTokens = marked.lexer(tailSource) as Token[];
+
+		// Validate: stable prefix length + tail raw should equal full text length
+		let tailRawTotal = 0;
+		for (const token of tailTokens) {
+			tailRawTotal += (token as Token & { raw: string }).raw?.length ?? 0;
+		}
+
+		if (reLexStart + tailRawTotal !== normalizedText.length) {
+			// Mismatch — fall back to full parse for safety
+			return this.lexAll(normalizedText);
+		}
+
+		// Merge: stable prefix + new tail tokens
+		const mergedTokens = [...this.stableTokens, ...tailTokens];
+
+		// Update incremental state for next call:
+		// Find new stable prefix boundary
+		const newStableEnd = Markdown.findStablePrefixEnd(mergedTokens);
+		const newStableTokens = mergedTokens.slice(0, newStableEnd);
+
+		// Compute raw length of new stable prefix
+		let newStableRawLength = 0;
+		for (const token of newStableTokens) {
+			newStableRawLength += (token as Token & { raw: string }).raw?.length ?? 0;
+		}
+
+		this.stableTokens = newStableTokens;
+		this.stableRawLength = newStableRawLength;
+		this.lastNormalizedText = normalizedText;
+
+		// Prune token render cache: remove entries for tokens no longer in the live set.
+		// Old tail tokens are replaced by new objects on each incremental parse,
+		// so their cache entries must be explicitly removed to avoid unbounded growth.
+		if (this.tokenRenderCache.size > 0) {
+			const liveTokens = new Set<Token>(mergedTokens);
+			for (const cachedToken of this.tokenRenderCache.keys()) {
+				if (!liveTokens.has(cachedToken)) {
+					this.tokenRenderCache.delete(cachedToken);
+				}
+			}
+		}
+
+		return mergedTokens;
+	}
+
+	/**
+	 * Get wrapped lines for a token, using per-token cache when possible.
+	 */
+	private getTokenWrappedLines(token: Token, contentWidth: number, nextTokenType?: string): string[] {
+		const cacheKey = `${contentWidth}|${nextTokenType ?? ""}`;
+
+		let entryMap = this.tokenRenderCache.get(token);
+		if (entryMap) {
+			const entry = entryMap.get(cacheKey);
+			if (entry) {
+				return entry.lines;
+			}
+		}
+
+		// Cache miss: render + wrap
+		const renderedLines = this.renderToken(token, contentWidth, nextTokenType);
+		const wrappedLines: string[] = [];
+		for (const line of renderedLines) {
+			wrappedLines.push(...wrapTextWithAnsi(line, contentWidth));
+		}
+
+		// Store in cache
+		if (!entryMap) {
+			entryMap = new Map();
+			this.tokenRenderCache.set(token, entryMap);
+		}
+		entryMap.set(cacheKey, { lines: wrappedLines });
+
+		return wrappedLines;
 	}
 
 	render(width: number): string[] {
-		// Check cache
+		// Check cache — exact match means nothing changed
 		if (this.cachedLines && this.cachedText === this.text && this.cachedWidth === width) {
 			return this.cachedLines;
 		}
@@ -95,7 +266,6 @@ export class Markdown implements Component {
 		// Don't render anything if there's no actual text
 		if (!this.text || this.text.trim() === "") {
 			const result: string[] = [];
-			// Update cache
 			this.cachedText = this.text;
 			this.cachedWidth = width;
 			this.cachedLines = result;
@@ -105,23 +275,16 @@ export class Markdown implements Component {
 		// Replace tabs with 3 spaces for consistent rendering
 		const normalizedText = this.text.replace(/\t/g, "   ");
 
-		// Parse markdown to HTML-like tokens
-		const tokens = marked.lexer(normalizedText);
+		// Parse markdown tokens — incremental when possible
+		const tokens = this.lexIncrementalOrFallback(normalizedText);
 
-		// Convert tokens to styled terminal output
-		const renderedLines: string[] = [];
-
+		// Convert tokens to styled+wrapped terminal output using per-token cache
+		const wrappedLines: string[] = [];
 		for (let i = 0; i < tokens.length; i++) {
 			const token = tokens[i];
 			const nextToken = tokens[i + 1];
-			const tokenLines = this.renderToken(token, contentWidth, nextToken?.type);
-			renderedLines.push(...tokenLines);
-		}
-
-		// Wrap lines (NO padding, NO background yet)
-		const wrappedLines: string[] = [];
-		for (const line of renderedLines) {
-			wrappedLines.push(...wrapTextWithAnsi(line, contentWidth));
+			const tokenLines = this.getTokenWrappedLines(token, contentWidth, nextToken?.type);
+			wrappedLines.push(...tokenLines);
 		}
 
 		// Add margins and background to each wrapped line
