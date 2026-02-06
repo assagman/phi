@@ -94,6 +94,24 @@ export interface SubagentStreamItem {
 	content: string;
 }
 
+/** Per-agent progress snapshot for parallel mode display */
+export interface ParallelAgentProgress {
+	index: number;
+	agentName: string;
+	task: string;
+	result?: ExecutionResult;
+	activeTools?: SubagentToolEvent[];
+	allTools?: SubagentToolEvent[];
+	currentText?: string;
+	currentThinking?: string;
+	streamItems?: SubagentStreamItem[];
+	agentProvider?: string;
+	agentModel?: string;
+	agentSource?: AgentSource;
+	agentThinkingLevel?: string;
+	agentTemperature?: number;
+}
+
 export interface SubagentDetails {
 	mode: "single" | "parallel" | "chain";
 	results: ExecutionResult[];
@@ -121,6 +139,8 @@ export interface SubagentDetails {
 	agentThinkingLevel?: string;
 	agentTemperature?: number;
 	agentSource?: AgentSource;
+	/** Per-agent progress for parallel mode — enables individual live display */
+	parallelAgents?: ParallelAgentProgress[];
 }
 
 // ─── Preset Registry ────────────────────────────────────────────────────────
@@ -1138,20 +1158,40 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 					}
 				}
 
-				const allResults: ExecutionResult[] = new Array(params.parallel.length);
+				// Per-agent progress tracking — each agent gets its own live state
+				const parallelAgents: ParallelAgentProgress[] = params.parallel.map((t, index) => {
+					const agent = registry.get(t.agent)!;
+					const meta = agentMeta(agent, model);
+					return {
+						index,
+						agentName: t.agent,
+						task: t.task,
+						agentProvider: meta.agentProvider,
+						agentModel: meta.agentModel,
+						agentSource: meta.agentSource,
+						agentThinkingLevel: meta.agentThinkingLevel,
+						agentTemperature: meta.agentTemperature,
+					};
+				});
 
 				const emitUpdate = () => {
 					if (onUpdate) {
-						const running = allResults.filter((r) => r?.exitCode === -1).length;
-						const done = allResults.filter((r) => r && r.exitCode !== -1).length;
+						const validResults = parallelAgents.map((a) => a.result).filter(Boolean) as ExecutionResult[];
+						const running = validResults.filter((r) => r.exitCode === -1).length;
+						const done = validResults.filter((r) => r.exitCode !== -1).length;
 						onUpdate({
 							content: [
 								{
 									type: "text",
-									text: `${LOG_PREFIX} Parallel: ${done}/${allResults.length} done, ${running} running...`,
+									text: `${LOG_PREFIX} Parallel: ${done}/${parallelAgents.length} done, ${running} running...`,
 								},
 							],
-							details: { mode: "parallel", results: allResults.filter(Boolean), summary: params.summary },
+							details: {
+								mode: "parallel",
+								results: validResults,
+								summary: params.summary,
+								parallelAgents: parallelAgents.map((a) => ({ ...a })),
+							},
 						});
 					}
 				};
@@ -1165,6 +1205,9 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 						parallelAuth.set(t.agent, await resolveSubprocessAuth(agent, model, context));
 					}
 				}
+
+				// Emit initial state so TUI shows all agents as pending immediately
+				emitUpdate();
 
 				// Use configurable concurrency limit
 				const concurrencyLimit = Math.min(
@@ -1184,11 +1227,22 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 						t.cwd || context.getWorkingDir(),
 						signal,
 						(progress) => {
-							allResults[index] = progress.result;
+							// Store full per-agent progress — tools, text, thinking, stream items.
+							// Clone arrays to prevent shared-reference mutation from later updates.
+							parallelAgents[index] = {
+								...parallelAgents[index],
+								result: progress.result,
+								activeTools: progress.activeTools.map((t) => ({ ...t })),
+								allTools: progress.allTools.map((t) => ({ ...t })),
+								currentText: progress.currentText,
+								currentThinking: progress.currentThinking,
+								streamItems: progress.streamItems.slice(-MAX_STREAM_ITEMS),
+							};
 							emitUpdate();
 						},
 					);
-					allResults[index] = result;
+					// Final state after subprocess exits
+					parallelAgents[index] = { ...parallelAgents[index], result };
 					emitUpdate();
 					return result;
 				});
@@ -1207,7 +1261,12 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 							text: `${LOG_PREFIX} Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
 						},
 					],
-					details: { mode: "parallel", results, summary: params.summary },
+					details: {
+						mode: "parallel",
+						results,
+						summary: params.summary,
+						parallelAgents: parallelAgents.map((a) => ({ ...a })),
+					},
 				};
 			}
 

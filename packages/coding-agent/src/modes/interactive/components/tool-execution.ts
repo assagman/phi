@@ -1,7 +1,11 @@
 import * as os from "node:os";
 import stripAnsi from "strip-ansi";
 import { Container, LiveFeed, type LiveFeedItem, sliceByColumn, Text, type TUI, visibleWidth } from "tui";
-import type { SubagentDetails, SubagentStreamItem } from "../../../core/builtin-tools/subagent/index.js";
+import type {
+	ParallelAgentProgress,
+	SubagentDetails,
+	SubagentStreamItem,
+} from "../../../core/builtin-tools/subagent/index.js";
 import type { BashToolDetails } from "../../../core/tools/bash.js";
 import { sanitizeBinaryOutput } from "../../../utils/shell.js";
 import { highlightCode, type ThemeColor, theme } from "../theme/theme.js";
@@ -13,6 +17,10 @@ const MAX_SUBAGENT_BOX_LINES = 20;
 const MAX_EXPANDED_OUTPUT_LINES = 20;
 const MAX_STREAMING_PREVIEW_LINES = 8;
 const MAX_SUBAGENT_TASK_LINES = 6;
+/** Max tool entries shown per agent in parallel mode */
+const MAX_PARALLEL_AGENT_TOOLS = 6;
+/** Max stream preview lines per agent in parallel mode */
+const MAX_PARALLEL_AGENT_STREAM_LINES = 4;
 const PULSE_PERIOD_MS = 1500; // Full pulse cycle duration
 const BORDER_PULSE_PERIOD_MS = 3000; // Slow border pulse cycle
 const PULSE_INTERVAL_MS = 100; // Pulse animation tick (~10fps, sufficient for smooth sine)
@@ -498,9 +506,25 @@ export class ToolExecutionComponent extends Container {
 			}
 		}
 
+		// ── Parallel mode: stacked per-agent sections ───────────────────
+		if (mode === "parallel" && details?.parallelAgents && details.parallelAgents.length > 0) {
+			const contentWidth = this.lastContentWidth || 74;
+			const sectionWidth = Math.max(1, contentWidth - 3); // subtract indent
+			const agentLines: string[] = [];
+
+			for (let idx = 0; idx < details.parallelAgents.length; idx++) {
+				// Spacer between agent sections for visual separation
+				if (idx > 0) agentLines.push("");
+				agentLines.push(...this.formatParallelAgentSection(details.parallelAgents[idx], sectionWidth));
+			}
+
+			return [...fixedTop, ...agentLines, ...fixedBottom].join("\n");
+		}
+
 		// ── Left pane: tool calls + parallel/chain progress (LiveFeed items) ──
 		const leftItems: LiveFeedItem[] = [];
 
+		// Fallback parallel display (when parallelAgents is unavailable)
 		if (mode === "parallel" && Array.isArray(this.args.parallel)) {
 			const tasks = this.args.parallel as Array<{ agent: string; task: string }>;
 			for (let idx = 0; idx < tasks.length; idx++) {
@@ -670,6 +694,110 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		return [...fixedTop, ...splitLines, ...fixedBottom].join("\n");
+	}
+
+	/**
+	 * Render a single parallel agent as a compact stacked section.
+	 *
+	 * Layout per agent:
+	 *   ◐ agent_name "task description"              (header)
+	 *      ✓  read src/auth.ts                      (tool list, capped)
+	 *      ◐  bash rg "TODO" src/                   (tool list, capped)
+	 *      > Looking at the authentication flow...   (stream preview)
+	 */
+	private formatParallelAgentSection(agent: ParallelAgentProgress, width: number): string[] {
+		const indent = "   ";
+		const toolIndent = "      ";
+		const lines: string[] = [];
+
+		// ── Status icon ─────────────────────────────────────────────────
+		let statusIcon: string;
+		if (agent.result && agent.result.exitCode !== -1) {
+			statusIcon = agent.result.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+		} else if (agent.result) {
+			// exitCode === -1 means running
+			statusIcon = theme.fg("warning", "◐");
+		} else {
+			statusIcon = theme.fg("muted", "○");
+		}
+
+		// ── Header: status + agent name + task ──────────────────────────
+		const taskPreview = agent.task.length > 60 ? `${agent.task.slice(0, 57)}...` : agent.task;
+		const headerLine = `${indent}${statusIcon} ${colorAgentName(agent.agentName)} ${theme.fg("muted", `"${taskPreview}"`)}`;
+		lines.push(visibleWidth(headerLine) > width ? sliceByColumn(headerLine, 0, width, true) : headerLine);
+
+		// ── Tool list (only for running or recently completed agents) ───
+		const tools = agent.allTools;
+		if (tools && tools.length > 0) {
+			const visibleTools = tools.slice(-MAX_PARALLEL_AGENT_TOOLS);
+			if (tools.length > MAX_PARALLEL_AGENT_TOOLS) {
+				lines.push(
+					`${toolIndent}${theme.fg("muted", `… ${tools.length - MAX_PARALLEL_AGENT_TOOLS} earlier tools`)}`,
+				);
+			}
+			for (const tool of visibleTools) {
+				const toolIcon = ICONS[tool.toolName] ?? "\uf013";
+				let toolStatus: string;
+				if (tool.running) {
+					toolStatus = theme.fg("warning", "◐");
+				} else if (tool.isError) {
+					toolStatus = theme.fg("error", "✗");
+				} else {
+					toolStatus = theme.fg("success", "✓");
+				}
+				const argSummary = formatSubagentToolArgs(tool.toolName, tool.args);
+				const toolLine = `${toolIndent}${toolStatus} ${toolIcon} ${theme.fg("muted", tool.toolName)} ${argSummary}`;
+				lines.push(visibleWidth(toolLine) > width ? sliceByColumn(toolLine, 0, width, true) : toolLine);
+			}
+		}
+
+		// ── Stream preview (thinking + text) ────────────────────────────
+		// Prefer streamItems for stable history, else fall back to currentText/currentThinking
+		const streamLines: string[] = [];
+		const streamItemsList = agent.streamItems;
+
+		if (streamItemsList && streamItemsList.length > 0) {
+			// Take the last item(s) for a compact preview
+			const lastItems = streamItemsList.slice(-2);
+			for (const item of lastItems) {
+				const filtered = item.content.split("\n").filter((l) => l.trim());
+				if (filtered.length === 0) continue;
+				// Take last few lines of each item
+				const tail = filtered.slice(-MAX_PARALLEL_AGENT_STREAM_LINES);
+				for (const line of tail) {
+					if (item.type === "thinking") {
+						streamLines.push(theme.italic(theme.fg("thinkingText", line)));
+					} else {
+						streamLines.push(line);
+					}
+				}
+			}
+		} else {
+			// Fallback to currentThinking/currentText
+			const thinkLines = (agent.currentThinking ?? "")
+				.split("\n")
+				.filter((l) => l.trim())
+				.slice(-2);
+			for (const line of thinkLines) {
+				streamLines.push(theme.italic(theme.fg("thinkingText", line)));
+			}
+			const textLines = (agent.currentText ?? "")
+				.split("\n")
+				.filter((l) => l.trim())
+				.slice(-2);
+			for (const line of textLines) {
+				streamLines.push(line);
+			}
+		}
+
+		// Cap total stream preview lines and clamp to width
+		const cappedStream = streamLines.slice(-MAX_PARALLEL_AGENT_STREAM_LINES);
+		for (const line of cappedStream) {
+			const streamLine = `${toolIndent}${theme.fg("dim", "›")} ${line}`;
+			lines.push(visibleWidth(streamLine) > width ? sliceByColumn(streamLine, 0, width, true) : streamLine);
+		}
+
+		return lines;
 	}
 
 	private errorLines(): string[] {
