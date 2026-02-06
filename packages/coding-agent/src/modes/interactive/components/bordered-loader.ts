@@ -1,17 +1,17 @@
-import { CancellableLoader, Container, Spacer, Text, type TUI } from "tui";
+import { AnimatedCancellableLoader, Container, Spacer, Text, type TUI } from "tui";
 import type { Theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint } from "./keybinding-hints.js";
 
 /** Loader wrapped with borders for extension UI */
 export class BorderedLoader extends Container {
-	private loader: CancellableLoader;
+	private loader: AnimatedCancellableLoader;
 
 	constructor(tui: TUI, theme: Theme, message: string) {
 		super();
 		const borderColor = (s: string) => theme.fg("border", s);
 		this.addChild(new DynamicBorder(borderColor));
-		this.loader = new CancellableLoader(
+		this.loader = new AnimatedCancellableLoader(
 			tui,
 			(s) => theme.fg("accent", s),
 			(s) => theme.fg("muted", s),

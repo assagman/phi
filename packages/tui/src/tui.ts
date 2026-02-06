@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AnimationScheduler, type AnimationTickCallback } from "./animation-scheduler.js";
 import { isKeyRelease, matchesKey } from "./keys.js";
 import type { MouseEvent } from "./mouse.js";
 import { isCompleteMouseEvent, isPotentialMouseEvent, parseMouseEvent } from "./mouse.js";
@@ -240,6 +241,7 @@ export class TUI extends Container {
 	private lastRenderTime = 0;
 	private pendingRender = false;
 	private renderTimer: ReturnType<typeof setTimeout> | null = null;
+	private animationScheduler = new AnimationScheduler(() => this.requestRender());
 
 	// tmux detection: tmux doesn't support mode 2026 synchronized output,
 	// so we use padding-based overwrite instead of clear+write to prevent flickering
@@ -274,6 +276,7 @@ export class TUI extends Container {
 		if (showHardwareCursor !== undefined) {
 			this.showHardwareCursor = showHardwareCursor;
 		}
+		this.animationScheduler.pause();
 	}
 
 	getShowHardwareCursor(): boolean {
@@ -287,6 +290,10 @@ export class TUI extends Container {
 			this.terminal.hideCursor();
 		}
 		this.requestRender();
+	}
+
+	subscribeToAnimationTicks(callback: AnimationTickCallback, intervalMs: number): () => void {
+		return this.animationScheduler.subscribe(callback, intervalMs);
 	}
 
 	/**
@@ -427,6 +434,7 @@ export class TUI extends Container {
 			(data) => this.handleInput(data),
 			() => this.requestRender(),
 		);
+		this.animationScheduler.resume();
 		this.terminal.hideCursor();
 		this.queryCellSize();
 		this.requestRender();
@@ -450,6 +458,7 @@ export class TUI extends Container {
 			this.renderTimer = null;
 		}
 		this.pendingRender = false;
+		this.animationScheduler.pause();
 
 		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
 		if (this.previousLines.length > 0) {

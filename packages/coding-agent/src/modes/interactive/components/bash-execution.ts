@@ -3,7 +3,7 @@
  */
 
 import stripAnsi from "strip-ansi";
-import { Container, LiveFeed, Loader, Spacer, Text, type TUI } from "tui";
+import { AnimatedLoader, Container, LiveFeed, Spacer, Text, type TUI } from "tui";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -22,7 +22,7 @@ export class BashExecutionComponent extends Container {
 	private outputLines: string[] = [];
 	private status: "running" | "complete" | "cancelled" | "error" = "running";
 	private exitCode: number | undefined = undefined;
-	private loader: Loader;
+	private loader: AnimatedLoader;
 	private truncationResult?: TruncationResult;
 	private fullOutputPath?: string;
 	private expanded = false;
@@ -51,7 +51,7 @@ export class BashExecutionComponent extends Container {
 		this.contentContainer.addChild(header);
 
 		// Loader
-		this.loader = new Loader(
+		this.loader = new AnimatedLoader(
 			ui,
 			(spinner) => theme.fg(colorKey, spinner),
 			(text) => theme.fg("muted", text),

@@ -117,7 +117,7 @@ export class ToolExecutionComponent extends Container {
 	private expanded = false;
 	private running = true;
 	private startTime = Date.now();
-	private pulseTimer?: ReturnType<typeof setInterval>;
+	private pulseUnsubscribe?: () => void;
 	private ui?: TUI;
 	private onInvalidate?: () => void;
 	/** Last known content width from render(), used for split-pane column math. */
@@ -158,20 +158,18 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private startPulse(): void {
-		if (this.pulseTimer || !this.ui) return;
-		this.pulseTimer = setInterval(() => {
-			if (this.running) {
-				this.update();
-				this.onInvalidate?.();
-				this.ui?.requestRender();
-			}
+		if (this.pulseUnsubscribe || !this.ui) return;
+		this.pulseUnsubscribe = this.ui.subscribeToAnimationTicks(() => {
+			if (!this.running) return;
+			this.update();
+			this.onInvalidate?.();
 		}, PULSE_INTERVAL_MS);
 	}
 
 	private stopPulse(): void {
-		if (this.pulseTimer) {
-			clearInterval(this.pulseTimer);
-			this.pulseTimer = undefined;
+		if (this.pulseUnsubscribe) {
+			this.pulseUnsubscribe();
+			this.pulseUnsubscribe = undefined;
 		}
 	}
 

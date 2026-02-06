@@ -76,8 +76,21 @@ export class ScrollableViewport implements Component {
 	 * Add a message component to the viewport.
 	 */
 	addItem(component: Component): void {
+		const cacheAlignedBeforeAppend = this.isItemCacheAlignedWithItems();
+		const appendStart = this.contentHeight;
+
 		this.items.push(component);
-		this.invalidate();
+
+		if (cacheAlignedBeforeAppend) {
+			this.itemCache.push({
+				component,
+				lines: [],
+				height: 0,
+				start: appendStart,
+				dirty: true,
+			});
+			this.layoutDirty = true;
+		}
 
 		// Notify about scroll state
 		this.onScroll?.(this.scrollOffset === 0);
@@ -325,21 +338,25 @@ export class ScrollableViewport implements Component {
 		return this.sliceForViewport(viewportHeight);
 	}
 
+	private isItemCacheAlignedWithItems(): boolean {
+		if (this.itemCache.length !== this.items.length) {
+			return false;
+		}
+
+		for (let i = 0; i < this.items.length; i++) {
+			if (this.itemCache[i]?.component !== this.items[i]) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
 	/**
 	 * Ensure cache array matches items array.
 	 */
 	private ensureItemCacheAligned(): void {
-		if (this.itemCache.length === this.items.length) {
-			// Fast path: if all components match by identity, keep cache.
-			let matches = true;
-			for (let i = 0; i < this.items.length; i++) {
-				if (this.itemCache[i]?.component !== this.items[i]) {
-					matches = false;
-					break;
-				}
-			}
-			if (matches) return;
-		}
+		if (this.isItemCacheAlignedWithItems()) return;
 
 		this.itemCache = this.items.map((component) => ({
 			component,

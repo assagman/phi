@@ -32,12 +32,12 @@ import type {
 	SlashCommand,
 } from "tui";
 import {
+	AnimatedLoader,
 	CombinedAutocompleteProvider,
 	type Component,
 	Container,
 	FixedLayoutContainer,
 	fuzzyFilter,
-	Loader,
 	Markdown,
 	matchesKey,
 	PinnedInputBar,
@@ -150,7 +150,7 @@ export class InteractiveMode {
 	private isInitialized = false;
 	private hasRenderedInitialMessages = false;
 	private onInputCallback?: (text: string) => void;
-	private loadingAnimation: Loader | undefined = undefined;
+	private loadingAnimation: AnimatedLoader | undefined = undefined;
 	private readonly defaultWorkingMessage = "Working...";
 
 	private lastSigintTime = 0;
@@ -183,7 +183,7 @@ export class InteractiveMode {
 	private unsubscribe?: () => void;
 
 	// Idle render tick (used for async stats like CPU/RSS in footer)
-	private idleRenderTimer: ReturnType<typeof setInterval> | undefined = undefined;
+	private idleRenderUnsubscribe: (() => void) | undefined = undefined;
 
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
@@ -195,11 +195,11 @@ export class InteractiveMode {
 	private pendingBashComponents: BashExecutionComponent[] = [];
 
 	// Auto-compaction state
-	private autoCompactionLoader: Loader | undefined = undefined;
+	private autoCompactionLoader: AnimatedLoader | undefined = undefined;
 	private autoCompactionEscapeHandler?: () => void;
 
 	// Auto-retry state
-	private retryLoader: Loader | undefined = undefined;
+	private retryLoader: AnimatedLoader | undefined = undefined;
 	private retryEscapeHandler?: () => void;
 
 	// Messages queued while compaction is running
@@ -256,6 +256,13 @@ export class InteractiveMode {
 	 */
 	private addToChat(component: Component): void {
 		this.scrollableViewport.addItem(component);
+	}
+
+	private clearPendingToolComponents(): void {
+		for (const component of this.pendingTools.values()) {
+			component.dispose();
+		}
+		this.pendingTools.clear();
 	}
 
 	constructor(
@@ -491,10 +498,7 @@ export class InteractiveMode {
 
 		// Render tick for footer stats (CPU/RSS) and other async UI data.
 		// Keeps the UI "live" even when user isn't typing.
-		this.idleRenderTimer = setInterval(() => {
-			this.ui.requestRender();
-		}, 1000);
-		this.idleRenderTimer.unref?.();
+		this.idleRenderUnsubscribe = this.ui.subscribeToAnimationTicks(() => {}, 1000);
 
 		// Set terminal title
 		const cwdBasename = path.basename(process.cwd());
@@ -744,7 +748,7 @@ export class InteractiveMode {
 					this.compactionQueuedMessages = [];
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
-					this.pendingTools.clear();
+					this.clearPendingToolComponents();
 
 					this.addToChat(new Spacer(1));
 					this.addToChat(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
@@ -1699,7 +1703,7 @@ export class InteractiveMode {
 					this.loadingAnimation.stop();
 				}
 				this.statusContainer.clear();
-				this.loadingAnimation = new Loader(
+				this.loadingAnimation = new AnimatedLoader(
 					this.ui,
 					(spinner) => theme.fg("accent", spinner),
 					(text) => theme.fg("muted", text),
@@ -1786,7 +1790,7 @@ export class InteractiveMode {
 								isError: true,
 							});
 						}
-						this.pendingTools.clear();
+						this.clearPendingToolComponents();
 					} else {
 						// Args are now complete - trigger diff computation for edit tools
 						for (const [, component] of this.pendingTools.entries()) {
@@ -1862,7 +1866,7 @@ export class InteractiveMode {
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 				}
-				this.pendingTools.clear();
+				this.clearPendingToolComponents();
 
 				await this.checkShutdownRequested();
 
@@ -1879,7 +1883,7 @@ export class InteractiveMode {
 				// Show compacting indicator with reason
 				this.statusContainer.clear();
 				const reasonText = event.reason === "overflow" ? "Context overflow detected, " : "";
-				this.autoCompactionLoader = new Loader(
+				this.autoCompactionLoader = new AnimatedLoader(
 					this.ui,
 					(spinner) => theme.fg("accent", spinner),
 					(text) => theme.fg("muted", text),
@@ -1936,7 +1940,7 @@ export class InteractiveMode {
 				// Show retry indicator
 				this.statusContainer.clear();
 				const delaySeconds = Math.round(event.delayMs / 1000);
-				this.retryLoader = new Loader(
+				this.retryLoader = new AnimatedLoader(
 					this.ui,
 					(spinner) => theme.fg("warning", spinner),
 					(text) => theme.fg("muted", text),
@@ -2111,7 +2115,7 @@ export class InteractiveMode {
 		sessionContext: SessionContext,
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
-		this.pendingTools.clear();
+		this.clearPendingToolComponents();
 
 		if (options.updateFooter) {
 			this.footer.invalidate();
@@ -2167,7 +2171,7 @@ export class InteractiveMode {
 			}
 		}
 
-		this.pendingTools.clear();
+		this.clearPendingToolComponents();
 		this.ui.requestRender();
 	}
 
@@ -3112,7 +3116,7 @@ export class InteractiveMode {
 					}
 
 					// Set up escape handler and loader if summarizing
-					let summaryLoader: Loader | undefined;
+					let summaryLoader: AnimatedLoader | undefined;
 					const originalOnEscape = this.defaultEditor.onEscape;
 
 					if (wantsSummary) {
@@ -3120,7 +3124,7 @@ export class InteractiveMode {
 							this.session.abortBranchSummary();
 						};
 						this.addToChat(new Spacer(1));
-						summaryLoader = new Loader(
+						summaryLoader = new AnimatedLoader(
 							this.ui,
 							(spinner) => theme.fg("accent", spinner),
 							(text) => theme.fg("muted", text),
@@ -3215,7 +3219,7 @@ export class InteractiveMode {
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
-		this.pendingTools.clear();
+		this.clearPendingToolComponents();
 
 		// Switch session via AgentSession (emits extension session events)
 		await this.session.switchSession(sessionPath);
@@ -3751,7 +3755,7 @@ export class InteractiveMode {
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
-		this.pendingTools.clear();
+		this.clearPendingToolComponents();
 
 		this.addToChat(new Spacer(1));
 		this.addToChat(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
@@ -3915,7 +3919,7 @@ export class InteractiveMode {
 		this.addToChat(new Spacer(1));
 		const cancelHint = `(${appKey(this.keybindings, "interrupt")} to cancel)`;
 		const label = isAuto ? `Auto-compacting context... ${cancelHint}` : `Compacting context... ${cancelHint}`;
-		const compactingLoader = new Loader(
+		const compactingLoader = new AnimatedLoader(
 			this.ui,
 			(spinner) => theme.fg("accent", spinner),
 			(text) => theme.fg("muted", text),
@@ -4093,9 +4097,9 @@ export class InteractiveMode {
 			this.loadingAnimation.stop();
 			this.loadingAnimation = undefined;
 		}
-		if (this.idleRenderTimer) {
-			clearInterval(this.idleRenderTimer);
-			this.idleRenderTimer = undefined;
+		if (this.idleRenderUnsubscribe) {
+			this.idleRenderUnsubscribe();
+			this.idleRenderUnsubscribe = undefined;
 		}
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
