@@ -2,16 +2,16 @@ import { existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "agent";
+import type { PermissionCheckResult, PermissionPromptFn, PermissionPromptResult } from "permission";
+import {
+	extractPathsFromCommand,
+	isOutsideCwd,
+	PermissionDb,
+	PermissionManager,
+	wrapToolRegistryWithPermissions,
+	wrapToolsWithPermissions,
+} from "permission";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { extractPathsFromCommand, isOutsideCwd } from "../src/core/permissions/bash-path-extractor.js";
-import { PermissionDb } from "../src/core/permissions/permission-db.js";
-import { PermissionManager } from "../src/core/permissions/permission-manager.js";
-import type {
-	PermissionCheckResult,
-	PermissionPromptFn,
-	PermissionPromptResult,
-} from "../src/core/permissions/types.js";
-import { wrapToolRegistryWithPermissions, wrapToolsWithPermissions } from "../src/core/permissions/wrap-tools.js";
 import { createBashTool } from "../src/core/tools/bash.js";
 import { createLsTool } from "../src/core/tools/ls.js";
 import { createReadTool } from "../src/core/tools/read.js";
@@ -49,7 +49,7 @@ function createMockPromptFn(response: PermissionPromptResult): PermissionPromptF
 /** Create a test PermissionDb with a unique file in the test dir */
 function createTestDb(testDir: string): PermissionDb {
 	const dbPath = join(testDir, `permissions-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
-	return new PermissionDb(testDir, dbPath);
+	return new PermissionDb(dbPath);
 }
 
 function createMgr(opts: {
@@ -500,12 +500,12 @@ describe("PermissionManager", () => {
 		it("persistent grants should appear in a new session", () => {
 			// Use the SAME db path for both sessions to test cross-session persistence
 			const sharedDbPath = join(testDir, "shared-permissions.db");
-			const db1 = new PermissionDb(testDir, sharedDbPath);
+			const db1 = new PermissionDb(sharedDbPath);
 			const mgr1 = new PermissionManager({ cwd: workspace, db: db1, preAllowedDirs: [] });
 			mgr1.grant("directory", outsideDir, "persistent");
 			db1.close();
 
-			const db2 = new PermissionDb(testDir, sharedDbPath);
+			const db2 = new PermissionDb(sharedDbPath);
 			const mgr2 = new PermissionManager({ cwd: workspace, db: db2, preAllowedDirs: [] });
 			expectGranted(mgr2.checkDirectory(outsideDir));
 			db2.close();

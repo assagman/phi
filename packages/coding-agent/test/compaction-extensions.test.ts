@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "agent";
 import { getModel } from "ai";
+import { PermissionDb, PermissionManager } from "permission";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -140,12 +141,16 @@ describe.skipIf(!API_KEY)("Compaction extensions", () => {
 			},
 		);
 
+		const permissionDb = new PermissionDb(join(tempDir, "permissions.db"));
+		const permissionManager = new PermissionManager({ cwd: tempDir, db: permissionDb, preAllowedDirs: [] });
+
 		session = new AgentSession({
 			agent,
 			sessionManager,
 			settingsManager,
 			extensionRunner,
 			modelRegistry,
+			permissionManager,
 		});
 
 		return session;

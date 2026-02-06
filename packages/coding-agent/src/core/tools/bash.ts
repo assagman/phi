@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { AgentTool } from "agent";
 import { spawn } from "child_process";
+import type { SandboxProvider } from "sandbox";
 import { toolsLog } from "../../utils/logger.js";
 import { getShellConfig, killProcessTree } from "../../utils/shell.js";
-import type { SandboxProvider } from "../permissions/sandbox.js";
 import { type BashDisplayHints, buildDisplayHints, matchRule } from "./bash-rules.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
