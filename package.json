@@ -13,6 +13,7 @@
 		"dev:tsc": "bun run --filter ai dev:tsc",
 		"check": "biome check --write . && tsgo --noEmit",
 		"test": "bun test --workspaces",
+		"bench:tui": "bun run packages/tui/test/bench/run.ts",
 		"prepare": "husky"
 	},
 	"devDependencies": {

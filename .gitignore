@@ -19,6 +19,9 @@ packages/*/dist-firefox/
 *.swo
 *~
 
+# Benchmarks (machine-specific baselines)
+packages/tui/test/bench/baseline.json
+
 # Package specific
 .npm/
 coverage/
