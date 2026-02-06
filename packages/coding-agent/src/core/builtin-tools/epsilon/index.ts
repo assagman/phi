@@ -53,6 +53,7 @@ function getHelp(): string {
 interface TaskSummary {
 	total: number;
 	todo: number;
+	planned: number;
 	inProgress: number;
 	blocked: number;
 	done: number;
@@ -64,6 +65,7 @@ function getTaskSummary(): TaskSummary {
 	const summary: TaskSummary = {
 		total: 0,
 		todo: 0,
+		planned: 0,
 		inProgress: 0,
 		blocked: 0,
 		done: 0,
@@ -74,30 +76,31 @@ function getTaskSummary(): TaskSummary {
 	// Get counts from info
 	const info = runEpsilon("info");
 	const countMatch = info.match(
-		/total\s+todo\s+in_progress\s+blocked\s+done\s+cancelled\s*\n[-\s]+\n(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/,
+		/total\s+todo\s+planned\s+in_progress\s+blocked\s+done\s+cancelled\s*\n[-\s]+\n(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/,
 	);
 	if (countMatch) {
 		summary.total = parseInt(countMatch[1], 10);
 		summary.todo = parseInt(countMatch[2], 10);
-		summary.inProgress = parseInt(countMatch[3], 10);
-		summary.blocked = parseInt(countMatch[4], 10);
-		summary.done = parseInt(countMatch[5], 10);
-		summary.cancelled = parseInt(countMatch[6], 10);
+		summary.planned = parseInt(countMatch[3], 10);
+		summary.inProgress = parseInt(countMatch[4], 10);
+		summary.blocked = parseInt(countMatch[5], 10);
+		summary.done = parseInt(countMatch[6], 10);
+		summary.cancelled = parseInt(countMatch[7], 10);
 	}
 
-	// Get active tasks (todo, in_progress, blocked)
+	// Get active tasks (todo, planned, in_progress, blocked)
 	const active = runEpsilon("list --limit 20");
-	const lines = active.split("\n").slice(2); // Skip header and separator
+	const lines = active.split("\n");
 
 	for (const line of lines) {
-		// Parse: id  title  priority  tags  created_at
-		const match = line.match(/^(\d+)\s+([○◐⊘✓✗]\s+.+?)\s{2,}(\w+)\s+([\w,\s]*)\s+\d{4}-/);
+		// Parse CLI output: "○ #42 [high] Task title [tag1,tag2]"
+		const match = line.match(/^[○▣◐⊘✓✗]\s+#(\d+)\s+\[(\w+)]\s+(.+?)(?:\s+\[([^\]]*)])?\s*$/);
 		if (match) {
 			summary.active.push({
 				id: parseInt(match[1], 10),
-				title: match[2].trim(),
-				priority: match[3].trim(),
-				tags: match[4].trim(),
+				title: match[3].trim(),
+				priority: match[2].trim(),
+				tags: match[4]?.trim() ?? "",
 			});
 		}
 	}
@@ -132,7 +135,7 @@ function buildTasksPrompt(summary: TaskSummary): string {
 	// Overview
 	lines.push("## Overview");
 	lines.push(
-		`Status: ${summary.todo} todo, ${summary.inProgress} in progress, ${summary.blocked} blocked, ${summary.done} done`,
+		`Status: ${summary.todo} todo, ${summary.planned} planned, ${summary.inProgress} in progress, ${summary.blocked} blocked, ${summary.done} done`,
 	);
 	lines.push("");
 

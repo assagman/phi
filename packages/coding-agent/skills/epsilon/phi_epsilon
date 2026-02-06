@@ -28,11 +28,11 @@ EXIT_NOT_FOUND=2
 EXIT_DB_ERROR=3
 
 # Valid status and priority values (canonical strings)
-VALID_STATUSES="todo in_progress blocked done cancelled"
+VALID_STATUSES="todo planned in_progress blocked done cancelled"
 VALID_PRIORITIES="low medium high critical"
 
 # Schema version: bump when schema changes
-SCHEMA_VERSION=3
+SCHEMA_VERSION=4
 
 # ─────────────────────────────────────────────────────────────────
 # Helpers
@@ -163,6 +163,52 @@ migrate_to_v3() {
     log "migration complete (schema_version=3)"
 }
 
+migrate_to_v4() {
+    log "migrate v3 -> v4: adding 'planned' status to CHECK constraint"
+
+    backup_db
+
+    sqlite3 -batch -bail -cmd ".output /dev/null" -cmd "PRAGMA busy_timeout = 5000;" -cmd "PRAGMA journal_mode = WAL;" -cmd "PRAGMA foreign_keys = OFF;" -cmd ".output stdout" "$DB_FILE" <<'MIGRATION'
+
+BEGIN IMMEDIATE;
+
+DROP TABLE IF EXISTS tasks_new;
+
+CREATE TABLE tasks_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'todo'
+        CHECK(status IN ('todo','planned','in_progress','blocked','done','cancelled')),
+    priority TEXT DEFAULT 'medium'
+        CHECK(priority IN ('low','medium','high','critical')),
+    tags TEXT,
+    parent_id INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    FOREIGN KEY (parent_id) REFERENCES tasks_new(id) ON DELETE CASCADE
+);
+
+INSERT INTO tasks_new (id, title, description, status, priority, tags, parent_id, created_at, updated_at, completed_at)
+SELECT id, title, description, status, priority, tags, parent_id, created_at, updated_at, completed_at
+FROM tasks;
+
+DROP TABLE tasks;
+ALTER TABLE tasks_new RENAME TO tasks;
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+
+INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 4);
+
+COMMIT;
+MIGRATION
+
+    log "migration complete (schema_version=4)"
+}
+
 ensure_db() {
     mkdir -p "$DATA_DIR"
 
@@ -191,6 +237,11 @@ ensure_db() {
 
     if [[ "$ver" -lt 3 ]]; then
         migrate_to_v3
+        ver=3
+    fi
+
+    if [[ "$ver" -lt 4 ]]; then
+        migrate_to_v4
     fi
 }
 
@@ -204,7 +255,7 @@ sql_pretty() { sqlite3 -batch -header -column -cmd ".output /dev/null" -cmd "PRA
 
 status_icon() {
     case "$1" in
-        todo) echo "○" ;; in_progress) echo "◐" ;; blocked) echo "⊘" ;;
+        todo) echo "○" ;; planned) echo "▣" ;; in_progress) echo "◐" ;; blocked) echo "⊘" ;;
         done) echo "✓" ;; cancelled) echo "✗" ;; *) echo "?" ;;
     esac
 }
@@ -213,6 +264,7 @@ status_icon() {
 normalize_status() {
     case "$1" in
         todo) echo "todo" ;;
+        planned|plan) echo "planned" ;;
         wip|in_progress) echo "in_progress" ;;
         blocked) echo "blocked" ;;
         done) echo "done" ;;
@@ -229,7 +281,7 @@ normalize_priority() {
 
 validate_status() {
     local s; s=$(normalize_status "$1")
-    [[ -n "$s" ]] || die "invalid status '$1' (todo, in_progress, blocked, done, cancelled)"
+    [[ -n "$s" ]] || die "invalid status '$1' (todo, planned, in_progress, blocked, done, cancelled)"
 }
 
 validate_priority() {
@@ -276,7 +328,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     title TEXT NOT NULL,
     description TEXT,
     status TEXT NOT NULL DEFAULT 'todo'
-        CHECK(status IN ('todo','in_progress','blocked','done','cancelled')),
+        CHECK(status IN ('todo','planned','in_progress','blocked','done','cancelled')),
     priority TEXT DEFAULT 'medium'
         CHECK(priority IN ('low','medium','high','critical')),
     tags TEXT,
@@ -291,7 +343,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
 
-INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 3);
+INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 4);
 SQL
 }
 
@@ -359,7 +411,7 @@ cmd_list() {
     
     # Default: active tasks only
     if [[ ${#statuses[@]} -eq 0 ]] && [[ "$show_all" == false ]]; then
-        statuses=("todo" "in_progress" "blocked")
+        statuses=("todo" "planned" "in_progress" "blocked")
     fi
     
     local where="1=1"
@@ -374,7 +426,7 @@ cmd_list() {
     [[ -n "$parent" ]] && where="$where AND parent_id = $parent"
     
     sql "SELECT id, status, priority, title, tags FROM tasks WHERE $where ORDER BY 
-         CASE status WHEN 'in_progress' THEN 1 WHEN 'blocked' THEN 2 WHEN 'todo' THEN 3 WHEN 'done' THEN 4 ELSE 5 END,
+         CASE status WHEN 'in_progress' THEN 1 WHEN 'blocked' THEN 2 WHEN 'planned' THEN 3 WHEN 'todo' THEN 4 WHEN 'done' THEN 5 ELSE 6 END,
          CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
          id DESC LIMIT $limit;" | while IFS="$SEP" read -r id status priority title tags; do
         local icon; icon=$(status_icon "$status")
@@ -546,13 +598,14 @@ cmd_info() {
     sql_pretty "SELECT 
         COUNT(*) AS total,
         SUM(CASE WHEN status='todo' THEN 1 ELSE 0 END) AS todo,
+        SUM(CASE WHEN status='planned' THEN 1 ELSE 0 END) AS planned,
         SUM(CASE WHEN status='in_progress' THEN 1 ELSE 0 END) AS in_progress,
         SUM(CASE WHEN status='blocked' THEN 1 ELSE 0 END) AS blocked,
         SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,
         SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) AS cancelled
     FROM tasks;"
     echo ""
-    echo "Status:   ○todo  ◐in_progress  ⊘blocked  ✓done  ✗cancelled"
+    echo "Status:   ○todo  ▣planned  ◐in_progress  ⊘blocked  ✓done  ✗cancelled"
     echo "Priority: low  medium  high  critical"
 }
 
@@ -562,12 +615,13 @@ phi_epsilon - Task management CLI
 
 USAGE: phi_epsilon <command> [args] [options]
 
-STATUS:   todo | in_progress | blocked | done | cancelled
+STATUS:   todo | planned | in_progress | blocked | done | cancelled
 PRIORITY: low | medium | high | critical
-ALIASES:  wip → in_progress, drop/cancel → cancelled
+ALIASES:  plan → planned, wip → in_progress, drop/cancel → cancelled
 
 COMMANDS (status commands: no ID=list, with ID=transition):
   todo [ID]       List todo tasks OR mark ID as todo
+  planned [ID]    List planned tasks OR mark ID as planned  (alias: plan)
   wip [ID]        List wip tasks OR mark ID as wip      (alias: start)
   done [ID]       List done tasks OR mark ID as done    (alias: finish)
   drop [ID]       List dropped OR mark ID as dropped    (alias: x, cancel)
@@ -582,9 +636,9 @@ COMMANDS (status commands: no ID=list, with ID=transition):
   list            List tasks (default: active only)     (alias: ls)
                   --status STATUS  --filter S,S  --priority PRIORITY  --tag TAG
                   --parent ID  --limit N  --all
-  backlog [N]     wip + todo by priority (default 50)
+  backlog [N]     wip + planned + todo by priority (default 50)
   next            Single highest-priority todo
-  active          todo + wip + blocked
+  active          todo + planned + wip + blocked
   all [N]         All tasks including done/dropped
 
   tag <id> <t>    Add tag
@@ -596,9 +650,10 @@ OUTPUT: {icon} #{id} [{priority}] {title} [{tags}]
 
 EXAMPLES:
   phi_epsilon add "Fix bug" --priority high
+  phi_epsilon planned 42                         # mark task as planned
   phi_epsilon wip 42 && phi_epsilon done 42
   phi_epsilon list --tag backend --priority critical
-  phi_epsilon list --filter todo,in_progress
+  phi_epsilon list --filter todo,planned,in_progress
   phi_epsilon update 1 --status blocked --priority high
   phi_epsilon todo --limit 100
 
@@ -615,6 +670,14 @@ cmd_todo() {
         cmd_update "$1" --status todo
     else
         cmd_list --status todo "$@"
+    fi
+}
+
+cmd_planned() {
+    if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+        cmd_update "$1" --status planned
+    else
+        cmd_list --status planned "$@"
     fi
 }
 
@@ -655,11 +718,11 @@ cmd_next() {
 
 cmd_backlog() {
     local limit="${1:-50}"
-    # Show wip first, then todo, ordered by priority within each status
+    # Show wip first, then planned, then todo, ordered by priority within each status
     sql "SELECT id, status, priority, title, tags FROM tasks 
-         WHERE status IN ('in_progress', 'todo')
+         WHERE status IN ('in_progress', 'planned', 'todo')
          ORDER BY 
-           CASE status WHEN 'in_progress' THEN 1 WHEN 'todo' THEN 2 END,
+           CASE status WHEN 'in_progress' THEN 1 WHEN 'planned' THEN 2 WHEN 'todo' THEN 3 END,
            CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
            id DESC
          LIMIT $limit;" | while IFS="$SEP" read -r id status priority title tags; do
@@ -687,14 +750,15 @@ main() {
         info) ensure_db; cmd_info ;;
         help|--help|-h) cmd_help ;;
         
-        # 4 main status commands: list OR transition
+        # 5 main status commands: list OR transition
         todo) ensure_db; cmd_todo "$@" ;;            # list todo OR mark as todo
+        planned|plan) ensure_db; cmd_planned "$@" ;; # list planned OR mark as planned
         wip|start) ensure_db; cmd_wip "$@" ;;        # list wip OR mark as wip
         done|finish) ensure_db; cmd_done_or_list "$@" ;;  # list done OR mark as done
         drop|x|cancel) ensure_db; cmd_drop "$@" ;;   # list cancelled OR cancel
         
         # Extra list shortcuts
-        active) ensure_db; cmd_list --filter todo,in_progress,blocked "$@" ;;
+        active) ensure_db; cmd_list --filter todo,planned,in_progress,blocked "$@" ;;
         all) ensure_db; cmd_list --all "$@" ;;
         next) ensure_db; cmd_next ;;
         backlog) ensure_db; cmd_backlog "$@" ;;
