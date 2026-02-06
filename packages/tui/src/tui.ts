@@ -538,6 +538,12 @@ export class TUI extends Container {
 		// Handle mouse events
 		const mouseEvent = this.handleMouseInput(data);
 		if (mouseEvent) {
+			// Drop pure motion/hover events (mode 1003 generates these for all mouse
+			// movement). No consumer currently needs them and they arrive at high rate.
+			if (mouseEvent.type === "move") {
+				return;
+			}
+
 			// Handle text selection first (if enabled)
 			if (this.selectionEnabled && this.handleSelectionEvent(mouseEvent)) {
 				// Selection handled the event, don't forward to other handlers

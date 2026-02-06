@@ -67,7 +67,10 @@ export function parseMouseEvent(data: string): MouseEvent | null {
 	if (button.startsWith("scroll")) {
 		type = "scroll";
 	} else if (isDrag) {
-		type = "drag";
+		// Motion bit (32) is set. With mode 1003 (any-event tracking), motion events
+		// are reported even without buttons pressed. Distinguish true drag (button held
+		// during motion) from hover/move (no button).
+		type = button === "none" ? "move" : "drag";
 	} else if (isRelease) {
 		type = "release";
 	} else {

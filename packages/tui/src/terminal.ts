@@ -304,16 +304,21 @@ export class ProcessTerminal implements Terminal {
 		if (this._mouseTrackingEnabled) return;
 		// Enable SGR mouse mode with full event reporting:
 		// ESC[?1000h - Basic mouse tracking (button press/release)
-		// ESC[?1002h - Button event tracking (includes movement while pressed)
+		// ESC[?1003h - Any-event tracking (reports all motion, even without buttons pressed)
+		//              This is critical for tmux: it sets the mouse_all_flag which ensures
+		//              tmux always forwards scroll wheel events to the application via
+		//              send-keys -M instead of entering copy mode. Mode 1002 (button-event)
+		//              was insufficient — some tmux configs still intercept scroll when only
+		//              mouse_button_flag is set.
 		// ESC[?1006h - SGR coordinates (allows larger terminal sizes)
-		process.stdout.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+		process.stdout.write("\x1b[?1000h\x1b[?1003h\x1b[?1006h");
 		this._mouseTrackingEnabled = true;
 	}
 
 	disableMouseTracking(): void {
 		if (!this._mouseTrackingEnabled) return;
 		// Disable in reverse order
-		process.stdout.write("\x1b[?1006l\x1b[?1002l\x1b[?1000l");
+		process.stdout.write("\x1b[?1006l\x1b[?1003l\x1b[?1000l");
 		this._mouseTrackingEnabled = false;
 	}
 }
