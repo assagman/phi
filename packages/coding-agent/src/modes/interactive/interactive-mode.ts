@@ -163,6 +163,9 @@ export class InteractiveMode {
 	// Streaming message tracking
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
 	private streamingMessage: AssistantMessage | undefined = undefined;
+	/** Set when message_end displays an error/abort in the assistant component.
+	 *  Prevents agent_end from showing a duplicate error. Reset on agent_end. */
+	private errorDisplayedForCurrentTurn = false;
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
@@ -1779,6 +1782,9 @@ export class InteractiveMode {
 					this.streamingComponent.updateContent(this.streamingMessage);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
+						// Mark that this turn's error was rendered by the assistant component,
+						// so agent_end doesn't show a duplicate.
+						this.errorDisplayedForCurrentTurn = true;
 						if (!errorMessage) {
 							errorMessage = this.streamingMessage.errorMessage || "Error";
 						}
@@ -1853,12 +1859,13 @@ export class InteractiveMode {
 				break;
 			}
 
-			case "agent_end":
+			case "agent_end": {
 				if (this.loadingAnimation) {
 					this.loadingAnimation.stop();
 					this.loadingAnimation = undefined;
 					this.statusContainer.clear();
 				}
+				// If streaming component still exists, message_end never fired — clean up.
 				if (this.streamingComponent) {
 					this.scrollableViewport.removeItem(this.streamingComponent);
 					this.streamingComponent = undefined;
@@ -1866,10 +1873,29 @@ export class InteractiveMode {
 				}
 				this.clearPendingToolComponents();
 
+				// Show error from agent_end if message_end(assistant) never displayed it.
+				// When an exception occurs in the agent loop (network errors, etc.),
+				// the catch block emits agent_end with an error assistant message but
+				// without the corresponding message_start/message_end events.
+				// The errorDisplayedForCurrentTurn flag is set by the message_end handler
+				// when it renders an error/abort in the assistant component.
+				if (!this.errorDisplayedForCurrentTurn && event.messages.length > 0) {
+					const lastMsg = event.messages[event.messages.length - 1];
+					if (
+						lastMsg.role === "assistant" &&
+						(lastMsg.stopReason === "error" || lastMsg.stopReason === "aborted") &&
+						lastMsg.errorMessage
+					) {
+						this.showError(lastMsg.errorMessage);
+					}
+				}
+				this.errorDisplayedForCurrentTurn = false;
+
 				await this.checkShutdownRequested();
 
 				this.ui.requestRender();
 				break;
+			}
 
 			case "auto_compaction_start": {
 				// Keep editor active; submissions are queued during compaction.
@@ -2506,12 +2532,16 @@ export class InteractiveMode {
 	showError(errorMessage: string): void {
 		this.addToChat(new Spacer(1));
 		this.addToChat(new Text(theme.fg("error", `Error: ${errorMessage}`), 1, 0));
+		// Ensure the error is visible even if the user has scrolled up
+		this.scrollableViewport.scrollToBottom();
 		this.ui.requestRender();
 	}
 
 	showWarning(warningMessage: string): void {
 		this.addToChat(new Spacer(1));
 		this.addToChat(new Text(theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
+		// Ensure the warning is visible even if the user has scrolled up
+		this.scrollableViewport.scrollToBottom();
 		this.ui.requestRender();
 	}
 
