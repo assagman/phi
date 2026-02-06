@@ -127,6 +127,8 @@ export interface AgentSessionConfig {
 	rebuildSystemPrompt?: (toolNames: string[], cwd?: string) => string;
 	/** Builtin tools lifecycle (delta, epsilon, sigma, handoff) */
 	builtinToolsLifecycle?: import("./builtin-tools/index.js").BuiltinToolsLifecycle;
+	/** Permission manager for CWD enforcement and directory access control */
+	permissionManager?: import("./permissions/index.js").PermissionManager;
 	/** Initial working directory */
 	cwd?: string;
 	/** Factory to rebuild built-in tools for a new cwd */
@@ -252,6 +254,9 @@ export class AgentSession {
 	private _createBuiltInTools?: (cwd: string) => Record<string, AgentTool>;
 	private _pendingCwdChange: string | undefined = undefined;
 
+	// Permission management
+	private _permissionManager?: import("./permissions/index.js").PermissionManager;
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -267,6 +272,7 @@ export class AgentSession {
 		this._rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this._baseSystemPrompt = config.agent.state.systemPrompt;
 		this._builtinToolsLifecycle = config.builtinToolsLifecycle;
+		this._permissionManager = config.permissionManager;
 		this._cwd = config.cwd ?? process.cwd();
 		this._createBuiltInTools = config.createBuiltInTools;
 
@@ -380,6 +386,11 @@ export class AgentSession {
 			}
 
 			await this._checkCompaction(msg);
+		}
+
+		// Clear once-scoped permission grants after agent turn completes
+		if (event.type === "agent_end") {
+			this._permissionManager?.clearOnceGrants();
 		}
 
 		// Apply deferred CWD change after agent finishes (not while streaming)
@@ -610,6 +621,8 @@ export class AgentSession {
 		this._eventListeners = [];
 		// Shutdown builtin tools (closes databases)
 		this._builtinToolsLifecycle?.onSessionShutdown();
+		// Clear session-scoped permissions
+		this._permissionManager?.clearSessionGrants();
 	}
 
 	// =========================================================================
@@ -639,6 +652,11 @@ export class AgentSession {
 	/** Current working directory */
 	get cwd(): string {
 		return this._cwd;
+	}
+
+	/** Permission manager for CWD enforcement and directory access control */
+	get permissionManager(): import("./permissions/index.js").PermissionManager | undefined {
+		return this._permissionManager;
 	}
 
 	/** Current retry attempt (0 if not retrying) */
@@ -2642,6 +2660,13 @@ export class AgentSession {
 
 		if (!statSync(newPath).isDirectory()) {
 			throw new Error(`Path is not a directory: ${newPath}`);
+		}
+
+		// Enforce CWD boundary: new path must be within the immutable workspace root
+		if (this._permissionManager && !this._permissionManager.isWithinCwd(resolvePath(newPath))) {
+			throw new Error(
+				`Cannot change directory to ${newPath}: outside workspace boundary (${this._permissionManager.cwd})`,
+			);
 		}
 
 		const previousCwd = this._cwd;

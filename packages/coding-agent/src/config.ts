@@ -167,6 +167,11 @@ export function getSessionsDir(): string {
 	return join(getAgentDir(), "sessions");
 }
 
+/** Get path to permissions.json (persistent permission grants) */
+export function getPermissionsPath(): string {
+	return join(getAgentDir(), "permissions.json");
+}
+
 /** Get path to debug log file */
 export function getDebugLogPath(): string {
 	return join(getAgentDir(), `${APP_NAME}-debug.log`);

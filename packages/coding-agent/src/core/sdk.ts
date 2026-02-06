@@ -52,6 +52,7 @@ import {
 } from "./extensions/index.js";
 import { convertToLlm, convertToLlm as convertToLlmMessages } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
+import { PermissionManager, wrapToolRegistryWithPermissions, wrapToolsWithPermissions } from "./permissions/index.js";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./prompt-templates.js";
 import { SessionManager } from "./session-manager.js";
 import { type Settings, SettingsManager, type SkillsSettings } from "./settings-manager.js";
@@ -154,6 +155,8 @@ export interface CreateAgentSessionResult {
 	modelFallbackMessage?: string;
 	/** Builtin tools lifecycle (for UI context setup in interactive mode) */
 	builtinToolsLifecycle: BuiltinToolsLifecycle;
+	/** Permission manager for CWD enforcement and directory access control */
+	permissionManager: PermissionManager;
 }
 
 // Re-exports
@@ -368,6 +371,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd);
 	time("sessionManager");
 
+	// Create permission manager for CWD enforcement
+	const permissionManager = new PermissionManager({
+		cwd,
+		persistPath: join(agentDir, "permissions.json"),
+		preAllowedDirs: settingsManager.getAllowedDirs(),
+	});
+	time("permissionManager");
+
 	// Check if session has existing data to restore
 	const existingSession = sessionManager.buildSessionContext();
 	time("loadSession");
@@ -565,6 +576,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			wrappedToolRegistry.set(tool.name, tool);
 		}
 	}
+
+	// Wrap tools with permission checking (outermost layer)
+	activeToolsArray = wrapToolsWithPermissions(activeToolsArray as AgentTool[], permissionManager);
+	if (wrappedToolRegistry) {
+		wrappedToolRegistry = wrapToolRegistryWithPermissions(wrappedToolRegistry, permissionManager);
+	} else {
+		// No extension wrapping — wrap the base registry directly
+		for (const [name, tool] of toolRegistry) {
+			toolRegistry.set(name, wrapToolsWithPermissions([tool], permissionManager)[0]);
+		}
+	}
+	time("wrapPermissions");
 
 	// Function to rebuild system prompt when tools change.
 	// Optional cwdOverride allows changeCwd() to pass the new directory.
@@ -779,6 +802,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolRegistry: wrappedToolRegistry ?? toolRegistry,
 		rebuildSystemPrompt,
 		builtinToolsLifecycle,
+		permissionManager,
 		cwd,
 		createBuiltInTools: (newCwd: string) => {
 			const rawTools = createAllTools(newCwd, {
@@ -786,15 +810,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				bash: { commandPrefix: shellCommandPrefix },
 			}) as Record<string, AgentTool>;
 			// Re-wrap rebuilt tools with extensions so wrappers survive cwd changes
+			let tools: AgentTool[];
 			if (extensionRunner) {
-				const wrapped = wrapToolsWithExtensions(Object.values(rawTools), extensionRunner);
-				const result: Record<string, AgentTool> = {};
-				for (const tool of wrapped) {
-					result[tool.name] = tool;
-				}
-				return result;
+				tools = wrapToolsWithExtensions(Object.values(rawTools), extensionRunner);
+			} else {
+				tools = Object.values(rawTools);
 			}
-			return rawTools;
+			// Re-wrap with permissions
+			tools = wrapToolsWithPermissions(tools, permissionManager);
+			const result: Record<string, AgentTool> = {};
+			for (const tool of tools) {
+				result[tool.name] = tool;
+			}
+			return result;
 		},
 	});
 	time("createAgentSession");
@@ -804,5 +832,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionsResult,
 		modelFallbackMessage,
 		builtinToolsLifecycle,
+		permissionManager,
 	};
 }
