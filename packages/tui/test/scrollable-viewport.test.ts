@@ -24,6 +24,13 @@ function createTrackingComponent(lineCount: number): Component & { renderCount: 
 	return component;
 }
 
+function createNamedComponent(prefix: string, lineCount: number): Component {
+	return {
+		render: (width: number) => Array.from({ length: lineCount }, (_, i) => `${prefix}-${i}`.padEnd(width)),
+		invalidate: () => {},
+	};
+}
+
 describe("ScrollableViewport", () => {
 	describe("basic scrolling", () => {
 		it("should scroll up and down", () => {
@@ -107,6 +114,54 @@ describe("ScrollableViewport", () => {
 			viewport.scrollUp(10);
 			const scrolledUp = viewport.render(80, 5);
 			assert.ok(scrolledUp[4].startsWith("line-9"), `Expected line-9, got ${scrolledUp[4]}`);
+		});
+
+		it("should invalidate cached item renders when width changes", () => {
+			const viewport = new ScrollableViewport({ smoothScroll: false });
+			const item = createTrackingComponent(10);
+			viewport.addItem(item);
+
+			viewport.render(80, 10);
+			assert.strictEqual(item.renderCount, 1, "Initial render should render item once");
+
+			viewport.render(100, 10);
+			assert.strictEqual(item.renderCount, 2, "Width change should re-render cached item");
+		});
+
+		it("should only render appended item cache when adding a new component", () => {
+			const viewport = new ScrollableViewport({ smoothScroll: false });
+			const first = createTrackingComponent(10);
+			const second = createTrackingComponent(4);
+
+			viewport.addItem(first);
+			viewport.render(80, 10);
+			assert.strictEqual(first.renderCount, 1, "First component should render once");
+
+			viewport.addItem(second);
+			viewport.render(80, 10);
+
+			assert.strictEqual(first.renderCount, 1, "Appending should not re-render existing cached items");
+			assert.strictEqual(second.renderCount, 1, "Appended component should render once");
+		});
+
+		it("should preserve visible region when appending while scrolled up", () => {
+			const viewport = new ScrollableViewport({ smoothScroll: false });
+			viewport.addItem(createNamedComponent("base", 20));
+			viewport.render(80, 5);
+
+			viewport.scrollUp(5);
+			const beforeAppend = viewport.render(80, 5);
+			assert.ok(beforeAppend[4].startsWith("base-14"), `Expected base-14, got ${beforeAppend[4]}`);
+
+			viewport.addItem(createNamedComponent("tail", 3));
+			const afterAppend = viewport.render(80, 5);
+
+			assert.strictEqual(
+				viewport.getScrollOffset(),
+				8,
+				"Scroll offset should be adjusted by appended content height",
+			);
+			assert.ok(afterAppend[4].startsWith("base-14"), `Expected base-14, got ${afterAppend[4]}`);
 		});
 	});
 
