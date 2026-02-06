@@ -32,7 +32,7 @@ VALID_STATUSES="todo in_progress blocked done cancelled"
 VALID_PRIORITIES="low medium high critical"
 
 # Schema version: bump when schema changes
-SCHEMA_VERSION=2
+SCHEMA_VERSION=3
 
 # ─────────────────────────────────────────────────────────────────
 # Helpers
@@ -144,6 +144,25 @@ MIGRATION
     log "migration complete (schema_version=2)"
 }
 
+migrate_to_v3() {
+    log "migrate v2 -> v3: normalizing JSON-array tags to comma-separated"
+
+    # Count affected rows
+    local count
+    count="$(sql "SELECT COUNT(*) FROM tasks WHERE tags LIKE '[%';")"
+    if [[ "${count:-0}" != "0" ]]; then
+        log "normalizing $count rows with JSON-array tags"
+        # Strip [ ] and " from tags: ["a","b","c"] → a,b,c
+        sql "UPDATE tasks SET
+                tags = replace(replace(replace(tags, '[', ''), ']', ''), '\"', ''),
+                updated_at = $(now)
+             WHERE tags LIKE '[%';"
+    fi
+
+    sql "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 3);"
+    log "migration complete (schema_version=3)"
+}
+
 ensure_db() {
     mkdir -p "$DATA_DIR"
 
@@ -167,12 +186,20 @@ ensure_db() {
     if [[ "$ver" -lt 2 ]]; then
         backup_db
         migrate_to_v2
+        ver=2
+    fi
+
+    if [[ "$ver" -lt 3 ]]; then
+        migrate_to_v3
     fi
 }
 
+# Field separator: ASCII Unit Separator (0x1F) — safe for data containing pipes, commas, etc.
+SEP=$'\x1f'
+
 # SQLite with WAL mode and busy timeout for concurrent access
 # PRAGMAs output suppressed via .output, then restored for actual query
-sql() { sqlite3 -batch -noheader -cmd ".output /dev/null" -cmd "PRAGMA busy_timeout = 5000;" -cmd "PRAGMA journal_mode = WAL;" -cmd ".output stdout" "$DB_FILE" "$@"; }
+sql() { sqlite3 -batch -noheader -separator "$SEP" -cmd ".output /dev/null" -cmd "PRAGMA busy_timeout = 5000;" -cmd "PRAGMA journal_mode = WAL;" -cmd ".output stdout" "$DB_FILE" "$@"; }
 sql_pretty() { sqlite3 -batch -header -column -cmd ".output /dev/null" -cmd "PRAGMA busy_timeout = 5000;" -cmd "PRAGMA journal_mode = WAL;" -cmd ".output stdout" "$DB_FILE" "$@"; }
 
 status_icon() {
@@ -235,7 +262,7 @@ fmt_ts() {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# Database (v2 schema with CHECK constraints)
+# Database (v3 schema: CHECK constraints + normalized comma-separated tags)
 # ─────────────────────────────────────────────────────────────────
 init_db() {
     sql <<'SQL'
@@ -264,7 +291,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
 
-INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 2);
+INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 3);
 SQL
 }
 
@@ -349,7 +376,7 @@ cmd_list() {
     sql "SELECT id, status, priority, title, tags FROM tasks WHERE $where ORDER BY 
          CASE status WHEN 'in_progress' THEN 1 WHEN 'blocked' THEN 2 WHEN 'todo' THEN 3 WHEN 'done' THEN 4 ELSE 5 END,
          CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
-         id DESC LIMIT $limit;" | while IFS='|' read -r id status priority title tags; do
+         id DESC LIMIT $limit;" | while IFS="$SEP" read -r id status priority title tags; do
         local icon; icon=$(status_icon "$status")
         local tag_str=""
         [[ -n "$tags" ]] && tag_str=" [${tags}]"
@@ -361,12 +388,17 @@ cmd_get() {
     local id="${1:-}"
     [[ -n "$id" ]] || die "usage: phi_epsilon get <id>"
     
-    local row
-    row=$(sql "SELECT id, title, description, status, priority, tags, parent_id, created_at, updated_at, completed_at
-               FROM tasks WHERE id = $id;")
-    [[ -n "$row" ]] || die "task #$id not found" $EXIT_NOT_FOUND
+    # Fetch metadata fields (single-line) separately from description (multiline)
+    local meta
+    meta=$(sql "SELECT id, title, status, priority, tags, parent_id, created_at, updated_at, completed_at
+                FROM tasks WHERE id = $id;")
+    [[ -n "$meta" ]] || die "task #$id not found" $EXIT_NOT_FOUND
     
-    IFS='|' read -r id title desc status priority tags parent_id created updated completed <<< "$row"
+    IFS="$SEP" read -r id title status priority tags parent_id created updated completed <<< "$meta"
+    
+    # Fetch description separately to preserve newlines and pipes
+    local desc
+    desc=$(sql "SELECT description FROM tasks WHERE id = $id;")
     
     local icon; icon=$(status_icon "$status")
     
@@ -383,10 +415,12 @@ cmd_get() {
     [[ -n "$tags" ]] && printf "  %-12s%s\n" "tags" "$tags"
     [[ -n "$parent_id" ]] && printf "  %-12s%s\n" "parent" "#$parent_id"
     
-    # Description
+    # Description (multiline-safe: fetched via separate query, printed with proper indentation)
     if [[ -n "$desc" ]]; then
         echo "  ─────────────────────────────────────────────"
-        echo "  $desc"
+        while IFS= read -r line; do
+            echo "  $line"
+        done <<< "$desc"
     fi
     
     # Subtasks
@@ -395,7 +429,7 @@ cmd_get() {
     if [[ -n "$subtasks" ]]; then
         echo "  ─────────────────────────────────────────────"
         echo "  subtasks:"
-        echo "$subtasks" | while IFS='|' read -r sid sstatus spri stitle; do
+        echo "$subtasks" | while IFS="$SEP" read -r sid sstatus spri stitle; do
             local sicon; sicon=$(status_icon "$sstatus")
             echo "    ${sicon} #${sid} [${spri}] ${stitle}"
         done
@@ -433,7 +467,7 @@ cmd_update() {
     result=$(sql "UPDATE tasks SET $sets WHERE id = $id RETURNING id, status, priority, title;")
     [[ -n "$result" ]] || die "task #$id not found" $EXIT_NOT_FOUND
     
-    IFS='|' read -r rid rstatus rpri rtitle <<< "$result"
+    IFS="$SEP" read -r rid rstatus rpri rtitle <<< "$result"
     local icon; icon=$(status_icon "$rstatus")
     echo "updated ${icon} #${rid} [${rpri}] ${rtitle}"
 }
@@ -448,7 +482,7 @@ cmd_done() {
                   WHERE id = $id RETURNING id, priority, title;")
     [[ -n "$result" ]] || die "task #$id not found" $EXIT_NOT_FOUND
     
-    IFS='|' read -r rid rpri rtitle <<< "$result"
+    IFS="$SEP" read -r rid rpri rtitle <<< "$result"
     echo "updated ✓ #${rid} [${rpri}] ${rtitle}"
 }
 
@@ -501,9 +535,9 @@ cmd_untag() {
 }
 
 cmd_tags() {
-    sql "SELECT DISTINCT value FROM tasks, json_each('[\'' || replace(tags, ',', ''\'','\''') || ''\'']') 
-         WHERE tags IS NOT NULL AND tags != '' ORDER BY value;" 2>/dev/null || \
-    sql "SELECT tags FROM tasks WHERE tags IS NOT NULL AND tags != '';" | tr ',' '\n' | sort -u
+    # Handle both JSON-array ["a","b"] and comma-separated "a,b" tag formats
+    sql "SELECT tags FROM tasks WHERE tags IS NOT NULL AND tags != '';" | \
+        sed 's/^\[//; s/\]$//; s/"//g' | tr ',' '\n' | sed '/^$/d' | sort -u
 }
 
 cmd_info() {
@@ -614,7 +648,7 @@ cmd_next() {
          WHERE status = 'todo'
          ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
                   id ASC
-         LIMIT 1;" | while IFS='|' read -r id status priority title; do
+         LIMIT 1;" | while IFS="$SEP" read -r id status priority title; do
         echo "○ #${id} [${priority}] ${title}"
     done
 }
@@ -628,7 +662,7 @@ cmd_backlog() {
            CASE status WHEN 'in_progress' THEN 1 WHEN 'todo' THEN 2 END,
            CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
            id DESC
-         LIMIT $limit;" | while IFS='|' read -r id status priority title tags; do
+         LIMIT $limit;" | while IFS="$SEP" read -r id status priority title tags; do
         local icon; icon=$(status_icon "$status")
         local tag_str=""
         [[ -n "$tags" ]] && tag_str=" [${tags}]"
