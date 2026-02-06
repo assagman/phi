@@ -122,6 +122,7 @@ export type ThemeColor =
 	| "toolTitle"
 	| "toolOutput"
 	| "toolRead"
+	| "toolReadRange"
 	| "toolEdit"
 	| "toolWrite"
 	| "toolBash"

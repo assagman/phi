@@ -340,7 +340,7 @@ export class ToolExecutionComponent extends Container {
 				}
 				const n = this.lineCount();
 				const stats = n > 0 ? theme.fg("muted", ` ${n} lines`) : "";
-				return `${i} ${this.pulsed("read")} ${this.formatPath(path)}${theme.fg("warning", range)}${stats} ${s}`;
+				return `${i} ${this.pulsed("read")} ${this.formatPath(path)}${theme.fg("toolReadRange", range)}${stats} ${s}`;
 			}
 
 			case "edit": {

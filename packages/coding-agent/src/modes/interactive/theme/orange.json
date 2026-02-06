@@ -45,6 +45,7 @@
     "toolTitle": "",
     "toolOutput": "gray",
     "toolRead": "#4B83EB",
+    "toolReadRange": "#7B7487",
     "toolEdit": "#F0D3AF",
     "toolWrite": "#F0EEAF",
     "toolBash": "#0F7522",
