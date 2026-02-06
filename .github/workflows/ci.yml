@@ -31,7 +31,7 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
-      - run: bunx biome format --check .
+      - run: bunx biome format .
 
   typecheck:
     name: Typecheck
