@@ -52,6 +52,16 @@ import {
 } from "./extensions/index.js";
 import { convertToLlm, convertToLlm as convertToLlmMessages } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
+import {
+	createSandboxProvider,
+	DEFAULT_DENIED_READ_PATHS,
+	PermissionDb,
+	PermissionManager,
+	type SandboxConfig,
+	type SandboxProvider,
+	wrapToolRegistryWithPermissions,
+	wrapToolsWithPermissions,
+} from "./permissions/index.js";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./prompt-templates.js";
 import { SessionManager } from "./session-manager.js";
 import { type Settings, SettingsManager, type SkillsSettings } from "./settings-manager.js";
@@ -154,6 +164,10 @@ export interface CreateAgentSessionResult {
 	modelFallbackMessage?: string;
 	/** Builtin tools lifecycle (for UI context setup in interactive mode) */
 	builtinToolsLifecycle: BuiltinToolsLifecycle;
+	/** Permission manager for CWD enforcement and directory access control */
+	permissionManager: PermissionManager;
+	/** Sandbox provider for OS-level bash command sandboxing (undefined if init failed) */
+	sandboxProvider?: SandboxProvider;
 }
 
 // Re-exports
@@ -368,6 +382,44 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd);
 	time("sessionManager");
 
+	// Initialize OS-level sandbox for bash command enforcement
+	const initialSandboxConfig: SandboxConfig = {
+		allowedWritePaths: [cwd, "/tmp"],
+		deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
+		allowedDomains: [],
+	};
+	let sandboxProvider: SandboxProvider | undefined;
+	try {
+		sandboxProvider = await createSandboxProvider(initialSandboxConfig);
+	} catch (err) {
+		// Sandbox is mandatory on host — warn but don't crash during development/testing.
+		// In production, this should be a hard failure.
+		const message = err instanceof Error ? err.message : String(err);
+		console.error(`[sandbox] Initialization failed: ${message}`);
+		console.error("[sandbox] Bash commands will rely on static path extraction only (reduced security).");
+	}
+	time("sandboxProvider");
+
+	// Create permission database and manager for CWD enforcement
+	const permissionDb = new PermissionDb(cwd);
+	const capturedSandbox = sandboxProvider;
+	const permissionManager = new PermissionManager({
+		cwd,
+		db: permissionDb,
+		preAllowedDirs: settingsManager.getAllowedDirs(),
+		legacyJsonPath: join(agentDir, "permissions.json"),
+		onGrantChange: capturedSandbox
+			? (writePaths) => {
+					capturedSandbox.updateConfig({
+						allowedWritePaths: writePaths,
+						deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
+						allowedDomains: [],
+					});
+				}
+			: undefined,
+	});
+	time("permissionManager");
+
 	// Check if session has existing data to restore
 	const existingSession = sessionManager.buildSessionContext();
 	time("loadSession");
@@ -455,7 +507,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Create ALL built-in tools for the registry (extensions can enable any of them)
 	const allBuiltInToolsMap = createAllTools(cwd, {
 		read: { autoResizeImages },
-		bash: { commandPrefix: shellCommandPrefix },
+		bash: { commandPrefix: shellCommandPrefix, sandboxProvider },
 	});
 	// Determine initially active built-in tools (default: read, bash, edit, write)
 	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
@@ -565,6 +617,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			wrappedToolRegistry.set(tool.name, tool);
 		}
 	}
+
+	// Wrap tools with permission checking (outermost layer)
+	activeToolsArray = wrapToolsWithPermissions(activeToolsArray as AgentTool[], permissionManager);
+	if (wrappedToolRegistry) {
+		wrappedToolRegistry = wrapToolRegistryWithPermissions(wrappedToolRegistry, permissionManager);
+	} else {
+		// No extension wrapping — wrap the base registry directly
+		for (const [name, tool] of toolRegistry) {
+			toolRegistry.set(name, wrapToolsWithPermissions([tool], permissionManager)[0]);
+		}
+	}
+	time("wrapPermissions");
 
 	// Function to rebuild system prompt when tools change.
 	// Optional cwdOverride allows changeCwd() to pass the new directory.
@@ -779,22 +843,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolRegistry: wrappedToolRegistry ?? toolRegistry,
 		rebuildSystemPrompt,
 		builtinToolsLifecycle,
+		permissionManager,
+		sandboxProvider,
 		cwd,
 		createBuiltInTools: (newCwd: string) => {
 			const rawTools = createAllTools(newCwd, {
 				read: { autoResizeImages },
-				bash: { commandPrefix: shellCommandPrefix },
+				bash: { commandPrefix: shellCommandPrefix, sandboxProvider },
 			}) as Record<string, AgentTool>;
 			// Re-wrap rebuilt tools with extensions so wrappers survive cwd changes
+			let tools: AgentTool[];
 			if (extensionRunner) {
-				const wrapped = wrapToolsWithExtensions(Object.values(rawTools), extensionRunner);
-				const result: Record<string, AgentTool> = {};
-				for (const tool of wrapped) {
-					result[tool.name] = tool;
-				}
-				return result;
+				tools = wrapToolsWithExtensions(Object.values(rawTools), extensionRunner);
+			} else {
+				tools = Object.values(rawTools);
 			}
-			return rawTools;
+			// Re-wrap with permissions
+			tools = wrapToolsWithPermissions(tools, permissionManager);
+			const result: Record<string, AgentTool> = {};
+			for (const tool of tools) {
+				result[tool.name] = tool;
+			}
+			return result;
 		},
 	});
 	time("createAgentSession");
@@ -804,5 +874,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionsResult,
 		modelFallbackMessage,
 		builtinToolsLifecycle,
+		permissionManager,
+		sandboxProvider,
 	};
 }

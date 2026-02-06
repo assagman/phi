@@ -14,8 +14,6 @@ export {
 export { type BashExecutorOptions, type BashResult, executeBash, executeBashWithOperations } from "./bash-executor.js";
 export type { CompactionResult } from "./compaction/index.js";
 export { createEventBus, type EventBus, type EventBusController } from "./event-bus.js";
-
-// Extensions system
 export {
 	type AgentEndEvent,
 	type AgentStartEvent,
@@ -59,3 +57,18 @@ export {
 	type TurnStartEvent,
 	wrapToolsWithExtensions,
 } from "./extensions/index.js";
+// Extensions system
+// Permissions system
+export {
+	type PermissionCheckResult,
+	type PermissionGrant,
+	PermissionManager,
+	type PermissionManagerConfig,
+	type PermissionPromptFn,
+	type PermissionPromptResult,
+	type PermissionRequest,
+	type PermissionScope,
+	type PermissionType,
+	wrapToolRegistryWithPermissions,
+	wrapToolsWithPermissions,
+} from "./permissions/index.js";

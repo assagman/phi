@@ -80,6 +80,7 @@ export interface Settings {
 	/** @deprecated No longer used - changelog display removed */
 	collapseChangelog?: boolean;
 	standaloneMode?: boolean; // Enable standalone TUI mode with alternate screen buffer
+	allowedDirs?: string[]; // Pre-allowed directories that bypass permission prompts
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -515,5 +516,9 @@ export class SettingsManager {
 
 	getCodeBlockIndent(): string {
 		return this.settings.markdown?.codeBlockIndent ?? "  ";
+	}
+
+	getAllowedDirs(): string[] {
+		return [...(this.settings.allowedDirs ?? [])];
 	}
 }
