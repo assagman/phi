@@ -32,6 +32,7 @@ import {
 	type BuiltinToolsLifecycle,
 	createBuiltinToolsLifecycle,
 	createBuiltinUIContext,
+	getDataDir,
 } from "./builtin-tools/index.js";
 import {
 	computeFileLists,
@@ -203,7 +204,7 @@ function getDefaultAgentDir(): string {
 }
 
 /** Resolve the git root directory that needs write access (bare repo root or .git dir). */
-function _getGitRootDir(cwd: string): string | null {
+function getGitRootDir(cwd: string): string | null {
 	try {
 		const { execSync } = require("node:child_process") as typeof import("node:child_process");
 		const stdio: ["pipe", "pipe", "pipe"] = ["pipe", "pipe", "pipe"];
@@ -221,7 +222,7 @@ function _getGitRootDir(cwd: string): string | null {
 }
 
 /** Extract unique hostnames from git remote URLs. */
-function _getGitRemoteDomains(cwd: string): string[] {
+function getGitRemoteDomains(cwd: string): string[] {
 	try {
 		const { execSync } = require("node:child_process") as typeof import("node:child_process");
 		const stdio: ["pipe", "pipe", "pipe"] = ["pipe", "pipe", "pipe"];
@@ -466,7 +467,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					for (const p of phiInfraPaths) allPaths.add(p);
 					// Merge git remote domains with user-granted network domains
 					const allDomains = new Set(gitDomains);
-					for (const d of permissionManager.getAllowedDomains()) allDomains.add(d);
+					for (const d of permissionManager.getAllowedDomains() as string[]) allDomains.add(d);
 					await capturedSandbox.updateConfig({
 						allowedWritePaths: [...allPaths],
 						deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
@@ -487,8 +488,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Without this, grants from previous sessions would be accepted by the
 	// permission layer but denied by the sandbox until a new grant triggers sync.
 	if (sandboxProvider) {
-		const persistedDomains = permissionManager.getAllowedDomains();
-		const persistedWritePaths = permissionManager.getAllowedWritePaths();
+		const persistedDomains = permissionManager.getAllowedDomains() as string[];
+		const persistedWritePaths = permissionManager.getAllowedWritePaths() as string[];
 		const allDomains = new Set(gitDomains);
 		for (const d of persistedDomains) allDomains.add(d);
 		const allWritePaths = new Set(persistedWritePaths);
