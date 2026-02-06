@@ -8,7 +8,7 @@
 	],
 	"scripts": {
 		"clean": "bun run --workspaces clean",
-		"build": "bun run --filter tui build && bun run --filter ai build && bun run --filter agent build && bun run --filter agents build && bun run --filter coding-agent build",
+		"build": "bun run --filter tui build && bun run --filter ai build && bun run --filter agent build && bun run --filter agents build && bun run --filter permission build && bun run --filter sandbox build && bun run --filter coding-agent build",
 		"dev": "concurrently --names \"ai,agent,agents,coding-agent,tui\" --prefix-colors \"cyan,yellow,green,red,magenta\" \"bun run --filter ai dev\" \"bun run --filter agent dev\" \"bun run --filter agents dev\" \"bun run --filter coding-agent dev\" \"bun run --filter tui dev\"",
 		"dev:tsc": "bun run --filter ai dev:tsc",
 		"check": "biome check --write . && tsgo --noEmit",

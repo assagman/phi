@@ -32,7 +32,6 @@
 		"test": "vitest --run"
 	},
 	"dependencies": {
-		"@anthropic-ai/sandbox-runtime": "^0.0.34",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"@sinclair/typebox": "^0.34.48",
 		"agent": "*",
@@ -51,6 +50,8 @@
 		"minimatch": "^10.1.1",
 		"proper-lockfile": "^4.1.2",
 		"strip-ansi": "^7.1.2",
+		"permission": "*",
+		"sandbox": "*",
 		"tui": "*",
 		"yaml": "^2.8.2"
 	},

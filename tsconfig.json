@@ -17,6 +17,10 @@
 			"tui/*": ["./packages/tui/src/*"],
 			"agents": ["./packages/agents/src/index.ts"],
 			"agents/*": ["./packages/agents/src/*"],
+			"permission": ["./packages/permission/src/index.ts"],
+			"permission/*": ["./packages/permission/src/*"],
+			"sandbox": ["./packages/sandbox/src/index.ts"],
+			"sandbox/*": ["./packages/sandbox/src/*"],
 		}
 	},
 	"include": ["packages/*/src/**/*", "packages/*/test/**/*"],

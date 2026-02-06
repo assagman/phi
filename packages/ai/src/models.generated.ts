@@ -7411,6 +7411,23 @@ export const MODELS = {
 			contextWindow: 200000,
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
+		"openrouter/pony-alpha": {
+			id: "openrouter/pony-alpha",
+			name: "Pony Alpha",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+			},
+			contextWindow: 200000,
+			maxTokens: 131000,
+		} satisfies Model<"openai-completions">,
 		"prime-intellect/intellect-3": {
 			id: "prime-intellect/intellect-3",
 			name: "Prime Intellect: INTELLECT-3",

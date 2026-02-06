@@ -18,6 +18,8 @@ import { resolve as resolvePath } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "agent";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "ai";
 import { completeSimple, isContextOverflow, modelsAreEqual, supportsXhigh } from "ai";
+import type { PermissionManager } from "permission";
+import type { SandboxProvider } from "sandbox";
 import { getAuthPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
@@ -33,7 +35,6 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.js";
-
 import { analyzeContext, type ContextBreakdown, formatContextBreakdown } from "./context-analyzer.js";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.js";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.js";
@@ -128,9 +129,9 @@ export interface AgentSessionConfig {
 	/** Builtin tools lifecycle (delta, epsilon, sigma, handoff) */
 	builtinToolsLifecycle?: import("./builtin-tools/index.js").BuiltinToolsLifecycle;
 	/** Permission manager for CWD enforcement and directory access control */
-	permissionManager?: import("./permissions/index.js").PermissionManager;
-	/** Sandbox provider for OS-level bash command sandboxing */
-	sandboxProvider?: import("./permissions/index.js").SandboxProvider;
+	permissionManager: PermissionManager;
+	/** Sandbox provider for OS-level bash command sandboxing (undefined if init failed) */
+	sandboxProvider?: SandboxProvider;
 	/** Initial working directory */
 	cwd?: string;
 	/** Factory to rebuild built-in tools for a new cwd */
@@ -269,8 +270,8 @@ export class AgentSession {
 	private _autoSessionNamePromise: Promise<void> | undefined = undefined;
 
 	// Permission management
-	private _permissionManager?: import("./permissions/index.js").PermissionManager;
-	private _sandboxProvider?: import("./permissions/index.js").SandboxProvider;
+	private readonly _permissionManager: PermissionManager;
+	private readonly _sandboxProvider: SandboxProvider | undefined;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -406,7 +407,7 @@ export class AgentSession {
 
 		// Clear once-scoped permission grants after agent turn completes
 		if (event.type === "agent_end") {
-			this._permissionManager?.clearOnceGrants();
+			this._permissionManager.clearOnceGrants();
 		}
 
 		// Apply deferred CWD change after agent finishes (not while streaming)
@@ -638,8 +639,8 @@ export class AgentSession {
 		// Shutdown builtin tools (closes databases)
 		this._builtinToolsLifecycle?.onSessionShutdown();
 		// Clear session-scoped permissions and close permission DB
-		this._permissionManager?.clearSessionGrants();
-		this._permissionManager?.close();
+		this._permissionManager.clearSessionGrants();
+		this._permissionManager.close();
 		// Dispose sandbox provider (fire-and-forget — dispose is async but cleanup is best-effort)
 		void this._sandboxProvider?.dispose();
 	}
@@ -674,7 +675,7 @@ export class AgentSession {
 	}
 
 	/** Permission manager for CWD enforcement and directory access control */
-	get permissionManager(): import("./permissions/index.js").PermissionManager | undefined {
+	get permissionManager(): PermissionManager {
 		return this._permissionManager;
 	}
 
@@ -2775,7 +2776,7 @@ export class AgentSession {
 		}
 
 		// Enforce CWD boundary: new path must be within the immutable workspace root
-		if (this._permissionManager && !this._permissionManager.isWithinCwd(resolvePath(newPath))) {
+		if (!this._permissionManager.isWithinCwd(resolvePath(newPath))) {
 			throw new Error(
 				`Cannot change directory to ${newPath}: outside workspace boundary (${this._permissionManager.cwd})`,
 			);

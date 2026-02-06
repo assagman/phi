@@ -23,8 +23,9 @@
 import { Agent, type AgentMessage, type AgentTool, type ThinkingLevel } from "agent";
 import type { Message, Model } from "ai";
 import { join } from "path";
+import { PermissionDb, PermissionManager, wrapToolRegistryWithPermissions, wrapToolsWithPermissions } from "permission";
+import { createSandboxProvider, DEFAULT_DENIED_READ_PATHS, type SandboxConfig, type SandboxProvider } from "sandbox";
 import { getAgentDir } from "../config.js";
-
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import {
@@ -52,7 +53,7 @@ import {
 } from "./extensions/index.js";
 import { convertToLlm, convertToLlm as convertToLlmMessages } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
-import type { PermissionManager, SandboxProvider } from "./permissions/index.js";
+
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./prompt-templates.js";
 import { SessionManager } from "./session-manager.js";
 import { type Settings, SettingsManager, type SkillsSettings } from "./settings-manager.js";
@@ -418,10 +419,86 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd);
 	time("sessionManager");
 
-	// [DISABLED] Sandbox and permission system disabled — being rewritten as packages/sandbox + packages/permission
-	const sandboxProvider: SandboxProvider | undefined = undefined;
-	const permissionManager: PermissionManager | undefined = undefined;
+	// Initialize OS-level sandbox for bash command enforcement
+	const gitRoot = getGitRootDir(cwd);
+	const gitDomains = getGitRemoteDomains(cwd);
+	// Paths phi's own code needs write access to (sandbox layer).
+	// Includes DB storage, agent config dir, and git root for worktree metadata.
+	const phiInfraPaths = [getDataDir(cwd), agentDir, ...(gitRoot ? [gitRoot] : [])];
+	// Paths the LLM tools can access without prompting (permission layer).
+	// Only git root — needed for bare-repo worktree/git operations.
+	// agentDir (has auth.json/API keys) and dataDir (internal DBs) are excluded.
+	const workspaceRoots = gitRoot ? [gitRoot] : [];
+	const initialSandboxConfig: SandboxConfig = {
+		allowedWritePaths: [cwd, "/tmp", ...phiInfraPaths],
+		deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
+		allowedDomains: gitDomains,
+	};
+	let sandboxProvider: SandboxProvider | undefined;
+	try {
+		sandboxProvider = await createSandboxProvider(initialSandboxConfig);
+	} catch (err) {
+		// Sandbox is mandatory on host — warn but don't crash during development/testing.
+		// In production, this should be a hard failure.
+		const message = err instanceof Error ? err.message : String(err);
+		console.error(`[sandbox] Initialization failed: ${message}`);
+		console.error("[sandbox] Bash commands will rely on static path extraction only (reduced security).");
+	}
 	time("sandboxProvider");
+
+	// Create permission database and manager for CWD enforcement
+	const permissionDb = new PermissionDb(join(getDataDir(cwd), "permissions.db"));
+	const capturedSandbox = sandboxProvider;
+	const permissionManager = new PermissionManager({
+		cwd,
+		db: permissionDb,
+		// Workspace roots: auto-allowed directories (git common dir, phi infrastructure).
+		// Paths within these dirs are granted automatically without prompting — essential
+		// for bare-repo worktree operations and phi data storage.
+		workspaceRoots,
+		preAllowedDirs: settingsManager.getAllowedDirs(),
+		legacyJsonPath: join(agentDir, "permissions.json"),
+		onGrantChange: capturedSandbox
+			? async (writePaths) => {
+					// Merge dynamic permission grants with phi infrastructure paths
+					// that must always be writable (DB storage, agent config, git root)
+					const allPaths = new Set(writePaths);
+					for (const p of phiInfraPaths) allPaths.add(p);
+					// Merge git remote domains with user-granted network domains
+					const allDomains = new Set(gitDomains);
+					for (const d of permissionManager.getAllowedDomains()) allDomains.add(d);
+					await capturedSandbox.updateConfig({
+						allowedWritePaths: [...allPaths],
+						deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
+						allowedDomains: [...allDomains],
+					});
+				}
+			: undefined,
+	});
+	time("permissionManager");
+
+	// Pre-grant git remote domains as session grants so the permission wrapper
+	// doesn't prompt for them (they're already in the sandbox allowedDomains)
+	for (const domain of gitDomains) {
+		await permissionManager.grant("network", domain, "session", "net_connect");
+	}
+
+	// Apply persisted grants (network + fs_write) to sandbox at startup.
+	// Without this, grants from previous sessions would be accepted by the
+	// permission layer but denied by the sandbox until a new grant triggers sync.
+	if (sandboxProvider) {
+		const persistedDomains = permissionManager.getAllowedDomains();
+		const persistedWritePaths = permissionManager.getAllowedWritePaths();
+		const allDomains = new Set(gitDomains);
+		for (const d of persistedDomains) allDomains.add(d);
+		const allWritePaths = new Set(persistedWritePaths);
+		for (const p of phiInfraPaths) allWritePaths.add(p);
+		await sandboxProvider.updateConfig({
+			allowedWritePaths: [...allWritePaths],
+			deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
+			allowedDomains: [...allDomains],
+		});
+	}
 
 	// Check if session has existing data to restore
 	const existingSession = sessionManager.buildSessionContext();
@@ -504,6 +581,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const contextFiles = options.contextFiles ?? discoverContextFiles(cwd, agentDir);
 	time("discoverContextFiles");
+
+	// Register discovered context files and skill files as safe for file-level access.
+	// These are public config files (AGENTS.md, SKILL.md) that the agent should be able
+	// to read without prompting, even if they live in restricted directories like agentDir.
+	const safeFiles: string[] = [...contextFiles.map((f) => f.path), ...skills.map((s) => s.filePath)];
+	permissionManager.addSafeFiles(safeFiles);
 
 	const autoResizeImages = settingsManager.getImageAutoResize();
 	const shellCommandPrefix = settingsManager.getShellCommandPrefix();
