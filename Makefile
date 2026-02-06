@@ -43,7 +43,7 @@ dev: ## Start dev watchers for all packages
 
 install-build: install build ## Install + build
 
-all: check build ## Check then build
+all: install check build ## Check then build
 
 rebuild: clean build ## Clean then build
 
