@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import stripAnsi from "strip-ansi";
 import { Container, LiveFeed, type LiveFeedItem, sliceByColumn, Text, type TUI, visibleWidth } from "tui";
-import type { SubagentDetails } from "../../../core/builtin-tools/subagent/index.js";
+import type { SubagentDetails, SubagentStreamItem } from "../../../core/builtin-tools/subagent/index.js";
 import type { BashToolDetails } from "../../../core/tools/bash.js";
 import { sanitizeBinaryOutput } from "../../../utils/shell.js";
 import { highlightCode, type ThemeColor, theme } from "../theme/theme.js";
@@ -559,23 +559,52 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		// ── Right pane: thinking + text streams (LiveFeed items) ─────────
+		// Use accumulated streamItems for persistent history across turns.
+		// Each item becomes a separate LiveFeed entry so the sliding window
+		// naturally scrolls older content out as new content arrives.
 		const rightItems: LiveFeedItem[] = [];
+		const items: SubagentStreamItem[] | undefined = details?.streamItems;
 
-		const thinkText = (details?.currentThinking ?? "")
-			.split("\n")
-			.filter((l) => l.trim())
-			.map((line) => theme.italic(theme.fg("thinkingText", line)))
-			.join("\n");
-		if (thinkText) {
-			rightItems.push({ id: "thinking", text: thinkText });
+		if (items && items.length > 0) {
+			for (const item of items) {
+				const filtered = item.content
+					.split("\n")
+					.filter((l) => l.trim())
+					.join("\n");
+				if (!filtered) continue;
+				if (item.type === "thinking") {
+					rightItems.push({
+						id: `stream:${item.seq}`,
+						text: filtered
+							.split("\n")
+							.map((line) => theme.italic(theme.fg("thinkingText", line)))
+							.join("\n"),
+					});
+				} else {
+					rightItems.push({ id: `stream:${item.seq}`, text: filtered });
+				}
+			}
 		}
 
-		const streamText = (details?.currentText ?? "")
-			.split("\n")
-			.filter((l) => l.trim())
-			.join("\n");
-		if (streamText) {
-			rightItems.push({ id: "text", text: streamText });
+		// Fallback: use currentThinking/currentText when streamItems is empty
+		// or all items filtered to whitespace (e.g. parallel/chain modes)
+		if (rightItems.length === 0) {
+			const thinkText = (details?.currentThinking ?? "")
+				.split("\n")
+				.filter((l) => l.trim())
+				.map((line) => theme.italic(theme.fg("thinkingText", line)))
+				.join("\n");
+			if (thinkText) {
+				rightItems.push({ id: "thinking", text: thinkText });
+			}
+
+			const streamText = (details?.currentText ?? "")
+				.split("\n")
+				.filter((l) => l.trim())
+				.join("\n");
+			if (streamText) {
+				rightItems.push({ id: "text", text: streamText });
+			}
 		}
 
 		// ── No split content? Return simple layout ──────────────────────

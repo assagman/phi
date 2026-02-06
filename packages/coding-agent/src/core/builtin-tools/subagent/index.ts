@@ -26,6 +26,8 @@ import { extensionsLog } from "../../../utils/logger.js";
 const DEFAULT_MAX_PARALLEL_TASKS = 8;
 /** Default maximum concurrent subprocess executions */
 const DEFAULT_MAX_CONCURRENCY = 4;
+/** Maximum stream items to retain (older items are dropped) */
+const MAX_STREAM_ITEMS = 200;
 /** Log prefix for consistent error message formatting */
 const LOG_PREFIX = "[subagent]";
 
@@ -84,6 +86,14 @@ interface UsageStats {
 	turns: number;
 }
 
+/** A segment of thinking or text output from a subagent turn */
+export interface SubagentStreamItem {
+	/** Monotonic sequence number — stable across cap splices */
+	seq: number;
+	type: "thinking" | "text";
+	content: string;
+}
+
 export interface SubagentDetails {
 	mode: "single" | "parallel" | "chain";
 	results: ExecutionResult[];
@@ -95,6 +105,8 @@ export interface SubagentDetails {
 	currentText?: string;
 	/** Streaming thinking text from the subprocess */
 	currentThinking?: string;
+	/** Accumulated thinking + text segments across all turns (for LiveFeed display) */
+	streamItems?: SubagentStreamItem[];
 	/** Name of the agent being executed */
 	agentName?: string;
 	/** Task description */
@@ -487,6 +499,7 @@ interface SubagentProgress {
 	allTools: SubagentToolEvent[];
 	currentText: string;
 	currentThinking: string;
+	streamItems: SubagentStreamItem[];
 }
 
 /**
@@ -586,6 +599,14 @@ async function runSubagent(
 		const allToolsList: SubagentToolEvent[] = [];
 		let currentText = "";
 		let currentThinking = "";
+		/** Accumulated thinking + text segments across all turns for LiveFeed display */
+		const streamItems: SubagentStreamItem[] = [];
+		/** Monotonic counter for stable SubagentStreamItem.seq IDs */
+		let nextSeq = 0;
+		/** Index of the current turn's thinking item in streamItems (-1 = none yet) */
+		let curThinkingIdx = -1;
+		/** Index of the current turn's text item in streamItems (-1 = none yet) */
+		let curTextIdx = -1;
 		let lastProgressEmit = 0;
 		const PROGRESS_THROTTLE_MS = 100;
 
@@ -600,6 +621,7 @@ async function runSubagent(
 				allTools: [...allToolsList],
 				currentText,
 				currentThinking,
+				streamItems: [...streamItems],
 			});
 		};
 
@@ -650,8 +672,21 @@ async function runSubagent(
 				for (const part of msg.content) {
 					if (part.type === "text") {
 						currentText = part.text;
+						// Accumulate into streamItems for persistent LiveFeed display
+						if (curTextIdx === -1) {
+							curTextIdx = streamItems.length;
+							streamItems.push({ seq: nextSeq++, type: "text", content: currentText });
+						} else {
+							streamItems[curTextIdx] = { ...streamItems[curTextIdx], content: currentText };
+						}
 					} else if (part.type === "thinking") {
 						currentThinking = (part as { type: "thinking"; thinking: string }).thinking;
+						if (curThinkingIdx === -1) {
+							curThinkingIdx = streamItems.length;
+							streamItems.push({ seq: nextSeq++, type: "thinking", content: currentThinking });
+						} else {
+							streamItems[curThinkingIdx] = { ...streamItems[curThinkingIdx], content: currentThinking };
+						}
 					}
 				}
 				emitProgress();
@@ -676,9 +711,15 @@ async function runSubagent(
 					if (msg.stopReason) result.stopReason = msg.stopReason;
 					if (msg.errorMessage) result.errorMessage = msg.errorMessage;
 				}
-				// Reset streaming text/thinking and clear completed tools between turns
+				// Reset per-turn streaming state; streamItems retains history
 				currentText = "";
 				currentThinking = "";
+				curThinkingIdx = -1;
+				curTextIdx = -1;
+				// Cap stream history to prevent unbounded growth
+				if (streamItems.length > MAX_STREAM_ITEMS) {
+					streamItems.splice(0, streamItems.length - MAX_STREAM_ITEMS);
+				}
 				for (const [id, tool] of activeTools) {
 					if (!tool.running) activeTools.delete(id);
 				}
@@ -688,6 +729,7 @@ async function runSubagent(
 					allTools: [...allToolsList],
 					currentText,
 					currentThinking,
+					streamItems: [...streamItems],
 				});
 			}
 
@@ -699,6 +741,7 @@ async function runSubagent(
 					allTools: [...allToolsList],
 					currentText,
 					currentThinking,
+					streamItems: [...streamItems],
 				});
 			}
 		};
@@ -1017,6 +1060,7 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 										allTools: progress.allTools,
 										currentText: progress.currentText,
 										currentThinking: progress.currentThinking,
+										streamItems: progress.streamItems,
 										agentName: step.agent,
 										task: taskWithContext,
 										summary: params.summary,
@@ -1223,6 +1267,7 @@ export function createSubagentTool(context: SubagentToolContext): AgentTool<type
 											allTools: progress.allTools,
 											currentText: progress.currentText,
 											currentThinking: progress.currentThinking,
+											streamItems: progress.streamItems,
 											agentName: agent.name,
 											task: params.task,
 											summary: params.summary,
