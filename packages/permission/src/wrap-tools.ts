@@ -1,14 +1,16 @@
 /**
  * Tool wrapping for permission-aware validation.
  *
- * ALL tools (builtin, extension, MCP):
+ * Non-file tools (bash, MCP, extension, etc.):
  *   - Network domain check: scans all string args for URLs/domains
  *
  * File tools (read/write/edit):
  *   - File-level permission check (safe files → directory grant)
+ *   - NO network check (local-only — avoids false positives from file content)
  *
  * Directory tools (ls):
  *   - Directory permission check
+ *   - NO network check (local-only)
  *
  * Bash:
  *   - Filesystem enforced by OS sandbox (seatbelt/bwrap)
@@ -249,10 +251,12 @@ function wrapTool(tool: AgentTool, permissionManager: PermissionManager): AgentT
 			const toolName = tool.name;
 			const command = buildCommandString(toolName, args);
 
-			// ── Network check (ALL tools) ──────────────────────────────
-			const networkError = await checkNetworkPermission(toolName, args, permissionManager, command);
-			if (networkError) {
-				return { content: [{ type: "text", text: networkError }], details: {} };
+			// ── Network check (skip for file/dir tools — they are purely local) ──
+			if (!FILE_TOOLS.has(toolName) && !DIR_TOOLS.has(toolName)) {
+				const networkError = await checkNetworkPermission(toolName, args, permissionManager, command);
+				if (networkError) {
+					return { content: [{ type: "text", text: networkError }], details: {} };
+				}
 			}
 
 			// ── Bash path check ────────────────────────────────────────
@@ -297,7 +301,7 @@ function wrapTool(tool: AgentTool, permissionManager: PermissionManager): AgentT
 
 /**
  * Wrap all tools in the array with permission checking.
- * Network domain check applies to ALL tools.
+ * Network domain check applies to non-file tools (bash, MCP, extensions).
  * File/directory checks apply to read/write/edit/ls only.
  */
 export function wrapToolsWithPermissions(tools: AgentTool[], permissionManager: PermissionManager): AgentTool[] {
