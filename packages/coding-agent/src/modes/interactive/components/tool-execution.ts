@@ -10,17 +10,10 @@ import type { BashToolDetails } from "../../../core/tools/bash.js";
 import { sanitizeBinaryOutput } from "../../../utils/shell.js";
 import { highlightCode, type ThemeColor, theme } from "../theme/theme.js";
 
-const MAX_ERROR_LINES = 10;
-const MAX_CMD_LINES = 10;
-const MAX_ARG_LINES = 12;
+/** Unified sliding-window line limit for all LiveFeed sections */
+const MAX_FEED_LINES = 5;
+const MAX_CMD_LINES = 5;
 const MAX_SUBAGENT_BOX_LINES = 20;
-const MAX_EXPANDED_OUTPUT_LINES = 20;
-const MAX_STREAMING_PREVIEW_LINES = 8;
-const MAX_SUBAGENT_TASK_LINES = 6;
-/** Max tool entries shown per agent in parallel mode */
-const MAX_PARALLEL_AGENT_TOOLS = 6;
-/** Max stream preview lines per agent in parallel mode */
-const MAX_PARALLEL_AGENT_STREAM_LINES = 4;
 const PULSE_PERIOD_MS = 1500; // Full pulse cycle duration
 const BORDER_PULSE_PERIOD_MS = 3000; // Slow border pulse cycle
 const PULSE_INTERVAL_MS = 100; // Pulse animation tick (~10fps, sufficient for smooth sine)
@@ -45,6 +38,71 @@ function colorAgentName(name: string): string {
 		return `\x1b[38;2;${r};${g};${b}m${name}\x1b[39m`;
 	}
 	return theme.fg("toolSubagent", name);
+}
+
+/**
+ * Detect likely output language from a bash command string.
+ * Returns a language identifier for syntax highlighting, or undefined.
+ */
+function detectOutputLanguage(command: string): string | undefined {
+	const cmd = command.trim().split(/\s+/)[0]?.replace(/^.*\//, "");
+	switch (cmd) {
+		case "node":
+		case "bun":
+		case "deno":
+			return "javascript";
+		case "python":
+		case "python3":
+			return "python";
+		case "ruby":
+			return "ruby";
+		case "cargo":
+		case "rustc":
+			return "rust";
+		case "go":
+			return "go";
+		case "jq":
+			return "json";
+		case "curl":
+		case "wget":
+			// Often returns JSON/HTML
+			if (command.includes("json") || command.includes("api")) return "json";
+			return undefined;
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Detect language from file path extension for syntax highlighting.
+ */
+function detectLanguageFromPath(filePath: string): string | undefined {
+	if (!filePath) return undefined;
+	const ext = filePath.split(".").pop()?.toLowerCase();
+	if (!ext) return undefined;
+	const extMap: Record<string, string> = {
+		ts: "typescript",
+		tsx: "typescript",
+		js: "javascript",
+		jsx: "javascript",
+		json: "json",
+		py: "python",
+		rb: "ruby",
+		rs: "rust",
+		go: "go",
+		md: "markdown",
+		yaml: "yaml",
+		yml: "yaml",
+		toml: "toml",
+		sh: "bash",
+		bash: "bash",
+		zsh: "bash",
+		css: "css",
+		html: "html",
+		xml: "xml",
+		sql: "sql",
+	};
+	return extMap[ext];
 }
 
 const ARG_TOOL_PREFIXES = ["agentsbox_", "delta_", "epsilon_"];
@@ -314,19 +372,19 @@ export class ToolExecutionComponent extends Container {
 		const highlighted = highlightCode(argsJson, "json");
 		if (highlighted.length === 0) return [];
 
-		const label = theme.fg("muted", "args:");
 		const indent = "   ";
+		const label = theme.fg("muted", "args:");
+		const feed = new LiveFeed({
+			maxLines: MAX_FEED_LINES,
+			overflowText: (n) => theme.fg("muted", `… ${n} lines above`),
+		});
+		// First line gets "args: " prefix, rest get continuation indent
 		const continuation = " ".repeat(6);
-
-		const maxLines = Math.min(highlighted.length, MAX_ARG_LINES);
-		const lines = [`${indent}${label} ${highlighted[0] ?? ""}`];
-		for (const line of highlighted.slice(1, maxLines)) {
-			lines.push(`${indent}${continuation}${line}`);
+		feed.addItem({ id: "args:0", text: `${label} ${highlighted[0] ?? ""}` });
+		for (let i = 1; i < highlighted.length; i++) {
+			feed.addItem({ id: `args:${i}`, text: `${continuation}${highlighted[i]}` });
 		}
-		if (highlighted.length > MAX_ARG_LINES) {
-			lines.push(`${indent}${theme.fg("muted", `… ${highlighted.length - MAX_ARG_LINES} more lines`)}`);
-		}
-		return lines;
+		return feed.render(200).map((l) => `${indent}${l}`);
 	}
 
 	private formatLine(): string {
@@ -370,27 +428,26 @@ export class ToolExecutionComponent extends Container {
 
 			case "bash": {
 				const cmd = String(this.args.command ?? "");
-				const cmdLines = cmd.split("\n");
-				const truncated = cmdLines.length > MAX_CMD_LINES;
-				const displayLines = truncated ? cmdLines.slice(0, MAX_CMD_LINES) : cmdLines;
-				const highlighted = highlightCode(displayLines.join("\n"), "bash");
+				const highlighted = highlightCode(cmd, "bash");
 				const n = this.lineCount();
 				const stats = n > 0 ? theme.fg("muted", ` ${n} lines`) : "";
 
 				if (highlighted.length === 1) {
 					return `${i} ${this.pulsed("bash")} $ ${highlighted[0]}${stats} ${s}`;
 				}
-				// Multi-line: first line after $, rest indented
+				// Multi-line: use LiveFeed for sliding window
 				const indent = "   ";
-				const lines = [
-					`${i} ${this.pulsed("bash")} $ ${highlighted[0]}`,
-					...highlighted.slice(1).map((l) => `${indent}${l}`),
-				];
-				if (truncated) {
-					lines.push(`${indent}${theme.fg("muted", `… ${cmdLines.length - MAX_CMD_LINES} more lines`)}`);
+				const cmdFeed = new LiveFeed({
+					maxLines: MAX_CMD_LINES,
+					overflowText: (count) => theme.fg("muted", `… ${count} lines above`),
+				});
+				cmdFeed.addItem({ id: "cmd:0", text: `${i} ${this.pulsed("bash")} $ ${highlighted[0]}` });
+				for (let idx = 1; idx < highlighted.length; idx++) {
+					cmdFeed.addItem({ id: `cmd:${idx}`, text: `${indent}${highlighted[idx]}` });
 				}
-				lines.push(`${indent}${stats} ${s}`);
-				return lines.join("\n");
+				const feedLines = cmdFeed.render(200);
+				feedLines.push(`${indent}${stats} ${s}`);
+				return feedLines.join("\n");
 			}
 
 			case "ls": {
@@ -467,7 +524,7 @@ export class ToolExecutionComponent extends Container {
 			// Reuse cached LiveFeed to avoid re-allocation every ~100ms render tick
 			if (!this.subagentTaskFeed) {
 				this.subagentTaskFeed = new LiveFeed({
-					maxLines: MAX_SUBAGENT_TASK_LINES,
+					maxLines: MAX_FEED_LINES,
 					overflowText: (n) => theme.fg("muted", `… ${n} lines above`),
 				});
 			}
@@ -696,12 +753,13 @@ export class ToolExecutionComponent extends Container {
 
 	/**
 	 * Render a single parallel agent as a compact stacked section.
+	 * Uses LiveFeed for both tool list and stream preview.
 	 *
 	 * Layout per agent:
 	 *   ◐ agent_name "task description"              (header)
-	 *      ✓  read src/auth.ts                      (tool list, capped)
-	 *      ◐  bash rg "TODO" src/                   (tool list, capped)
-	 *      > Looking at the authentication flow...   (stream preview)
+	 *      ✓  read src/auth.ts                      (tool list, LiveFeed)
+	 *      ◐  bash rg "TODO" src/                   (tool list, LiveFeed)
+	 *      › Looking at the authentication flow...   (stream preview, LiveFeed)
 	 */
 	private formatParallelAgentSection(agent: ParallelAgentProgress, width: number): string[] {
 		const indent = "   ";
@@ -724,16 +782,14 @@ export class ToolExecutionComponent extends Container {
 		const headerLine = `${indent}${statusIcon} ${colorAgentName(agent.agentName)} ${theme.fg("muted", `"${taskPreview}"`)}`;
 		lines.push(visibleWidth(headerLine) > width ? sliceByColumn(headerLine, 0, width, true) : headerLine);
 
-		// ── Tool list (only for running or recently completed agents) ───
+		// ── Tool list via LiveFeed ──────────────────────────────────────
 		const tools = agent.allTools;
 		if (tools && tools.length > 0) {
-			const visibleTools = tools.slice(-MAX_PARALLEL_AGENT_TOOLS);
-			if (tools.length > MAX_PARALLEL_AGENT_TOOLS) {
-				lines.push(
-					`${toolIndent}${theme.fg("muted", `… ${tools.length - MAX_PARALLEL_AGENT_TOOLS} earlier tools`)}`,
-				);
-			}
-			for (const tool of visibleTools) {
+			const toolFeed = new LiveFeed({
+				maxLines: MAX_FEED_LINES,
+				overflowText: (n) => theme.fg("muted", `… ${n} earlier tools`),
+			});
+			for (const tool of tools) {
 				const toolIcon = ICONS[tool.toolName] ?? "\uf013";
 				let toolStatus: string;
 				if (tool.running) {
@@ -744,55 +800,50 @@ export class ToolExecutionComponent extends Container {
 					toolStatus = theme.fg("success", "✓");
 				}
 				const argSummary = formatSubagentToolArgs(tool.toolName, tool.args);
-				const toolLine = `${toolIndent}${toolStatus} ${toolIcon} ${theme.fg("muted", tool.toolName)} ${argSummary}`;
-				lines.push(visibleWidth(toolLine) > width ? sliceByColumn(toolLine, 0, width, true) : toolLine);
+				toolFeed.addItem({
+					id: `tool:${tool.toolCallId}`,
+					text: `${toolStatus} ${toolIcon} ${theme.fg("muted", tool.toolName)} ${argSummary}`,
+				});
+			}
+			const toolWidth = Math.max(1, width - 6); // subtract toolIndent
+			for (const line of toolFeed.render(toolWidth)) {
+				lines.push(`${toolIndent}${line}`);
 			}
 		}
 
-		// ── Stream preview (thinking + text) ────────────────────────────
-		// Prefer streamItems for stable history, else fall back to currentText/currentThinking
-		const streamLines: string[] = [];
+		// ── Stream preview via LiveFeed ─────────────────────────────────
+		const streamFeed = new LiveFeed({
+			maxLines: MAX_FEED_LINES,
+			overflowText: (n) => theme.fg("muted", `… ${n} lines above`),
+		});
 		const streamItemsList = agent.streamItems;
 
 		if (streamItemsList && streamItemsList.length > 0) {
-			// Take the last item(s) for a compact preview
-			const lastItems = streamItemsList.slice(-2);
-			for (const item of lastItems) {
+			for (const item of streamItemsList) {
 				const filtered = item.content.split("\n").filter((l) => l.trim());
 				if (filtered.length === 0) continue;
-				// Take last few lines of each item
-				const tail = filtered.slice(-MAX_PARALLEL_AGENT_STREAM_LINES);
-				for (const line of tail) {
-					if (item.type === "thinking") {
-						streamLines.push(theme.italic(theme.fg("thinkingText", line)));
-					} else {
-						streamLines.push(line);
-					}
+				for (let li = 0; li < filtered.length; li++) {
+					const styled =
+						item.type === "thinking" ? theme.italic(theme.fg("thinkingText", filtered[li])) : filtered[li];
+					streamFeed.addItem({ id: `stream:${item.seq}:${li}`, text: styled });
 				}
 			}
 		} else {
-			// Fallback to currentThinking/currentText
-			const thinkLines = (agent.currentThinking ?? "")
-				.split("\n")
-				.filter((l) => l.trim())
-				.slice(-2);
-			for (const line of thinkLines) {
-				streamLines.push(theme.italic(theme.fg("thinkingText", line)));
+			const thinkLines = (agent.currentThinking ?? "").split("\n").filter((l) => l.trim());
+			for (let i = 0; i < thinkLines.length; i++) {
+				streamFeed.addItem({ id: `think:${i}`, text: theme.italic(theme.fg("thinkingText", thinkLines[i])) });
 			}
-			const textLines = (agent.currentText ?? "")
-				.split("\n")
-				.filter((l) => l.trim())
-				.slice(-2);
-			for (const line of textLines) {
-				streamLines.push(line);
+			const textLines = (agent.currentText ?? "").split("\n").filter((l) => l.trim());
+			for (let i = 0; i < textLines.length; i++) {
+				streamFeed.addItem({ id: `text:${i}`, text: textLines[i] });
 			}
 		}
 
-		// Cap total stream preview lines and clamp to width
-		const cappedStream = streamLines.slice(-MAX_PARALLEL_AGENT_STREAM_LINES);
-		for (const line of cappedStream) {
-			const streamLine = `${toolIndent}${theme.fg("dim", "›")} ${line}`;
-			lines.push(visibleWidth(streamLine) > width ? sliceByColumn(streamLine, 0, width, true) : streamLine);
+		if (streamFeed.length > 0) {
+			const streamWidth = Math.max(1, width - 6); // subtract toolIndent
+			for (const line of streamFeed.render(streamWidth)) {
+				lines.push(`${toolIndent}${theme.fg("dim", "›")} ${line}`);
+			}
 		}
 
 		return lines;
@@ -802,18 +853,20 @@ export class ToolExecutionComponent extends Container {
 		if (!this.result?.isError) return [];
 		const out = this.output();
 		if (!out) return [];
-		// Errors show head (first lines) — LiveFeed shows tail, so use manual truncation here
+		// Errors use head truncation: the most useful info (error type, file, line)
+		// is typically at the top, while tail is often noisy stack frames.
 		const allLines = out.split("\n");
-		const lines = allLines.slice(0, MAX_ERROR_LINES);
-		if (allLines.length > MAX_ERROR_LINES) {
-			lines.push(theme.fg("muted", `\u2026 ${allLines.length - MAX_ERROR_LINES} more`));
+		const lines = allLines.slice(0, MAX_FEED_LINES);
+		if (allLines.length > MAX_FEED_LINES) {
+			lines.push(theme.fg("muted", `… ${allLines.length - MAX_FEED_LINES} more`));
 		}
-		return lines.map((l) => theme.fg("error", `   ${l}`));
+		return lines.map((l) => `   ${theme.fg("error", l)}`);
 	}
 
 	/**
 	 * Lines to show when force-expanded by bash command rules.
 	 * Only applies to successful bash results with displayHints.forceExpand.
+	 * Uses LiveFeed sliding window with syntax highlighting.
 	 */
 	private expandedOutputLines(): string[] {
 		if (this.result?.isError) return [];
@@ -823,18 +876,30 @@ export class ToolExecutionComponent extends Container {
 		if (!hints?.forceExpand) return [];
 		const out = this.output();
 		if (!out) return [];
-		const maxLines = hints.maxOutputLines ?? MAX_EXPANDED_OUTPUT_LINES;
+		// Respect displayHints.maxOutputLines when explicitly provided
+		const effectiveMax = hints.maxOutputLines ?? MAX_FEED_LINES;
 		const allLines = out.split("\n");
-		const lines = allLines.slice(0, maxLines);
-		if (allLines.length > maxLines) {
-			lines.push(theme.fg("muted", `\u2026 ${allLines.length - maxLines} more`));
+		// Only highlight the visible tail to avoid O(n) work on full output
+		const tailStart = Math.max(0, allLines.length - effectiveMax);
+		const tailLines = allLines.slice(tailStart);
+		const lang = detectOutputLanguage(String(this.args.command ?? ""));
+		const highlighted = lang ? highlightCode(tailLines.join("\n"), lang) : tailLines;
+		// Skip feeding placeholder items — use tailStart directly in overflowText
+		const hiddenCount = tailStart;
+		const feed = new LiveFeed({
+			maxLines: effectiveMax,
+			overflowText: () => theme.fg("muted", `… ${hiddenCount} lines above`),
+		});
+		for (let i = 0; i < highlighted.length; i++) {
+			feed.addItem({ id: `exp:${i}`, text: highlighted[i] });
 		}
-		return lines.map((l) => `   ${l}`);
+		return feed.render(200).map((l) => `   ${l}`);
 	}
 
 	/**
 	 * Streaming output preview for all non-subagent tools while running.
-	 * Uses LiveFeed to show a sliding window of the latest output lines.
+	 * Uses LiveFeed to show a sliding window of the latest output lines
+	 * with syntax highlighting based on tool context.
 	 */
 	private streamingOutputLines(): string[] {
 		// Only show for running tools with partial output, not subagent (it has its own display)
@@ -844,16 +909,27 @@ export class ToolExecutionComponent extends Container {
 		const allLines = out.split("\n");
 		if (allLines.length === 0) return [];
 
+		// Detect language from context for syntax highlighting.
+		// Only highlight the visible tail to avoid O(n) highlighting on full output.
+		const lang =
+			this.toolName === "bash"
+				? detectOutputLanguage(String(this.args.command ?? ""))
+				: detectLanguageFromPath(String(this.args.path ?? ""));
+		const tailStart = Math.max(0, allLines.length - MAX_FEED_LINES);
+		const tailLines = allLines.slice(tailStart);
+		const highlighted = lang ? highlightCode(tailLines.join("\n"), lang) : null;
+
+		// Skip feeding placeholder items — use tailStart directly in overflowText
+		const hiddenCount = tailStart;
 		const feed = new LiveFeed({
-			maxLines: MAX_STREAMING_PREVIEW_LINES,
-			overflowText: (n) => theme.fg("muted", `\u2026 ${n} lines above`),
+			maxLines: MAX_FEED_LINES,
+			overflowText: () => theme.fg("muted", `… ${hiddenCount} lines above`),
 		});
-		for (let idx = 0; idx < allLines.length; idx++) {
-			feed.addItem({ id: `stream:${idx}`, text: theme.fg("dim", allLines[idx]) });
+		for (let idx = 0; idx < tailLines.length; idx++) {
+			const text = highlighted ? (highlighted[idx] ?? tailLines[idx]) : theme.fg("dim", tailLines[idx]);
+			feed.addItem({ id: `stream:${idx}`, text });
 		}
-		// Use a reasonable width; actual width is applied by Text component wrapping
-		const feedLines = feed.render(200);
-		return feedLines.map((l) => `   ${l}`);
+		return feed.render(200).map((l) => `   ${l}`);
 	}
 
 	private update(): void {
