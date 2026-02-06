@@ -40,7 +40,8 @@ function formatBytes(bytes: number): string {
  * Render a progress bar with filled/empty blocks
  */
 function renderProgressBar(percent: number, width: number): string {
-	const filled = Math.round((percent / 100) * width);
+	const clamped = Math.min(100, Math.max(0, percent));
+	const filled = Math.round((clamped / 100) * width);
 	const empty = width - filled;
 	return "▓".repeat(Math.max(0, filled)) + "░".repeat(Math.max(0, empty));
 }
@@ -162,6 +163,12 @@ export class FooterComponent implements Component {
 		}
 		statsParts.push(coloredContext);
 
+		// Progressively drop stats parts from the left until they fit the width.
+		// Priority (rightmost = most important): context > bar > cost > cache > I/O
+		while (statsParts.length > 1 && visibleWidth(statsParts.join(" ")) > width) {
+			statsParts.shift();
+		}
+
 		const statsRight = statsParts.join(" ");
 		const statsRightWidth = visibleWidth(statsRight);
 
@@ -177,7 +184,7 @@ export class FooterComponent implements Component {
 
 		const pathWidth = visibleWidth(bracketedPath);
 		const padding1 = Math.max(0, width - pathWidth - statsRightWidth);
-		const row1 = bracketedPath + " ".repeat(padding1) + statsRight;
+		const row1 = truncateToWidth(bracketedPath + " ".repeat(padding1) + statsRight, width);
 
 		// ===== ROW 2: Process stats + Model =====
 		// Left: [PID:xxxx] [RSS:xxxM] [CPU:x.x%]
@@ -213,7 +220,7 @@ export class FooterComponent implements Component {
 		}
 
 		const finalPadding = Math.max(0, width - processWidth - visibleWidth(finalModel));
-		const row2 = processStats + " ".repeat(finalPadding) + finalModel;
+		const row2 = truncateToWidth(processStats + " ".repeat(finalPadding) + finalModel, width);
 
 		const lines = [row1, row2];
 
