@@ -29,6 +29,8 @@ export interface PermissionRequest<T extends PermissionType = PermissionType> {
 	toolName: string;
 	/** Human-readable description of what is being requested */
 	description: string;
+	/** The exact command or arguments that triggered the permission check */
+	command?: string;
 }
 
 /** How long a grant lasts */

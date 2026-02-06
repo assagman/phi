@@ -225,6 +225,7 @@ export class PermissionManager {
 		absolutePath: string,
 		toolName: string,
 		action: PermissionAction = "fs_read",
+		command?: string,
 	): Promise<PermissionCheckResult> {
 		const resolved = safeRealpath(resolvePath(absolutePath));
 
@@ -234,7 +235,7 @@ export class PermissionManager {
 		}
 
 		// File not auto-allowed — request at directory level
-		return this.requestDirectory(dirname(resolved), toolName, action);
+		return this.requestDirectory(dirname(resolved), toolName, action, command);
 	}
 
 	checkDirectory(absolutePath: string, action: PermissionAction = "fs_read"): PermissionCheckResult {
@@ -291,6 +292,7 @@ export class PermissionManager {
 		absolutePath: string,
 		toolName: string,
 		action: PermissionAction = "fs_read",
+		command?: string,
 	): Promise<PermissionCheckResult> {
 		const resolved = safeRealpath(resolvePath(absolutePath));
 
@@ -318,6 +320,7 @@ export class PermissionManager {
 			detail: { path: resolved, action },
 			toolName,
 			description: `${actionLabel} access to directory outside workspace: ${resolved}`,
+			command,
 		};
 
 		this._db.logAudit({
@@ -461,7 +464,12 @@ export class PermissionManager {
 		return { status: "denied" };
 	}
 
-	async requestNetwork(host: string, toolName: string, port?: number): Promise<PermissionCheckResult> {
+	async requestNetwork(
+		host: string,
+		toolName: string,
+		port?: number,
+		command?: string,
+	): Promise<PermissionCheckResult> {
 		const normalized = host.toLowerCase();
 
 		const existing = this.checkNetwork(normalized);
@@ -488,6 +496,7 @@ export class PermissionManager {
 			detail: { host: normalized, port },
 			toolName,
 			description: `Network access to ${normalized}${portSuffix}`,
+			command,
 		};
 
 		this._db.logAudit({

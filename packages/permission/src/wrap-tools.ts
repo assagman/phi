@@ -119,12 +119,13 @@ async function checkDirectoryPermission(
 	toolName: string,
 	action: PermissionAction,
 	permissionManager: PermissionManager,
+	command?: string,
 ): Promise<string | undefined> {
 	if (permissionManager.isWithinCwd(dirPath)) {
 		return undefined;
 	}
 
-	const result = await permissionManager.requestDirectory(dirPath, toolName, action);
+	const result = await permissionManager.requestDirectory(dirPath, toolName, action, command);
 	if (result.status === "denied") {
 		return result.userMessage
 			? `Permission denied: access to ${dirPath} was rejected by user.\nUser message: ${result.userMessage}`
@@ -142,6 +143,7 @@ async function checkFilePermission(
 	toolName: string,
 	action: PermissionAction,
 	permissionManager: PermissionManager,
+	command?: string,
 ): Promise<string | undefined> {
 	const resolved = resolveToCwd(filePath, permissionManager.cwd);
 
@@ -149,7 +151,7 @@ async function checkFilePermission(
 		return undefined;
 	}
 
-	const result = await permissionManager.requestFile(resolved, toolName, action);
+	const result = await permissionManager.requestFile(resolved, toolName, action, command);
 	if (result.status === "denied") {
 		return result.userMessage
 			? `Permission denied: access to ${resolved} was rejected by user.\nUser message: ${result.userMessage}`
@@ -164,6 +166,7 @@ async function checkNetworkPermission(
 	toolName: string,
 	args: unknown,
 	permissionManager: PermissionManager,
+	command?: string,
 ): Promise<string | undefined> {
 	// For bash, use the specialized command parser (handles implicit rules like npm→registry.npmjs.org)
 	const hosts =
@@ -172,7 +175,7 @@ async function checkNetworkPermission(
 			: extractHostsFromArgs(args);
 
 	for (const host of hosts) {
-		const result = await permissionManager.requestNetwork(host, toolName);
+		const result = await permissionManager.requestNetwork(host, toolName, undefined, command);
 		if (result.status === "denied") {
 			return result.userMessage
 				? `Permission denied: network access to ${host} was rejected by user.\nUser message: ${result.userMessage}`
@@ -180,6 +183,51 @@ async function checkNetworkPermission(
 		}
 	}
 	return undefined;
+}
+
+// ── Command String Builder ───────────────────────────────────────────────────
+
+/** Max length for command string shown in permission prompt */
+const MAX_COMMAND_LEN = 512;
+
+/** Strip ANSI escape sequences and control characters to prevent terminal injection */
+const ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+const CTRL_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
+
+function sanitizeForPrompt(text: string): string {
+	return text.replace(ANSI_RE, "").replace(CTRL_RE, "");
+}
+
+/**
+ * Build a human-readable command string from tool name and arguments.
+ * For bash: the raw command string.
+ * For file tools: `toolName path`.
+ * For others: `toolName(key=value, ...)` with truncation.
+ *
+ * All output is sanitized to prevent terminal escape injection.
+ */
+function buildCommandString(toolName: string, args: Record<string, unknown>): string {
+	if (toolName === "bash") {
+		const raw = typeof args.command === "string" ? args.command : "";
+		const cmd = sanitizeForPrompt(raw);
+		return cmd.length > MAX_COMMAND_LEN ? `${cmd.slice(0, MAX_COMMAND_LEN)}…` : cmd;
+	}
+
+	if (typeof args.path === "string") {
+		// File/dir tools: show `tool path`
+		return `${toolName} ${sanitizeForPrompt(args.path)}`;
+	}
+
+	// Generic: show `tool(key=value, ...)`
+	const parts: string[] = [];
+	for (const [key, value] of Object.entries(args)) {
+		const raw = typeof value === "string" ? value : JSON.stringify(value);
+		const v = sanitizeForPrompt(raw);
+		const truncated = v.length > 120 ? `${v.slice(0, 120)}…` : v;
+		parts.push(`${key}=${truncated}`);
+	}
+	const joined = parts.join(", ");
+	return joined.length > 0 ? `${toolName}(${joined})` : toolName;
 }
 
 // ── Tool Wrapping ───────────────────────────────────────────────────────────
@@ -199,21 +247,22 @@ function wrapTool(tool: AgentTool, permissionManager: PermissionManager): AgentT
 		): Promise<AgentToolResult<unknown>> => {
 			const args = (params ?? {}) as Record<string, unknown>;
 			const toolName = tool.name;
+			const command = buildCommandString(toolName, args);
 
 			// ── Network check (ALL tools) ──────────────────────────────
-			const networkError = await checkNetworkPermission(toolName, args, permissionManager);
+			const networkError = await checkNetworkPermission(toolName, args, permissionManager, command);
 			if (networkError) {
 				return { content: [{ type: "text", text: networkError }], details: {} };
 			}
 
 			// ── Bash path check ────────────────────────────────────────
 			if (toolName === "bash") {
-				const command = (args as { command?: string }).command ?? "";
-				const paths = extractPathsFromCommand(command, permissionManager.cwd);
+				const bashCommand = (args as { command?: string }).command ?? "";
+				const paths = extractPathsFromCommand(bashCommand, permissionManager.cwd);
 				// We default to asking for fs_write for bash commands to ensure they work
 				// (better to ask for more and work than ask for less and fail mysteriously)
 				for (const path of paths) {
-					const error = await checkDirectoryPermission(path, toolName, "fs_write", permissionManager);
+					const error = await checkDirectoryPermission(path, toolName, "fs_write", permissionManager, command);
 					if (error) {
 						return { content: [{ type: "text", text: error }], details: {} };
 					}
@@ -225,7 +274,7 @@ function wrapTool(tool: AgentTool, permissionManager: PermissionManager): AgentT
 				const action = getToolAction(toolName);
 				const filePath = typeof args.path === "string" ? args.path : undefined;
 				if (filePath) {
-					const error = await checkFilePermission(filePath, toolName, action, permissionManager);
+					const error = await checkFilePermission(filePath, toolName, action, permissionManager, command);
 					if (error) {
 						return { content: [{ type: "text", text: error }], details: {} };
 					}
@@ -235,7 +284,7 @@ function wrapTool(tool: AgentTool, permissionManager: PermissionManager): AgentT
 			// ── Directory permission check (ls) ────────────────────────
 			if (DIR_TOOLS.has(toolName)) {
 				const dirPath = extractLsDirectoryPath(args, permissionManager.cwd);
-				const error = await checkDirectoryPermission(dirPath, toolName, "fs_read", permissionManager);
+				const error = await checkDirectoryPermission(dirPath, toolName, "fs_read", permissionManager, command);
 				if (error) {
 					return { content: [{ type: "text", text: error }], details: {} };
 				}

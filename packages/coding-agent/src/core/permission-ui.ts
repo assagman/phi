@@ -196,6 +196,19 @@ export function createPermissionPromptUI(
 				theme.fg("warning", "│"),
 		);
 
+		// Command that triggered the permission request
+		if (request.command) {
+			const cmdLabel = " ".repeat(PAD) + theme.fg("muted", "Command:");
+			const cmdLabelPad = Math.max(0, innerW - visibleWidth(cmdLabel));
+			lines.push(theme.fg("warning", "│") + cmdLabel + " ".repeat(cmdLabelPad) + theme.fg("warning", "│"));
+			const cmdLines = usable > 10 ? wrapTextWithAnsi(request.command, usable) : [request.command];
+			for (const cl of cmdLines) {
+				const cmdContent = " ".repeat(PAD) + theme.fg("accent", cl);
+				const cmdPad = Math.max(0, innerW - visibleWidth(cmdContent));
+				lines.push(theme.fg("warning", "│") + cmdContent + " ".repeat(cmdPad) + theme.fg("warning", "│"));
+			}
+		}
+
 		// Empty line
 		const emptyPad = " ".repeat(Math.max(0, innerW));
 		lines.push(theme.fg("warning", "│") + emptyPad + theme.fg("warning", "│"));
