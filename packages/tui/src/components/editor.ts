@@ -266,6 +266,11 @@ export class Editor implements Component, Focusable {
 	// Vertical scrolling support
 	private scrollOffset: number = 0;
 
+	// Maximum number of content lines the editor may display (excluding its own borders).
+	// When set, overrides the default heuristic (30% of terminal height).
+	// PinnedInputBar sets this so both agree on the available space.
+	public maxContentLines?: number;
+
 	// Border color (can be changed dynamically)
 	public borderColor: (str: string) => string;
 
@@ -415,9 +420,11 @@ export class Editor implements Component, Focusable {
 		// Layout the text - use content width
 		const layoutLines = this.layoutText(contentWidth);
 
-		// Calculate max visible lines: 30% of terminal height, minimum 5 lines
+		// Calculate max visible lines.
+		// If maxContentLines is set (e.g. by PinnedInputBar), use it directly.
+		// Otherwise fall back to 30% of terminal height, minimum 5 lines.
 		const terminalRows = this.tui.terminal.rows;
-		const maxVisibleLines = Math.max(5, Math.floor(terminalRows * 0.3));
+		const maxVisibleLines = this.maxContentLines ?? Math.max(5, Math.floor(terminalRows * 0.3));
 
 		// Find the cursor line index in layoutLines
 		let cursorLineIndex = layoutLines.findIndex((line) => line.hasCursor);

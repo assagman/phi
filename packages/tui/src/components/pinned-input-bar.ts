@@ -127,8 +127,17 @@ export class PinnedInputBar implements Component, Focusable {
 		const borderWidth = this.options.borderStyle === "none" ? 0 : 2;
 		const paddingX = this.options.paddingX ?? 0;
 
-		// Render editor once and reuse for both height calculation and content
+		// Tell the editor how many content lines are available so its internal
+		// scroll logic produces exactly the right window.  The editor adds 2
+		// border lines (top/bottom separator) to its output, so we subtract
+		// those from the budget that PinnedInputBar allows.
 		const editorWidth = Math.max(1, width - borderWidth - paddingX * 2);
+		const maxHeight = this.options.maxHeight ?? 8;
+		const editorBorderCost = 2; // editor's own top + bottom separator lines
+		const contentBudget = Math.max(1, maxHeight - borderWidth - editorBorderCost);
+		this.editor.maxContentLines = contentBudget;
+
+		// Render editor once and reuse for both height calculation and content
 		const editorLines = this.editor.render(editorWidth);
 
 		const height = this.calculateHeight(editorLines, borderWidth);
@@ -153,8 +162,12 @@ export class PinnedInputBar implements Component, Focusable {
 
 		const paddingX = this.options.paddingX ?? 0;
 
-		// Truncate pre-rendered editor lines to fit
-		const truncatedLines = editorLines.slice(0, contentHeight);
+		// Truncate pre-rendered editor lines to fit — take from the END so the
+		// cursor area (which the editor scrolls to the bottom) stays visible
+		const truncatedLines =
+			editorLines.length > contentHeight
+				? editorLines.slice(editorLines.length - contentHeight)
+				: editorLines.slice(0, contentHeight);
 
 		// Get border color function from editor (if available)
 		const colorize = this.editor.borderColor ?? ((s: string) => s);
@@ -190,8 +203,13 @@ export class PinnedInputBar implements Component, Focusable {
 	private renderWithoutBorders(width: number, height: number, editorLines: string[]): string[] {
 		const paddingX = this.options.paddingX ?? 0;
 
-		// Truncate pre-rendered editor lines to fit
-		const truncatedLines = editorLines.slice(0, Math.max(0, height));
+		// Truncate pre-rendered editor lines to fit — take from the END so the
+		// cursor area (which the editor scrolls to the bottom) stays visible
+		const maxLines = Math.max(0, height);
+		const truncatedLines =
+			editorLines.length > maxLines
+				? editorLines.slice(editorLines.length - maxLines)
+				: editorLines.slice(0, maxLines);
 
 		// Pad if needed
 		while (truncatedLines.length < height) {
