@@ -19,6 +19,7 @@ import { homedir } from "node:os";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "agent";
 import { extractHostsFromCommand } from "./bash-domain-extractor.js";
+import { extractPathsFromCommand } from "./bash-path-extractor.js";
 import type { PermissionManager } from "./permission-manager.js";
 import type { PermissionAction } from "./types.js";
 
@@ -203,6 +204,20 @@ function wrapTool(tool: AgentTool, permissionManager: PermissionManager): AgentT
 			const networkError = await checkNetworkPermission(toolName, args, permissionManager);
 			if (networkError) {
 				return { content: [{ type: "text", text: networkError }], details: {} };
+			}
+
+			// ── Bash path check ────────────────────────────────────────
+			if (toolName === "bash") {
+				const command = (args as { command?: string }).command ?? "";
+				const paths = extractPathsFromCommand(command, permissionManager.cwd);
+				// We default to asking for fs_write for bash commands to ensure they work
+				// (better to ask for more and work than ask for less and fail mysteriously)
+				for (const path of paths) {
+					const error = await checkDirectoryPermission(path, toolName, "fs_write", permissionManager);
+					if (error) {
+						return { content: [{ type: "text", text: error }], details: {} };
+					}
+				}
 			}
 
 			// ── File permission check (read/write/edit) ────────────────
