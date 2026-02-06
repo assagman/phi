@@ -1,6 +1,6 @@
 name: planner
 description: "Create concrete implementation plans with specific files, steps, and risk analysis"
-model: openai-codex/gpt-5.3-codex
+model: kimi-for-coding/k2p5
 thinkingLevel: high
 temperature: 0.3
 systemPrompt: !file planner.md
