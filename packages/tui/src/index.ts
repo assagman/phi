@@ -7,6 +7,8 @@ export {
 	CombinedAutocompleteProvider,
 	type SlashCommand,
 } from "./autocomplete.js";
+export { AnimatedCancellableLoader } from "./components/animated-cancellable-loader.js";
+export { AnimatedLoader } from "./components/animated-loader.js";
 // Components
 export { BorderedBox, type BorderedBoxOptions } from "./components/bordered-box.js";
 export { Box } from "./components/box.js";
