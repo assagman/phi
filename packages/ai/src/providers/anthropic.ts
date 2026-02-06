@@ -370,6 +370,11 @@ function createClient(
 	if (interleavedThinking) {
 		betaFeatures.push("interleaved-thinking-2025-05-14");
 	}
+	// Enable 1M context window for models that support it (Opus 4.6, Sonnet 4.5, Sonnet 4)
+	// Without this header, Anthropic enforces a 200K token limit even if the model advertises 1M
+	if (model.contextWindow > 200_000) {
+		betaFeatures.push("context-1m-2025-08-07");
+	}
 
 	const oauthToken = isOAuthToken(apiKey);
 	if (oauthToken) {
