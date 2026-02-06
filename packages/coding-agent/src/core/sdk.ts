@@ -31,6 +31,7 @@ import {
 	type BuiltinToolsLifecycle,
 	createBuiltinToolsLifecycle,
 	createBuiltinUIContext,
+	getDataDir,
 } from "./builtin-tools/index.js";
 import {
 	computeFileLists,
@@ -210,6 +211,51 @@ function getDefaultAgentDir(): string {
 	return getAgentDir();
 }
 
+/** Resolve the git root directory that needs write access (bare repo root or .git dir). */
+function getGitRootDir(cwd: string): string | null {
+	try {
+		const { execSync } = require("node:child_process") as typeof import("node:child_process");
+		const stdio: ["pipe", "pipe", "pipe"] = ["pipe", "pipe", "pipe"];
+		const commonDir = execSync("git rev-parse --git-common-dir", {
+			cwd,
+			encoding: "utf-8",
+			stdio,
+			timeout: 3000,
+		}).trim();
+		const { resolve } = require("node:path") as typeof import("node:path");
+		return resolve(cwd, commonDir);
+	} catch {
+		return null;
+	}
+}
+
+/** Extract unique hostnames from git remote URLs. */
+function getGitRemoteDomains(cwd: string): string[] {
+	try {
+		const { execSync } = require("node:child_process") as typeof import("node:child_process");
+		const stdio: ["pipe", "pipe", "pipe"] = ["pipe", "pipe", "pipe"];
+		const output = execSync("git remote -v", { cwd, encoding: "utf-8", stdio, timeout: 3000 }).trim();
+		if (!output) return [];
+		const domains = new Set<string>();
+		for (const line of output.split("\n")) {
+			const url = line.split(/\s+/)[1];
+			if (!url) continue;
+			// SSH: git@github.com:user/repo.git
+			const sshMatch = url.match(/@([^:/]+)/);
+			if (sshMatch) {
+				domains.add(sshMatch[1]);
+				continue;
+			}
+			// HTTPS: https://github.com/user/repo.git
+			const httpsMatch = url.match(/https?:\/\/([^/]+)/);
+			if (httpsMatch) domains.add(httpsMatch[1]);
+		}
+		return [...domains];
+	} catch {
+		return [];
+	}
+}
+
 // Discovery Functions
 
 /**
@@ -383,10 +429,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	time("sessionManager");
 
 	// Initialize OS-level sandbox for bash command enforcement
+	const gitRoot = getGitRootDir(cwd);
+	const gitDomains = getGitRemoteDomains(cwd);
+	const phiInfraPaths = [getDataDir(cwd), agentDir, ...(gitRoot ? [gitRoot] : [])];
 	const initialSandboxConfig: SandboxConfig = {
-		allowedWritePaths: [cwd, "/tmp"],
+		allowedWritePaths: [cwd, "/tmp", ...phiInfraPaths],
 		deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
-		allowedDomains: [],
+		allowedDomains: gitDomains,
 	};
 	let sandboxProvider: SandboxProvider | undefined;
 	try {
@@ -409,16 +458,44 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		preAllowedDirs: settingsManager.getAllowedDirs(),
 		legacyJsonPath: join(agentDir, "permissions.json"),
 		onGrantChange: capturedSandbox
-			? (writePaths) => {
-					capturedSandbox.updateConfig({
-						allowedWritePaths: writePaths,
+			? async (writePaths) => {
+					// Merge dynamic permission grants with phi infrastructure paths
+					// that must always be writable (DB storage, agent config, git root)
+					const allPaths = new Set(writePaths);
+					for (const p of phiInfraPaths) allPaths.add(p);
+					// Merge git remote domains with user-granted network domains
+					const allDomains = new Set(gitDomains);
+					for (const d of permissionManager.getAllowedDomains()) allDomains.add(d);
+					await capturedSandbox.updateConfig({
+						allowedWritePaths: [...allPaths],
 						deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
-						allowedDomains: [],
+						allowedDomains: [...allDomains],
 					});
 				}
 			: undefined,
 	});
 	time("permissionManager");
+
+	// Pre-grant git remote domains as session grants so the permission wrapper
+	// doesn't prompt for them (they're already in the sandbox allowedDomains)
+	for (const domain of gitDomains) {
+		permissionManager.grant("network", domain, "session", "net_connect");
+	}
+
+	// Apply any persisted network grants to sandbox at startup
+	// (grants from previous sessions need to be in sandbox config immediately)
+	if (sandboxProvider) {
+		const persistedDomains = permissionManager.getAllowedDomains();
+		if (persistedDomains.length > 0) {
+			const allDomains = new Set(gitDomains);
+			for (const d of persistedDomains) allDomains.add(d);
+			sandboxProvider.updateConfig({
+				allowedWritePaths: [cwd, "/tmp", ...phiInfraPaths],
+				deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
+				allowedDomains: [...allDomains],
+			});
+		}
+	}
 
 	// Check if session has existing data to restore
 	const existingSession = sessionManager.buildSessionContext();

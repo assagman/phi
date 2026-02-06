@@ -56,7 +56,7 @@ function safeRealpath(absolutePath: string): string {
 // ── Config ──────────────────────────────────────────────────────────────────
 
 /** Callback invoked when a grant changes (for sandbox config sync) */
-export type GrantChangeCallback = (allWritePaths: string[]) => void;
+export type GrantChangeCallback = (allWritePaths: string[]) => void | Promise<void>;
 
 export interface PermissionManagerConfig {
 	/** Immutable CWD — paths within this directory never need permission */
@@ -239,14 +239,19 @@ export class PermissionManager {
 	/**
 	 * Grant a permission directly (used by pre-allowed dirs and programmatic grants).
 	 */
-	grant(
+	async grant(
 		type: PermissionType,
 		resource: string,
 		scope: PermissionScope,
 		action: PermissionAction = "fs_read",
 		toolName?: string,
-	): void {
-		const resolved = type === "directory" ? safeRealpath(resolvePath(resource)) : resource;
+	): Promise<void> {
+		const resolved =
+			type === "directory"
+				? safeRealpath(resolvePath(resource))
+				: type === "network"
+					? resource.toLowerCase()
+					: resource;
 		const key = this._grantKey(type, action, resolved);
 		const grant: PermissionGrant = {
 			type,
@@ -285,9 +290,9 @@ export class PermissionManager {
 			scope,
 		});
 
-		// Notify sandbox of write path changes
-		if (action === "fs_write" && type === "directory") {
-			this._notifyGrantChange();
+		// Notify sandbox of configuration changes (await to ensure sandbox is updated before command runs)
+		if ((action === "fs_write" && type === "directory") || (action === "net_connect" && type === "network")) {
+			await this._notifyGrantChange();
 		}
 	}
 
@@ -359,15 +364,15 @@ export class PermissionManager {
 	/**
 	 * Apply a prompt result — grant or deny.
 	 */
-	private _applyPromptResult(
+	private async _applyPromptResult(
 		type: PermissionType,
 		action: PermissionAction,
 		resource: string,
 		toolName: string,
 		result: PermissionPromptResult,
-	): PermissionCheckResult {
+	): Promise<PermissionCheckResult> {
 		if (result.action === "allow") {
-			this.grant(type, resource, result.scope, action, toolName);
+			await this.grant(type, resource, result.scope, action, toolName);
 			return { status: "granted", scope: result.scope };
 		}
 
@@ -424,6 +429,118 @@ export class PermissionManager {
 		});
 	}
 
+	// =========================================================================
+	// Network API
+	// =========================================================================
+
+	/**
+	 * Check if a network host is already granted (without prompting).
+	 */
+	checkNetwork(host: string, action: PermissionAction = "net_connect"): PermissionCheckResult {
+		const normalized = host.toLowerCase();
+
+		// Check in-memory once grants
+		const onceKey = this._grantKey("network", action, normalized);
+		if (this._onceGrants.has(onceKey)) {
+			this._logCheck("network", action, normalized, "granted", "once");
+			return { status: "granted", scope: "once" };
+		}
+
+		// Check in-memory session grants
+		if (this._sessionGrants.has(onceKey)) {
+			this._logCheck("network", action, normalized, "granted", "session");
+			return { status: "granted", scope: "session" };
+		}
+
+		// Check SQLite persistent grants
+		const dbGrants = this._db.findActiveGrants("network", action, normalized);
+		if (dbGrants.length > 0) {
+			this._logCheck("network", action, normalized, "granted", "persistent");
+			return { status: "granted", scope: "persistent" };
+		}
+
+		this._logCheck("network", action, normalized, "denied");
+		return { status: "denied" };
+	}
+
+	/**
+	 * Request permission for a network host. Prompts user if not already granted.
+	 */
+	async requestNetwork(host: string, toolName: string, port?: number): Promise<PermissionCheckResult> {
+		const normalized = host.toLowerCase();
+
+		// Check existing grants first
+		const existing = this.checkNetwork(normalized);
+		if (existing.status === "granted") {
+			return existing;
+		}
+
+		// No prompt function — deny by default
+		if (!this._promptFn) {
+			this._db.logAudit({
+				event: "request",
+				type: "network",
+				action: "net_connect",
+				resource: normalized,
+				toolName,
+				result: "denied",
+				reason: "no_prompt",
+			});
+			return { status: "denied" };
+		}
+
+		// Build request and prompt user
+		const portSuffix = port ? `:${port}` : "";
+		const request: PermissionRequest<"network"> = {
+			type: "network",
+			detail: { host: normalized, port },
+			toolName,
+			description: `Network access to ${normalized}${portSuffix}`,
+		};
+
+		this._db.logAudit({
+			event: "prompt",
+			type: "network",
+			action: "net_connect",
+			resource: normalized,
+			toolName,
+		});
+
+		const result = await this._promptFn(request);
+		return this._applyPromptResult("network", "net_connect", normalized, toolName, result);
+	}
+
+	/**
+	 * Collect all currently allowed network domains (session + persistent + once).
+	 */
+	getAllowedDomains(): string[] {
+		const domains = new Set<string>();
+
+		// Once grants
+		for (const key of this._onceGrants) {
+			const parts = key.split(":");
+			if (parts[0] === "network" && parts[1] === "net_connect" && parts[2]) {
+				domains.add(parts[2]);
+			}
+		}
+
+		// Session grants
+		for (const grant of this._sessionGrants.values()) {
+			if (grant.action === "net_connect" && grant.type === "network") {
+				domains.add(grant.resource);
+			}
+		}
+
+		// Persistent grants from DB
+		for (const row of this._db.findAllActiveGrants()) {
+			if (row.action === "net_connect" && row.type === "network") {
+				domains.add(row.resource);
+			}
+		}
+
+		return [...domains];
+	}
+
 	/**
 	 * Collect all currently allowed write paths (CWD + pre-allowed + session + persistent).
 	 */
@@ -455,11 +572,12 @@ export class PermissionManager {
 	}
 
 	/**
-	 * Notify the sandbox callback that write paths have changed.
+	 * Notify the sandbox callback that grant configuration has changed.
+	 * Returns a promise that resolves when the sandbox config is updated.
 	 */
-	private _notifyGrantChange(): void {
+	private async _notifyGrantChange(): Promise<void> {
 		if (this._onGrantChange) {
-			this._onGrantChange(this.getAllowedWritePaths());
+			await this._onGrantChange(this.getAllowedWritePaths());
 		}
 	}
 }

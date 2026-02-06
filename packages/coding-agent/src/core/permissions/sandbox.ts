@@ -33,9 +33,13 @@ export interface SandboxProvider {
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-/** Sensitive directories denied for read access by default */
+/** Sensitive directories denied for read access by default.
+ *
+ * Note: ~/.ssh is intentionally NOT denied — SSH keys are needed for git push/pull
+ * and the network restriction (allowedDomains) prevents key exfiltration.
+ * SSH access is only useful for connecting to explicitly allowed domains.
+ */
 export const DEFAULT_DENIED_READ_PATHS: string[] = [
-	"~/.ssh",
 	"~/.aws",
 	"~/.gnupg",
 	"~/.config/gcloud",
@@ -108,7 +112,7 @@ export class SandboxRuntimeProvider implements SandboxProvider {
 
 	async updateConfig(config: SandboxConfig): Promise<void> {
 		this._config = config;
-		await SandboxManager.initialize(toRuntimeConfig(config));
+		SandboxManager.updateConfig(toRuntimeConfig(config));
 	}
 
 	async dispose(): Promise<void> {
