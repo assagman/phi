@@ -58,6 +58,7 @@
 				"toolTitle",
 				"toolOutput",
 				"toolRead",
+				"toolReadRange",
 				"toolEdit",
 				"toolWrite",
 				"toolBash",
@@ -299,6 +300,10 @@
 				"toolRead": {
 					"$ref": "#/$defs/colorValue",
 					"description": "Tool color: read operations"
+				},
+				"toolReadRange": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool color: read operations line range indicator"
 				},
 				"toolEdit": {
 					"$ref": "#/$defs/colorValue",
