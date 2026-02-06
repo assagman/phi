@@ -55,6 +55,9 @@ function safeRealpath(absolutePath: string): string {
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
+/** Callback invoked when a grant changes (for sandbox config sync) */
+export type GrantChangeCallback = (allWritePaths: string[]) => void;
+
 export interface PermissionManagerConfig {
 	/** Immutable CWD — paths within this directory never need permission */
 	cwd: string;
@@ -69,6 +72,8 @@ export interface PermissionManagerConfig {
 	 * grants are migrated to SQLite on construction.
 	 */
 	legacyJsonPath?: string;
+	/** Called when grants change — passes all currently allowed write paths */
+	onGrantChange?: GrantChangeCallback;
 }
 
 // ── PermissionManager ───────────────────────────────────────────────────────
@@ -78,6 +83,7 @@ export class PermissionManager {
 	private readonly _db: PermissionDb;
 	private readonly _preAllowedDirs: Set<string>;
 	private _promptFn: PermissionPromptFn | undefined;
+	private _onGrantChange: GrantChangeCallback | undefined;
 
 	// In-memory grant stores (not persisted to DB)
 	private readonly _sessionGrants = new Map<string, PermissionGrant>();
@@ -89,6 +95,7 @@ export class PermissionManager {
 		this._cwd = safeRealpath(resolvedCwd);
 		this._db = config.db;
 		this._promptFn = config.promptFn;
+		this._onGrantChange = config.onGrantChange;
 
 		// Normalize pre-allowed dirs to absolute paths (with ~ expansion and realpath)
 		this._preAllowedDirs = new Set<string>();
@@ -277,6 +284,11 @@ export class PermissionManager {
 			result: "granted",
 			scope,
 		});
+
+		// Notify sandbox of write path changes
+		if (action === "fs_write" && type === "directory") {
+			this._notifyGrantChange();
+		}
 	}
 
 	/**
@@ -410,5 +422,44 @@ export class PermissionManager {
 			result,
 			reason,
 		});
+	}
+
+	/**
+	 * Collect all currently allowed write paths (CWD + pre-allowed + session + persistent).
+	 */
+	getAllowedWritePaths(): string[] {
+		const paths = new Set<string>();
+		paths.add(this._cwd);
+		paths.add("/tmp");
+
+		// Pre-allowed dirs allow both read and write
+		for (const dir of this._preAllowedDirs) {
+			paths.add(dir);
+		}
+
+		// Session write grants
+		for (const grant of this._sessionGrants.values()) {
+			if (grant.action === "fs_write" && grant.type === "directory") {
+				paths.add(grant.resource);
+			}
+		}
+
+		// Persistent write grants from DB
+		for (const row of this._db.findAllActiveGrants()) {
+			if (row.action === "fs_write" && row.type === "directory") {
+				paths.add(row.resource);
+			}
+		}
+
+		return Array.from(paths);
+	}
+
+	/**
+	 * Notify the sandbox callback that write paths have changed.
+	 */
+	private _notifyGrantChange(): void {
+		if (this._onGrantChange) {
+			this._onGrantChange(this.getAllowedWritePaths());
+		}
 	}
 }

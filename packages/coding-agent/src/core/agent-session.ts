@@ -129,6 +129,8 @@ export interface AgentSessionConfig {
 	builtinToolsLifecycle?: import("./builtin-tools/index.js").BuiltinToolsLifecycle;
 	/** Permission manager for CWD enforcement and directory access control */
 	permissionManager?: import("./permissions/index.js").PermissionManager;
+	/** Sandbox provider for OS-level bash command sandboxing */
+	sandboxProvider?: import("./permissions/index.js").SandboxProvider;
 	/** Initial working directory */
 	cwd?: string;
 	/** Factory to rebuild built-in tools for a new cwd */
@@ -256,6 +258,7 @@ export class AgentSession {
 
 	// Permission management
 	private _permissionManager?: import("./permissions/index.js").PermissionManager;
+	private _sandboxProvider?: import("./permissions/index.js").SandboxProvider;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -273,6 +276,7 @@ export class AgentSession {
 		this._baseSystemPrompt = config.agent.state.systemPrompt;
 		this._builtinToolsLifecycle = config.builtinToolsLifecycle;
 		this._permissionManager = config.permissionManager;
+		this._sandboxProvider = config.sandboxProvider;
 		this._cwd = config.cwd ?? process.cwd();
 		this._createBuiltInTools = config.createBuiltInTools;
 
@@ -624,6 +628,8 @@ export class AgentSession {
 		// Clear session-scoped permissions and close permission DB
 		this._permissionManager?.clearSessionGrants();
 		this._permissionManager?.close();
+		// Dispose sandbox provider (clean up proxies, etc.)
+		this._sandboxProvider?.dispose();
 	}
 
 	// =========================================================================

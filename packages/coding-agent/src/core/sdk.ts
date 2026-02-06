@@ -53,8 +53,12 @@ import {
 import { convertToLlm, convertToLlm as convertToLlmMessages } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
 import {
+	createSandboxProvider,
+	DEFAULT_DENIED_READ_PATHS,
 	PermissionDb,
 	PermissionManager,
+	type SandboxConfig,
+	type SandboxProvider,
 	wrapToolRegistryWithPermissions,
 	wrapToolsWithPermissions,
 } from "./permissions/index.js";
@@ -162,6 +166,8 @@ export interface CreateAgentSessionResult {
 	builtinToolsLifecycle: BuiltinToolsLifecycle;
 	/** Permission manager for CWD enforcement and directory access control */
 	permissionManager: PermissionManager;
+	/** Sandbox provider for OS-level bash command sandboxing (undefined if init failed) */
+	sandboxProvider?: SandboxProvider;
 }
 
 // Re-exports
@@ -376,13 +382,38 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd);
 	time("sessionManager");
 
+	// Initialize OS-level sandbox for bash command enforcement
+	const initialSandboxConfig: SandboxConfig = {
+		allowedWritePaths: [cwd, "/tmp"],
+		deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
+		allowedDomains: [],
+	};
+	let sandboxProvider: SandboxProvider | undefined;
+	try {
+		sandboxProvider = await createSandboxProvider(initialSandboxConfig);
+	} catch {
+		// Sandbox initialization failed — log but continue
+		// Static path extraction still provides Layer 1 defense
+	}
+	time("sandboxProvider");
+
 	// Create permission database and manager for CWD enforcement
 	const permissionDb = new PermissionDb(cwd);
+	const capturedSandbox = sandboxProvider;
 	const permissionManager = new PermissionManager({
 		cwd,
 		db: permissionDb,
 		preAllowedDirs: settingsManager.getAllowedDirs(),
 		legacyJsonPath: join(agentDir, "permissions.json"),
+		onGrantChange: capturedSandbox
+			? (writePaths) => {
+					capturedSandbox.updateConfig({
+						allowedWritePaths: writePaths,
+						deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
+						allowedDomains: [],
+					});
+				}
+			: undefined,
 	});
 	time("permissionManager");
 
@@ -473,7 +504,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Create ALL built-in tools for the registry (extensions can enable any of them)
 	const allBuiltInToolsMap = createAllTools(cwd, {
 		read: { autoResizeImages },
-		bash: { commandPrefix: shellCommandPrefix },
+		bash: { commandPrefix: shellCommandPrefix, sandboxProvider },
 	});
 	// Determine initially active built-in tools (default: read, bash, edit, write)
 	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
@@ -810,11 +841,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		rebuildSystemPrompt,
 		builtinToolsLifecycle,
 		permissionManager,
+		sandboxProvider,
 		cwd,
 		createBuiltInTools: (newCwd: string) => {
 			const rawTools = createAllTools(newCwd, {
 				read: { autoResizeImages },
-				bash: { commandPrefix: shellCommandPrefix },
+				bash: { commandPrefix: shellCommandPrefix, sandboxProvider },
 			}) as Record<string, AgentTool>;
 			// Re-wrap rebuilt tools with extensions so wrappers survive cwd changes
 			let tools: AgentTool[];
@@ -840,5 +872,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelFallbackMessage,
 		builtinToolsLifecycle,
 		permissionManager,
+		sandboxProvider,
 	};
 }
