@@ -4684,8 +4684,8 @@ export const MODELS = {
 			input: ["text"],
 			cost: {
 				input: 0.09,
-				output: 0.39999999999999997,
-				cacheRead: 0,
+				output: 0.44999999999999996,
+				cacheRead: 0.09,
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
@@ -5618,12 +5618,12 @@ export const MODELS = {
 			reasoning: false,
 			input: ["text"],
 			cost: {
-				input: 3.5,
-				output: 3.5,
+				input: 4,
+				output: 4,
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 10000,
+			contextWindow: 131000,
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"meta-llama/llama-3.1-70b-instruct": {
@@ -7808,7 +7808,7 @@ export const MODELS = {
 			api: "openai-completions",
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
-			reasoning: true,
+			reasoning: false,
 			input: ["text"],
 			cost: {
 				input: 0.22,
