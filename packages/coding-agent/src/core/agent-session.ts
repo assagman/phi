@@ -17,7 +17,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "agent";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "ai";
-import { isContextOverflow, modelsAreEqual, supportsXhigh } from "ai";
+import { completeSimple, isContextOverflow, modelsAreEqual, supportsXhigh } from "ai";
 import { getAuthPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
@@ -186,6 +186,17 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 /** Thinking levels including xhigh (for supported models) */
 const THINKING_LEVELS_WITH_XHIGH: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
+const AUTO_SESSION_NAME_PROVIDER = "kimi-for-coding";
+const AUTO_SESSION_NAME_MODEL_ID = "k2p5";
+const AUTO_SESSION_NAME_SYSTEM_PROMPT = `Generate a short session title for this coding conversation.
+
+Rules:
+- 3 to 7 words
+- plain text only
+- no quotes
+- no markdown
+- no trailing punctuation`;
+
 // ============================================================================
 // AgentSession Class
 // ============================================================================
@@ -255,6 +266,7 @@ export class AgentSession {
 	private _cwd: string;
 	private _createBuiltInTools?: (cwd: string) => Record<string, AgentTool>;
 	private _pendingCwdChange: string | undefined = undefined;
+	private _autoSessionNamePromise: Promise<void> | undefined = undefined;
 
 	// Permission management
 	private _permissionManager?: import("./permissions/index.js").PermissionManager;
@@ -770,6 +782,86 @@ export class AgentSession {
 	// Prompting
 	// =========================================================================
 
+	private _shouldAutoNameSession(inputText: string, source: InputSource): boolean {
+		if (source === "extension") return false;
+		if (this.sessionManager.getSessionName()) return false;
+		if (!inputText.trim()) return false;
+		return !this.agent.state.messages.some((m) => m.role === "user");
+	}
+
+	private _triggerAutoSessionName(firstTurnText: string, sessionIdAtSubmit: string): void {
+		if (this._autoSessionNamePromise) return;
+		const text = firstTurnText.trim();
+		if (!text) return;
+
+		this._autoSessionNamePromise = this._generateAutoSessionName(text, sessionIdAtSubmit)
+			.catch((error) => {
+				sessionLog.warn("Auto session naming failed", {
+					error: error instanceof Error ? error.message : String(error),
+					sessionId: sessionIdAtSubmit,
+				});
+			})
+			.finally(() => {
+				this._autoSessionNamePromise = undefined;
+			});
+	}
+
+	private _normalizeAutoSessionName(raw: string): string | undefined {
+		const normalized = raw
+			.replace(/[\r\n]+/g, " ")
+			.replace(/^['"`\s]+|['"`\s]+$/g, "")
+			.replace(/\s+/g, " ")
+			.trim()
+			.slice(0, 96)
+			.trim();
+		return normalized || undefined;
+	}
+
+	private async _generateAutoSessionName(firstTurnText: string, sessionIdAtSubmit: string): Promise<void> {
+		if (this.sessionManager.getSessionId() !== sessionIdAtSubmit) return;
+		if (this.sessionManager.getSessionName()) return;
+
+		const model = this._modelRegistry.find(AUTO_SESSION_NAME_PROVIDER, AUTO_SESSION_NAME_MODEL_ID);
+		if (!model) return;
+
+		const apiKey = await this._modelRegistry.getApiKeyForProvider(AUTO_SESSION_NAME_PROVIDER);
+		if (!apiKey) return;
+
+		const boundedInput = firstTurnText.length > 2000 ? `${firstTurnText.slice(0, 2000)}...` : firstTurnText;
+		const response = await completeSimple(
+			model,
+			{
+				systemPrompt: AUTO_SESSION_NAME_SYSTEM_PROMPT,
+				messages: [
+					{
+						role: "user",
+						content: [{ type: "text", text: boundedInput }],
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey,
+				reasoning: "medium",
+				maxTokens: 32,
+			},
+		);
+
+		if (response.stopReason === "aborted" || response.stopReason === "error") return;
+
+		const generated = response.content
+			.filter((c): c is TextContent => c.type === "text")
+			.map((c) => c.text)
+			.join(" ");
+
+		const name = this._normalizeAutoSessionName(generated);
+		if (!name) return;
+		if (this.sessionManager.getSessionId() !== sessionIdAtSubmit) return;
+		if (this.sessionManager.getSessionName()) return;
+
+		this.sessionManager.appendSessionInfo(name);
+	}
+
 	/**
 	 * Send a prompt to the agent.
 	 * - Handles extension commands (registered via pi.registerCommand) immediately, even during streaming
@@ -781,6 +873,7 @@ export class AgentSession {
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
+		const inputSource = options?.source ?? "interactive";
 
 		// Handle extension commands first (execute immediately, even during streaming)
 		// Extension commands manage their own LLM interaction via pi.sendMessage()
@@ -796,11 +889,7 @@ export class AgentSession {
 		let currentText = text;
 		let currentImages = options?.images;
 		if (this._extensionRunner?.hasHandlers("input")) {
-			const inputResult = await this._extensionRunner.emitInput(
-				currentText,
-				currentImages,
-				options?.source ?? "interactive",
-			);
+			const inputResult = await this._extensionRunner.emitInput(currentText, currentImages, inputSource);
 			if (inputResult.action === "handled") {
 				return;
 			}
@@ -866,6 +955,9 @@ export class AgentSession {
 		if (lastAssistant) {
 			await this._checkCompaction(lastAssistant, false);
 		}
+
+		const shouldAutoNameSession = this._shouldAutoNameSession(currentText, inputSource);
+		const sessionIdAtSubmit = this.sessionManager.getSessionId();
 
 		// Build messages array (custom message if any, then user message)
 		const messages: AgentMessage[] = [];
@@ -937,7 +1029,11 @@ export class AgentSession {
 			this.agent.setSystemPrompt(currentSystemPrompt);
 		}
 
-		await this.agent.prompt(messages);
+		const promptPromise = this.agent.prompt(messages);
+		if (shouldAutoNameSession) {
+			this._triggerAutoSessionName(currentText, sessionIdAtSubmit);
+		}
+		await promptPromise;
 		await this.waitForRetry();
 	}
 
