@@ -52,7 +52,12 @@ import {
 } from "./extensions/index.js";
 import { convertToLlm, convertToLlm as convertToLlmMessages } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
-import { PermissionManager, wrapToolRegistryWithPermissions, wrapToolsWithPermissions } from "./permissions/index.js";
+import {
+	PermissionDb,
+	PermissionManager,
+	wrapToolRegistryWithPermissions,
+	wrapToolsWithPermissions,
+} from "./permissions/index.js";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./prompt-templates.js";
 import { SessionManager } from "./session-manager.js";
 import { type Settings, SettingsManager, type SkillsSettings } from "./settings-manager.js";
@@ -371,11 +376,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd);
 	time("sessionManager");
 
-	// Create permission manager for CWD enforcement
+	// Create permission database and manager for CWD enforcement
+	const permissionDb = new PermissionDb(cwd);
 	const permissionManager = new PermissionManager({
 		cwd,
-		persistPath: join(agentDir, "permissions.json"),
+		db: permissionDb,
 		preAllowedDirs: settingsManager.getAllowedDirs(),
+		legacyJsonPath: join(agentDir, "permissions.json"),
 	});
 	time("permissionManager");
 

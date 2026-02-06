@@ -167,7 +167,10 @@ export function getSessionsDir(): string {
 	return join(getAgentDir(), "sessions");
 }
 
-/** Get path to permissions.json (persistent permission grants) */
+/**
+ * Get path to legacy permissions.json (for migration to SQLite only).
+ * @deprecated Permissions are now stored in SQLite via PermissionDb.
+ */
 export function getPermissionsPath(): string {
 	return join(getAgentDir(), "permissions.json");
 }

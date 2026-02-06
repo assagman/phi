@@ -621,8 +621,9 @@ export class AgentSession {
 		this._eventListeners = [];
 		// Shutdown builtin tools (closes databases)
 		this._builtinToolsLifecycle?.onSessionShutdown();
-		// Clear session-scoped permissions
+		// Clear session-scoped permissions and close permission DB
 		this._permissionManager?.clearSessionGrants();
+		this._permissionManager?.close();
 	}
 
 	// =========================================================================

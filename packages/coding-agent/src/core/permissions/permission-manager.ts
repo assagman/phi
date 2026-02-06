@@ -1,19 +1,23 @@
 /**
  * PermissionManager — checks, grants, and persists permissions.
  *
- * Three layers of grants (checked in order):
- *   1. Pre-allowed (from settings.json allowedDirs) — always granted
- *   2. Persistent (from permissions.json) — survives across sessions
- *   3. Session (in-memory) — cleared on exit
- *   4. Once (in-memory, cleared after each agent turn)
+ * Four layers of grants (checked in order):
+ *   1. CWD — paths within CWD always granted
+ *   2. Pre-allowed (from settings.json allowedDirs) — always granted
+ *   3. Persistent (SQLite) — survives across sessions
+ *   4. Session (in-memory) — cleared on exit
+ *   5. Once (in-memory, cleared after each agent turn)
  *
  * When none match, the prompt callback is invoked to ask the user.
+ * All operations are audit-logged to SQLite.
  */
 
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join as joinPath, resolve as resolvePath } from "node:path";
+import { dirname, resolve as resolvePath } from "node:path";
+import type { PermissionDb } from "./permission-db.js";
 import type {
+	PermissionAction,
 	PermissionCheckResult,
 	PermissionGrant,
 	PermissionPromptFn,
@@ -21,8 +25,9 @@ import type {
 	PermissionRequest,
 	PermissionScope,
 	PermissionType,
-	PersistedPermissions,
 } from "./types.js";
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Expand ~ to home directory */
 function expandTilde(p: string): string {
@@ -48,46 +53,57 @@ function safeRealpath(absolutePath: string): string {
 	}
 }
 
+// ── Config ──────────────────────────────────────────────────────────────────
+
 export interface PermissionManagerConfig {
 	/** Immutable CWD — paths within this directory never need permission */
 	cwd: string;
-	/** Path to persistent permissions file (e.g., ~/.phi/agent/permissions.json) */
-	persistPath: string;
+	/** PermissionDb instance for SQLite persistence + audit */
+	db: PermissionDb;
 	/** Pre-allowed directories from settings.json */
 	preAllowedDirs: string[];
 	/** UI prompt callback — called when user decision is needed */
 	promptFn?: PermissionPromptFn;
+	/**
+	 * Legacy JSON path for migration. If provided and file exists,
+	 * grants are migrated to SQLite on construction.
+	 */
+	legacyJsonPath?: string;
 }
+
+// ── PermissionManager ───────────────────────────────────────────────────────
 
 export class PermissionManager {
 	private readonly _cwd: string;
-	private readonly _persistPath: string;
+	private readonly _db: PermissionDb;
 	private readonly _preAllowedDirs: Set<string>;
 	private _promptFn: PermissionPromptFn | undefined;
 
-	// In-memory grant stores
+	// In-memory grant stores (not persisted to DB)
 	private readonly _sessionGrants = new Map<string, PermissionGrant>();
 	private readonly _onceGrants = new Set<string>();
-
-	// Persistent grants (loaded from disk)
-	private readonly _persistentGrants = new Map<string, PermissionGrant>();
 
 	constructor(config: PermissionManagerConfig) {
 		// Resolve CWD to realpath to prevent symlink escapes
 		const resolvedCwd = resolvePath(config.cwd);
 		this._cwd = safeRealpath(resolvedCwd);
-		this._persistPath = config.persistPath;
+		this._db = config.db;
 		this._promptFn = config.promptFn;
 
 		// Normalize pre-allowed dirs to absolute paths (with ~ expansion and realpath)
 		this._preAllowedDirs = new Set<string>();
 		for (const dir of config.preAllowedDirs) {
 			const expanded = expandTilde(dir);
-			this._preAllowedDirs.add(safeRealpath(resolvePath(expanded)));
+			const resolved = safeRealpath(resolvePath(expanded));
+			this._preAllowedDirs.add(resolved);
+			// Sync to DB for queryability
+			this._db.setPreAllowedDir(resolved);
 		}
 
-		// Load persistent grants from disk
-		this._loadPersistentGrants();
+		// Migrate legacy JSON if provided
+		if (config.legacyJsonPath) {
+			this._db.migrateFromJson(config.legacyJsonPath);
+		}
 	}
 
 	/** Set the prompt function (for deferred UI setup) */
@@ -98,6 +114,11 @@ export class PermissionManager {
 	/** Get the immutable CWD */
 	get cwd(): string {
 		return this._cwd;
+	}
+
+	/** Get the underlying database (for lifecycle management) */
+	get db(): PermissionDb {
+		return this._db;
 	}
 
 	// =========================================================================
@@ -116,8 +137,9 @@ export class PermissionManager {
 
 	/**
 	 * Check if a directory permission is already granted (without prompting).
+	 * Checks against a specific action (defaults to fs_read for backward compat).
 	 */
-	checkDirectory(absolutePath: string): PermissionCheckResult {
+	checkDirectory(absolutePath: string, action: PermissionAction = "fs_read"): PermissionCheckResult {
 		const resolved = safeRealpath(resolvePath(absolutePath));
 
 		// Within CWD — always allowed
@@ -125,22 +147,33 @@ export class PermissionManager {
 			return { status: "granted", scope: "session" };
 		}
 
-		// Check grant layers
-		const key = this._directoryKey(resolved);
-
+		// Pre-allowed dirs — always granted (both read and write)
 		if (this._isPreAllowed(resolved)) {
+			this._logCheck("directory", action, resolved, "granted", "pre_allowed");
 			return { status: "granted", scope: "persistent" };
 		}
-		if (this._persistentGrants.has(key)) {
-			return { status: "granted", scope: "persistent" };
-		}
-		if (this._sessionGrants.has(key)) {
-			return { status: "granted", scope: "session" };
-		}
-		if (this._onceGrants.has(key)) {
+
+		// Check in-memory once grants
+		const onceKey = this._grantKey("directory", action, resolved);
+		if (this._onceGrants.has(onceKey)) {
+			this._logCheck("directory", action, resolved, "granted", "once");
 			return { status: "granted", scope: "once" };
 		}
 
+		// Check in-memory session grants
+		if (this._sessionGrants.has(onceKey)) {
+			this._logCheck("directory", action, resolved, "granted", "session");
+			return { status: "granted", scope: "session" };
+		}
+
+		// Check SQLite persistent grants
+		const dbGrants = this._db.findActiveGrants("directory", action, resolved);
+		if (dbGrants.length > 0) {
+			this._logCheck("directory", action, resolved, "granted", "persistent");
+			return { status: "granted", scope: "persistent" };
+		}
+
+		this._logCheck("directory", action, resolved, "denied");
 		return { status: "denied" };
 	}
 
@@ -148,42 +181,72 @@ export class PermissionManager {
 	 * Request permission for a directory. Prompts user if not already granted.
 	 * Returns the check result (granted or denied with optional user message).
 	 */
-	async requestDirectory(absolutePath: string, toolName: string): Promise<PermissionCheckResult> {
+	async requestDirectory(
+		absolutePath: string,
+		toolName: string,
+		action: PermissionAction = "fs_read",
+	): Promise<PermissionCheckResult> {
 		const resolved = safeRealpath(resolvePath(absolutePath));
 
 		// Check existing grants first
-		const existing = this.checkDirectory(resolved);
+		const existing = this.checkDirectory(resolved, action);
 		if (existing.status === "granted") {
 			return existing;
 		}
 
 		// No prompt function — deny by default
 		if (!this._promptFn) {
+			this._db.logAudit({
+				event: "request",
+				type: "directory",
+				action,
+				resource: resolved,
+				toolName,
+				result: "denied",
+				reason: "no_prompt",
+			});
 			return { status: "denied" };
 		}
 
 		// Build request and prompt user
+		const actionLabel = action === "fs_write" ? "Write" : "Read";
 		const request: PermissionRequest<"directory"> = {
 			type: "directory",
-			detail: { path: resolved },
+			detail: { path: resolved, action },
 			toolName,
-			description: `Access directory outside workspace: ${resolved}`,
+			description: `${actionLabel} access to directory outside workspace: ${resolved}`,
 		};
 
+		this._db.logAudit({
+			event: "prompt",
+			type: "directory",
+			action,
+			resource: resolved,
+			toolName,
+		});
+
 		const result = await this._promptFn(request);
-		return this._applyPromptResult("directory", resolved, result);
+		return this._applyPromptResult("directory", action, resolved, toolName, result);
 	}
 
 	/**
 	 * Grant a permission directly (used by pre-allowed dirs and programmatic grants).
 	 */
-	grant(type: PermissionType, resource: string, scope: PermissionScope): void {
+	grant(
+		type: PermissionType,
+		resource: string,
+		scope: PermissionScope,
+		action: PermissionAction = "fs_read",
+		toolName?: string,
+	): void {
 		const resolved = type === "directory" ? safeRealpath(resolvePath(resource)) : resource;
-		const key = this._resourceKey(type, resolved);
+		const key = this._grantKey(type, action, resolved);
 		const grant: PermissionGrant = {
 			type,
+			action,
 			resource: resolved,
 			scope,
+			toolName,
 			grantedAt: new Date().toISOString(),
 		};
 
@@ -195,10 +258,25 @@ export class PermissionManager {
 				this._sessionGrants.set(key, grant);
 				break;
 			case "persistent":
-				this._persistentGrants.set(key, grant);
-				this._savePersistentGrants();
+				this._db.insertGrant({
+					type,
+					action,
+					resource: resolved,
+					scope,
+					toolName,
+				});
 				break;
 		}
+
+		this._db.logAudit({
+			event: "grant",
+			type,
+			action,
+			resource: resolved,
+			toolName,
+			result: "granted",
+			scope,
+		});
 	}
 
 	/**
@@ -217,23 +295,49 @@ export class PermissionManager {
 	}
 
 	/**
-	 * Get all persistent grants (for display/management).
+	 * Get all persistent grants (from SQLite).
 	 */
 	getPersistentGrants(): PermissionGrant[] {
-		return Array.from(this._persistentGrants.values());
+		return this._db.findAllActiveGrants().map((row) => ({
+			type: row.type as PermissionType,
+			action: row.action as PermissionAction,
+			resource: row.resource,
+			scope: row.scope as PermissionScope,
+			toolName: row.toolName ?? undefined,
+			grantedAt: row.grantedAt,
+			expiresAt: row.expiresAt ?? undefined,
+			revokedAt: row.revokedAt ?? undefined,
+		}));
 	}
 
 	/**
 	 * Revoke a persistent grant.
 	 */
-	revokePersistent(type: PermissionType, resource: string): boolean {
+	revokePersistent(type: PermissionType, resource: string, action: PermissionAction = "fs_read"): boolean {
 		const resolved = type === "directory" ? safeRealpath(resolvePath(resource)) : resource;
-		const key = this._resourceKey(type, resolved);
-		const deleted = this._persistentGrants.delete(key);
-		if (deleted) {
-			this._savePersistentGrants();
-		}
-		return deleted;
+
+		// Check if grant exists before revoking
+		const existing = this._db.findActiveGrants(type, action, resolved);
+		if (existing.length === 0) return false;
+
+		this._db.revokeGrant(type, action, resolved);
+
+		this._db.logAudit({
+			event: "revoke",
+			type,
+			action,
+			resource: resolved,
+			result: "denied",
+		});
+
+		return true;
+	}
+
+	/**
+	 * Close the underlying database. Call on shutdown.
+	 */
+	close(): void {
+		this._db.close();
 	}
 
 	// =========================================================================
@@ -245,13 +349,27 @@ export class PermissionManager {
 	 */
 	private _applyPromptResult(
 		type: PermissionType,
+		action: PermissionAction,
 		resource: string,
+		toolName: string,
 		result: PermissionPromptResult,
 	): PermissionCheckResult {
 		if (result.action === "allow") {
-			this.grant(type, resource, result.scope);
+			this.grant(type, resource, result.scope, action, toolName);
 			return { status: "granted", scope: result.scope };
 		}
+
+		this._db.logAudit({
+			event: "deny",
+			type,
+			action,
+			resource,
+			toolName,
+			result: "denied",
+			reason: "user_denied",
+			userMessage: result.userMessage,
+		});
+
 		return { status: "denied", userMessage: result.userMessage };
 	}
 
@@ -268,64 +386,29 @@ export class PermissionManager {
 	}
 
 	/**
-	 * Create a lookup key for a directory grant.
-	 * For directories, we normalize and check parent containment.
+	 * Create a composite lookup key for grant stores.
 	 */
-	private _directoryKey(absolutePath: string): string {
-		return this._resourceKey("directory", absolutePath);
+	private _grantKey(type: PermissionType, action: PermissionAction, resource: string): string {
+		return `${type}:${action}:${resource}`;
 	}
 
 	/**
-	 * Create a lookup key for any resource.
+	 * Log a permission check to audit trail.
 	 */
-	private _resourceKey(type: PermissionType, resource: string): string {
-		return `${type}:${resource}`;
-	}
-
-	/**
-	 * Load persistent grants from disk.
-	 */
-	private _loadPersistentGrants(): void {
-		if (!existsSync(this._persistPath)) return;
-
-		try {
-			const content = readFileSync(this._persistPath, "utf-8");
-			const data = JSON.parse(content) as PersistedPermissions;
-
-			if (Array.isArray(data.grants)) {
-				for (const grant of data.grants) {
-					if (grant.type && grant.resource && grant.scope === "persistent") {
-						const resolved =
-							grant.type === "directory" ? safeRealpath(resolvePath(grant.resource)) : grant.resource;
-						const key = this._resourceKey(grant.type, resolved);
-						this._persistentGrants.set(key, { ...grant, resource: resolved });
-					}
-				}
-			}
-		} catch {
-			// Corrupted file — start fresh
-		}
-	}
-
-	/**
-	 * Save persistent grants to disk.
-	 */
-	private _savePersistentGrants(): void {
-		const data: PersistedPermissions = {
-			grants: Array.from(this._persistentGrants.values()),
-		};
-
-		try {
-			const dir = dirname(this._persistPath);
-			if (!existsSync(dir)) {
-				mkdirSync(dir, { recursive: true });
-			}
-			// Atomic write: write to temp file, then rename (prevents corruption on crash)
-			const tmpPath = joinPath(dir, `.permissions.${process.pid}.tmp`);
-			writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8");
-			renameSync(tmpPath, this._persistPath);
-		} catch {
-			// Best-effort persistence
-		}
+	private _logCheck(
+		type: PermissionType,
+		action: PermissionAction,
+		resource: string,
+		result: "granted" | "denied",
+		reason?: string,
+	): void {
+		this._db.logAudit({
+			event: "check",
+			type,
+			action,
+			resource,
+			result,
+			reason,
+		});
 	}
 }

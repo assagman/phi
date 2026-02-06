@@ -7,12 +7,37 @@
  *
  * For file tools (read, write, edit), the *containing directory* is
  * checked — granting access to a directory covers all files within it.
+ *
+ * For bash, static path extraction identifies outside-CWD paths and
+ * checks permissions per-directory before execution.
  */
 
 import { dirname } from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "agent";
 import { resolveToCwd } from "../tools/path-utils.js";
+import { extractPathsFromCommand } from "./bash-path-extractor.js";
 import type { PermissionManager } from "./permission-manager.js";
+import type { PermissionAction } from "./types.js";
+
+// ── Action Mapping ──────────────────────────────────────────────────────────
+
+/** Map tool names to their primary permission action */
+function getToolAction(toolName: string): PermissionAction {
+	switch (toolName) {
+		case "write":
+		case "edit":
+			return "fs_write";
+		case "read":
+		case "ls":
+			return "fs_read";
+		case "bash":
+			// Bash defaults to fs_read; specific paths may need fs_write
+			// based on static analysis (handled in bash wrapping)
+			return "fs_read";
+		default:
+			return "fs_read";
+	}
+}
 
 /**
  * Extract directory paths from tool arguments that need permission checking.
@@ -39,15 +64,32 @@ function extractDirectoryPaths(toolName: string, args: Record<string, unknown>, 
 			// Default "." — resolve against CWD to ensure we check correctly
 			return [resolveToCwd(".", cwd)];
 		}
-		case "bash": {
-			// Bash commands execute in CWD — we can't statically analyze
-			// all paths a command might access. The CWD itself is the boundary.
-			// Bash tool already runs with cwd set, so no path extraction needed.
-			return [];
-		}
 		default:
 			return [];
 	}
+}
+
+/**
+ * Check permission for a single directory path.
+ * Returns an error message if denied, or undefined if granted.
+ */
+async function checkDirectoryPermission(
+	dirPath: string,
+	toolName: string,
+	action: PermissionAction,
+	permissionManager: PermissionManager,
+): Promise<string | undefined> {
+	if (permissionManager.isWithinCwd(dirPath)) {
+		return undefined;
+	}
+
+	const result = await permissionManager.requestDirectory(dirPath, toolName, action);
+	if (result.status === "denied") {
+		return result.userMessage
+			? `Permission denied: access to ${dirPath} was rejected by user.\nUser message: ${result.userMessage}`
+			: `Permission denied: access to ${dirPath} is outside the workspace (${permissionManager.cwd}). The user rejected the access request.`;
+	}
+	return undefined;
 }
 
 /**
@@ -58,7 +100,7 @@ function wrapTool(tool: AgentTool, permissionManager: PermissionManager): AgentT
 	const toolName = tool.name;
 
 	// Only wrap tools that access the filesystem
-	if (!["read", "write", "edit", "ls"].includes(toolName)) {
+	if (!["read", "write", "edit", "ls", "bash"].includes(toolName)) {
 		return tool;
 	}
 
@@ -71,24 +113,35 @@ function wrapTool(tool: AgentTool, permissionManager: PermissionManager): AgentT
 			onUpdate?: AgentToolUpdateCallback,
 		): Promise<AgentToolResult<unknown>> => {
 			const args = (params ?? {}) as Record<string, unknown>;
-			const dirPaths = extractDirectoryPaths(toolName, args, permissionManager.cwd);
 
-			for (const dirPath of dirPaths) {
-				if (permissionManager.isWithinCwd(dirPath)) {
-					continue;
+			if (toolName === "bash") {
+				// Bash: extract paths statically and check each
+				const command = typeof args.command === "string" ? args.command : "";
+				const outsidePaths = extractPathsFromCommand(command, permissionManager.cwd);
+
+				for (const dirPath of outsidePaths) {
+					// Bash commands may both read and write — check read first (most common)
+					const error = await checkDirectoryPermission(dirPath, toolName, "fs_read", permissionManager);
+					if (error) {
+						return {
+							content: [{ type: "text", text: error }],
+							details: {},
+						};
+					}
 				}
+			} else {
+				// File tools: extract directory and check with tool-specific action
+				const action = getToolAction(toolName);
+				const dirPaths = extractDirectoryPaths(toolName, args, permissionManager.cwd);
 
-				const result = await permissionManager.requestDirectory(dirPath, toolName);
-
-				if (result.status === "denied") {
-					const message = result.userMessage
-						? `Permission denied: access to ${dirPath} was rejected by user.\nUser message: ${result.userMessage}`
-						: `Permission denied: access to ${dirPath} is outside the workspace (${permissionManager.cwd}). The user rejected the access request.`;
-
-					return {
-						content: [{ type: "text", text: message }],
-						details: {},
-					};
+				for (const dirPath of dirPaths) {
+					const error = await checkDirectoryPermission(dirPath, toolName, action, permissionManager);
+					if (error) {
+						return {
+							content: [{ type: "text", text: error }],
+							details: {},
+						};
+					}
 				}
 			}
 

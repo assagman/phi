@@ -9,19 +9,24 @@
  * // Future extension:
  * declare module "./types.js" {
  *   interface PermissionRequestMap {
- *     network: { host: string; port?: number };
  *     secret: { name: string };
  *   }
  * }
  * ```
  */
 
+// ── Permission Actions ──────────────────────────────────────────────────────
+
+/** Granular permission actions for per-tool, per-operation grants */
+export type PermissionAction = "fs_read" | "fs_write" | "net_connect";
+
 // ── Permission Request Map ──────────────────────────────────────────────────
 // Extensible via declaration merging. Each key is a permission type,
 // value is the type-specific payload.
 
 export interface PermissionRequestMap {
-	directory: { path: string };
+	directory: { path: string; action: PermissionAction };
+	network: { host: string; port?: number };
 }
 
 export type PermissionType = keyof PermissionRequestMap;
@@ -44,11 +49,19 @@ export type PermissionScope = "once" | "session" | "persistent";
 
 export interface PermissionGrant {
 	type: PermissionType;
-	/** The granted resource identifier (e.g., normalized directory path) */
+	/** Granular action (fs_read, fs_write, net_connect) */
+	action: PermissionAction;
+	/** The granted resource identifier (e.g., normalized directory path or domain) */
 	resource: string;
 	scope: PermissionScope;
+	/** Which tool triggered the grant (nullable for manual grants) */
+	toolName?: string;
 	/** ISO timestamp of when the grant was created */
 	grantedAt: string;
+	/** ISO timestamp for TTL-based expiry (nullable) */
+	expiresAt?: string;
+	/** ISO timestamp of revocation (nullable, set on revoke) */
+	revokedAt?: string;
 }
 
 export interface PermissionDenial {
@@ -69,7 +82,7 @@ export type PermissionPromptResult =
 
 export type PermissionPromptFn = (request: PermissionRequest) => Promise<PermissionPromptResult>;
 
-// ── Persistent Storage Format ───────────────────────────────────────────────
+// ── Legacy Persistent Storage Format (for migration only) ───────────────────
 
 export interface PersistedPermissions {
 	grants: PermissionGrant[];
