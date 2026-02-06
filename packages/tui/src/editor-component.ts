@@ -65,4 +65,11 @@ export interface EditorComponent extends Component {
 
 	/** Background color as RGB tuple [r, g, b] - applied to content area */
 	backgroundColor?: [number, number, number];
+
+	/**
+	 * Maximum number of content lines the editor may display (excluding its own borders).
+	 * Set by the hosting container (e.g. PinnedInputBar) so the editor's internal
+	 * scroll logic matches the externally available space.
+	 */
+	maxContentLines?: number;
 }
