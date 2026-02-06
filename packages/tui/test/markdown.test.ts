@@ -680,4 +680,177 @@ again, hello world`,
 			);
 		});
 	});
+
+	describe("Incremental parsing (streaming)", () => {
+		it("should produce identical output whether rendered incrementally or from scratch", () => {
+			// Simulate streaming: text grows chunk by chunk
+			const chunks = [
+				"Hello world.\n\n",
+				"Hello world.\n\nThis is a paragraph with **bold** text.\n\n",
+				"Hello world.\n\nThis is a paragraph with **bold** text.\n\n```typescript\nconst x = 1;\n```\n\n",
+				"Hello world.\n\nThis is a paragraph with **bold** text.\n\n```typescript\nconst x = 1;\n```\n\nFinal paragraph.",
+			];
+
+			// Incremental: reuse same Markdown instance, setText each chunk
+			const incremental = new Markdown("", 1, 0, defaultMarkdownTheme);
+			const incrementalResults: string[][] = [];
+			for (const chunk of chunks) {
+				incremental.setText(chunk);
+				incrementalResults.push(incremental.render(80));
+			}
+
+			// From scratch: create fresh Markdown for each chunk
+			for (let i = 0; i < chunks.length; i++) {
+				const fresh = new Markdown(chunks[i], 1, 0, defaultMarkdownTheme);
+				const freshLines = fresh.render(80);
+				assert.deepStrictEqual(incrementalResults[i], freshLines, `Mismatch at chunk ${i}: incremental vs fresh`);
+			}
+		});
+
+		it("should fall back to full parse on non-append edits", () => {
+			const markdown = new Markdown("Hello world", 0, 0, defaultMarkdownTheme);
+			markdown.render(80);
+
+			// Replace text (not append) — should still produce correct output
+			markdown.setText("Completely different text");
+			const lines = markdown.render(80);
+			const plain = lines.map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).join(" ");
+			assert.ok(plain.includes("Completely different text"));
+		});
+
+		it("should handle streaming code fence correctly", () => {
+			const markdown = new Markdown("", 0, 0, defaultMarkdownTheme);
+
+			// Chunk 1: unclosed code fence — render to prime incremental state
+			markdown.setText("Here is code:\n\n```typescript\nconst x = 1;");
+			markdown.render(80);
+
+			// Chunk 2: close the fence
+			markdown.setText("Here is code:\n\n```typescript\nconst x = 1;\n```\n\nDone.");
+			const lines2 = markdown.render(80);
+
+			// Verify from-scratch produces same result for chunk 2
+			const fresh = new Markdown(
+				"Here is code:\n\n```typescript\nconst x = 1;\n```\n\nDone.",
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+			const freshLines = fresh.render(80);
+			assert.deepStrictEqual(lines2, freshLines, "Closed fence should match fresh render");
+		});
+
+		it("should handle many sequential appends correctly (stress test for incremental path)", () => {
+			const markdown = new Markdown("", 0, 0, defaultMarkdownTheme);
+			let text = "";
+
+			// Simulate 20 streaming chunks covering all token types
+			const chunks = [
+				"# Hello World\n\n",
+				"This is the first paragraph with **bold** text.\n\n",
+				"- Item 1\n",
+				"- Item 2\n",
+				"- Item 3\n\n",
+				"```typescript\n",
+				"const x = 1;\n",
+				"const y = 2;\n",
+				"```\n\n",
+				"Another paragraph.\n\n",
+				"> A blockquote\n\n",
+				"| A | B |\n| --- | --- |\n| 1 | 2 |\n\n",
+				"Final text with `code` and *italic*.\n\n",
+				"---\n\n",
+				"Post-divider content.\n\n",
+				"1. First\n",
+				"2. Second\n",
+				"3. Third\n\n",
+				"Last paragraph here.\n",
+				"The very end.",
+			];
+
+			for (const chunk of chunks) {
+				text += chunk;
+				markdown.setText(text);
+				const incLines = markdown.render(80);
+
+				// Verify against fresh parse
+				const fresh = new Markdown(text, 0, 0, defaultMarkdownTheme);
+				const freshLines = fresh.render(80);
+				assert.deepStrictEqual(
+					incLines,
+					freshLines,
+					`Mismatch after adding chunk: "${chunk.trim().slice(0, 30)}..."`,
+				);
+			}
+		});
+
+		it("should produce correct output with thinking-style default text styling", () => {
+			const chunks = [
+				"Thinking about ",
+				"Thinking about the problem...\n\n",
+				"Thinking about the problem...\n\nThe solution involves `code` and **emphasis**.",
+			];
+
+			const incremental = new Markdown("", 1, 0, defaultMarkdownTheme, {
+				color: (text) => chalk.gray(text),
+				italic: true,
+			});
+
+			for (const chunk of chunks) {
+				incremental.setText(chunk);
+				const incLines = incremental.render(80);
+
+				const fresh = new Markdown(chunk, 1, 0, defaultMarkdownTheme, {
+					color: (text) => chalk.gray(text),
+					italic: true,
+				});
+				const freshLines = fresh.render(80);
+
+				assert.deepStrictEqual(incLines, freshLines, `Mismatch for chunk: "${chunk.slice(0, 30)}..."`);
+			}
+		});
+
+		it("should handle width changes with same text (token render cache recomputes)", () => {
+			const markdown = new Markdown("Hello world with some long text that wraps.", 0, 0, defaultMarkdownTheme);
+
+			const wide = markdown.render(80);
+			const narrow = markdown.render(30);
+
+			// Different widths should produce different line counts
+			assert.ok(narrow.length >= wide.length, "Narrow should have at least as many lines as wide");
+
+			// Re-render at original width should match
+			const wideAgain = markdown.render(80);
+			assert.deepStrictEqual(wideAgain, wide, "Re-render at same width should match");
+		});
+
+		it("should handle table streaming correctly", () => {
+			const markdown = new Markdown("", 0, 0, defaultMarkdownTheme);
+
+			// Partial table — render to prime incremental state
+			markdown.setText("| A | B |\n| --- | --- |\n| 1 | 2 |");
+			markdown.render(80);
+
+			// Append more rows
+			markdown.setText("| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |");
+			const lines2 = markdown.render(80);
+
+			// From scratch should match
+			const fresh = new Markdown("| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |", 0, 0, defaultMarkdownTheme);
+			assert.deepStrictEqual(lines2, fresh.render(80), "Table append should match fresh render");
+		});
+
+		it("should handle list streaming correctly", () => {
+			const markdown = new Markdown("", 0, 0, defaultMarkdownTheme);
+
+			markdown.setText("- Item 1\n- Item 2");
+			markdown.render(80);
+
+			markdown.setText("- Item 1\n- Item 2\n- Item 3");
+			const lines = markdown.render(80);
+
+			const fresh = new Markdown("- Item 1\n- Item 2\n- Item 3", 0, 0, defaultMarkdownTheme);
+			assert.deepStrictEqual(lines, fresh.render(80), "List append should match fresh render");
+		});
+	});
 });
