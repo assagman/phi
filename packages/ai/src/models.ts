@@ -12,6 +12,13 @@ for (const [provider, models] of Object.entries(MODELS)) {
 	modelRegistry.set(provider, providerModels);
 }
 
+// Temporary safety clamp: keep Anthropic Opus 4.6 at 200K context to avoid
+// requiring the context-1m beta header on non-entitled subscriptions.
+const anthropicOpus46 = modelRegistry.get("anthropic")?.get("claude-opus-4-6");
+if (anthropicOpus46) {
+	anthropicOpus46.contextWindow = 200_000;
+}
+
 type ModelApi<
 	TProvider extends KnownProvider,
 	TModelId extends keyof (typeof MODELS)[TProvider],
