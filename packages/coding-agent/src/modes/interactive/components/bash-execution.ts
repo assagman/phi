@@ -19,7 +19,7 @@ import { DynamicBorder } from "./dynamic-border.js";
 import { editorKey } from "./keybinding-hints.js";
 
 // Preview line limit when not expanded (matches tool execution behavior)
-const PREVIEW_LINES = 20;
+const PREVIEW_LINES = 5;
 
 /**
  * Wrapper component that delegates render() to a LiveFeed instance.
