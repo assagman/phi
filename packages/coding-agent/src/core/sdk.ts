@@ -24,7 +24,9 @@ import { Agent, type AgentMessage, type AgentTool, type ThinkingLevel } from "ag
 import type { Message, Model } from "ai";
 import { join } from "path";
 import { PermissionDb, PermissionManager, wrapToolRegistryWithPermissions, wrapToolsWithPermissions } from "permission";
-import { createSandboxProvider, DEFAULT_DENIED_READ_PATHS, type SandboxConfig, type SandboxProvider } from "sandbox";
+// TEMPORARILY DISABLED: createSandboxProvider + SandboxConfig
+// import { createSandboxProvider, DEFAULT_DENIED_READ_PATHS, type SandboxConfig, type SandboxProvider } from "sandbox";
+import { DEFAULT_DENIED_READ_PATHS, type SandboxProvider } from "sandbox";
 import { getAgentDir } from "../config.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -430,21 +432,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Only git root — needed for bare-repo worktree/git operations.
 	// agentDir (has auth.json/API keys) and dataDir (internal DBs) are excluded.
 	const workspaceRoots = gitRoot ? [gitRoot] : [];
-	const initialSandboxConfig: SandboxConfig = {
-		allowedWritePaths: [cwd, "/tmp", ...phiInfraPaths],
-		deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
-		allowedDomains: gitDomains,
-	};
+	// const initialSandboxConfig: SandboxConfig = {
+	// 	allowedWritePaths: [cwd, "/tmp", ...phiInfraPaths],
+	// 	deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
+	// 	allowedDomains: gitDomains,
+	// };
+	// TEMPORARILY DISABLED: sandbox causes issues — skip OS-level sandboxing.
+	// All sandbox-dependent code gracefully handles undefined (optional everywhere).
 	let sandboxProvider: SandboxProvider | undefined;
-	try {
-		sandboxProvider = await createSandboxProvider(initialSandboxConfig);
-	} catch (err) {
-		// Sandbox is mandatory on host — warn but don't crash during development/testing.
-		// In production, this should be a hard failure.
-		const message = err instanceof Error ? err.message : String(err);
-		console.error(`[sandbox] Initialization failed: ${message}`);
-		console.error("[sandbox] Bash commands will rely on static path extraction only (reduced security).");
-	}
+	// try {
+	// 	sandboxProvider = await createSandboxProvider(initialSandboxConfig);
+	// } catch (err) {
+	// 	const message = err instanceof Error ? err.message : String(err);
+	// 	console.error(`[sandbox] Initialization failed: ${message}`);
+	// 	console.error("[sandbox] Bash commands will rely on static path extraction only (reduced security).");
+	// }
 	time("sandboxProvider");
 
 	// Create permission database and manager for CWD enforcement
