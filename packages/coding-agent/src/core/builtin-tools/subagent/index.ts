@@ -289,6 +289,45 @@ function getCacheKey(cwd: string, scope: string): string {
 	return `${cwd}:${scope}`;
 }
 
+/**
+ * Look up a preset by name.
+ * Returns undefined if no preset with that name exists.
+ */
+function getPreset(name: string): AgentDefinition | undefined {
+	const entry = PRESET_MAP[name];
+	if (!entry) return undefined;
+	const { template } = entry;
+	return {
+		name: template.name,
+		description: template.description,
+		source: "preset",
+		systemPrompt: template.systemPrompt,
+		thinkingLevel: template.thinkingLevel,
+		temperature: template.temperature,
+		model: template.model,
+		tools: template.tools,
+	};
+}
+
+/**
+ * Merge a user/project agent on top of a matching preset.
+ * User-defined fields take precedence; undefined fields fall back to the preset.
+ * The source is preserved from the override (user or project).
+ */
+function mergeWithPreset(override: AgentDefinition, preset: AgentDefinition): AgentDefinition {
+	return {
+		name: override.name,
+		description: override.description || preset.description,
+		source: override.source,
+		filePath: override.filePath,
+		model: override.model ?? preset.model,
+		tools: override.tools ?? preset.tools,
+		systemPrompt: override.systemPrompt || preset.systemPrompt,
+		thinkingLevel: override.thinkingLevel ?? preset.thinkingLevel,
+		temperature: override.temperature ?? preset.temperature,
+	};
+}
+
 export function createAgentRegistry(cwd: string, scope: "preset" | "user" | "project" | "all" = "all"): AgentRegistry {
 	const cacheKey = getCacheKey(cwd, scope);
 	const cached = registryCache.get(cacheKey);
@@ -298,46 +337,53 @@ export function createAgentRegistry(cwd: string, scope: "preset" | "user" | "pro
 		return cached.registry;
 	}
 
+	// Resolution order: project → user → preset (most specific wins).
+	// When a user/project agent matches a preset name, fields are merged
+	// so partial overrides work (e.g. only change model, inherit the rest).
 	const agents: AgentDefinition[] = [];
 	const seen = new Set<string>();
 
-	// Load presets
-	if (scope === "all" || scope === "preset") {
-		for (const [name, { template }] of Object.entries(PRESET_MAP)) {
-			agents.push({
-				name: template.name,
-				description: template.description,
-				source: "preset",
-				systemPrompt: template.systemPrompt,
-				thinkingLevel: template.thinkingLevel,
-				temperature: template.temperature,
-				model: template.model,
-				tools: template.tools,
-			});
-			seen.add(name);
-		}
-	}
-
-	// Load user agents (~/.phi/agent/agents/)
-	if (scope === "all" || scope === "user") {
-		const userDir = join(homedir(), ".phi", "agent", "agents");
-		for (const agent of loadAgentsFromDir(userDir, "user")) {
-			if (!seen.has(agent.name)) {
-				agents.push(agent);
-				seen.add(agent.name);
-			}
-		}
-	}
-
-	// Load project agents (./.phi/agents/)
+	// 1. Load project agents (./.phi/agents/) — highest priority
 	if (scope === "all" || scope === "project") {
 		const projectDir = findProjectAgentsDir(cwd);
 		if (projectDir) {
 			for (const agent of loadAgentsFromDir(projectDir, "project")) {
 				if (!seen.has(agent.name)) {
-					agents.push(agent);
+					const preset = getPreset(agent.name);
+					agents.push(preset ? mergeWithPreset(agent, preset) : agent);
 					seen.add(agent.name);
 				}
+			}
+		}
+	}
+
+	// 2. Load user agents (~/.phi/agent/agents/) — overrides presets
+	if (scope === "all" || scope === "user") {
+		const userDir = join(homedir(), ".phi", "agent", "agents");
+		for (const agent of loadAgentsFromDir(userDir, "user")) {
+			if (!seen.has(agent.name)) {
+				const preset = getPreset(agent.name);
+				agents.push(preset ? mergeWithPreset(agent, preset) : agent);
+				seen.add(agent.name);
+			}
+		}
+	}
+
+	// 3. Load presets — lowest priority, only if not already overridden
+	if (scope === "all" || scope === "preset") {
+		for (const [name, { template }] of Object.entries(PRESET_MAP)) {
+			if (!seen.has(name)) {
+				agents.push({
+					name: template.name,
+					description: template.description,
+					source: "preset",
+					systemPrompt: template.systemPrompt,
+					thinkingLevel: template.thinkingLevel,
+					temperature: template.temperature,
+					model: template.model,
+					tools: template.tools,
+				});
+				seen.add(name);
 			}
 		}
 	}

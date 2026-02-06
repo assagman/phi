@@ -136,6 +136,7 @@ export function getDefaultWritePaths(): string[] {
 		"/dev/autofs_nowait",
 		"/tmp/phi",
 		"/private/tmp/phi",
+		join(homeDir, ".bun"),
 		join(homeDir, ".npm/_logs"),
 		join(homeDir, ".claude/debug"),
 	];
