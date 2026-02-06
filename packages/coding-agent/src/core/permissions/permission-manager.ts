@@ -118,7 +118,7 @@ export class PermissionManager {
 	 * Check if a directory permission is already granted (without prompting).
 	 */
 	checkDirectory(absolutePath: string): PermissionCheckResult {
-		const resolved = resolvePath(absolutePath);
+		const resolved = safeRealpath(resolvePath(absolutePath));
 
 		// Within CWD — always allowed
 		if (this.isWithinCwd(resolved)) {
@@ -149,7 +149,7 @@ export class PermissionManager {
 	 * Returns the check result (granted or denied with optional user message).
 	 */
 	async requestDirectory(absolutePath: string, toolName: string): Promise<PermissionCheckResult> {
-		const resolved = resolvePath(absolutePath);
+		const resolved = safeRealpath(resolvePath(absolutePath));
 
 		// Check existing grants first
 		const existing = this.checkDirectory(resolved);
@@ -178,10 +178,11 @@ export class PermissionManager {
 	 * Grant a permission directly (used by pre-allowed dirs and programmatic grants).
 	 */
 	grant(type: PermissionType, resource: string, scope: PermissionScope): void {
-		const key = this._resourceKey(type, resource);
+		const resolved = type === "directory" ? safeRealpath(resolvePath(resource)) : resource;
+		const key = this._resourceKey(type, resolved);
 		const grant: PermissionGrant = {
 			type,
-			resource,
+			resource: resolved,
 			scope,
 			grantedAt: new Date().toISOString(),
 		};
@@ -226,7 +227,8 @@ export class PermissionManager {
 	 * Revoke a persistent grant.
 	 */
 	revokePersistent(type: PermissionType, resource: string): boolean {
-		const key = this._resourceKey(type, resource);
+		const resolved = type === "directory" ? safeRealpath(resolvePath(resource)) : resource;
+		const key = this._resourceKey(type, resolved);
 		const deleted = this._persistentGrants.delete(key);
 		if (deleted) {
 			this._savePersistentGrants();
@@ -293,8 +295,10 @@ export class PermissionManager {
 			if (Array.isArray(data.grants)) {
 				for (const grant of data.grants) {
 					if (grant.type && grant.resource && grant.scope === "persistent") {
-						const key = this._resourceKey(grant.type, grant.resource);
-						this._persistentGrants.set(key, grant);
+						const resolved =
+							grant.type === "directory" ? safeRealpath(resolvePath(grant.resource)) : grant.resource;
+						const key = this._resourceKey(grant.type, resolved);
+						this._persistentGrants.set(key, { ...grant, resource: resolved });
 					}
 				}
 			}
