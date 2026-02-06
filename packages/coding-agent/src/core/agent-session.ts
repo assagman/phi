@@ -628,8 +628,8 @@ export class AgentSession {
 		// Clear session-scoped permissions and close permission DB
 		this._permissionManager?.clearSessionGrants();
 		this._permissionManager?.close();
-		// Dispose sandbox provider (clean up proxies, etc.)
-		this._sandboxProvider?.dispose();
+		// Dispose sandbox provider (fire-and-forget — dispose is async but cleanup is best-effort)
+		void this._sandboxProvider?.dispose();
 	}
 
 	// =========================================================================
@@ -1996,7 +1996,16 @@ export class AgentSession {
 
 		// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
 		const prefix = this.settingsManager.getShellCommandPrefix();
-		const resolvedCommand = prefix ? `${prefix}\n${command}` : command;
+		let resolvedCommand = prefix ? `${prefix}\n${command}` : command;
+
+		// Wrap with sandbox if available (same protection as agent bash tool)
+		if (this._sandboxProvider) {
+			try {
+				resolvedCommand = await this._sandboxProvider.wrapCommand(resolvedCommand, this._cwd);
+			} catch {
+				// Sandbox wrap failed — proceed without (static extraction still active)
+			}
+		}
 
 		try {
 			const result = options?.operations

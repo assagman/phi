@@ -391,9 +391,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let sandboxProvider: SandboxProvider | undefined;
 	try {
 		sandboxProvider = await createSandboxProvider(initialSandboxConfig);
-	} catch {
-		// Sandbox initialization failed — log but continue
-		// Static path extraction still provides Layer 1 defense
+	} catch (err) {
+		// Sandbox is mandatory on host — warn but don't crash during development/testing.
+		// In production, this should be a hard failure.
+		const message = err instanceof Error ? err.message : String(err);
+		console.error(`[sandbox] Initialization failed: ${message}`);
+		console.error("[sandbox] Bash commands will rely on static path extraction only (reduced security).");
 	}
 	time("sandboxProvider");
 
