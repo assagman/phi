@@ -13,7 +13,7 @@
  * All operations are audit-logged to SQLite.
  */
 
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve as resolvePath } from "node:path";
 import type { PermissionDb } from "./permission-db.js";
@@ -297,6 +297,21 @@ export class PermissionManager {
 		const existing = this.checkDirectory(resolved, action);
 		if (existing.status === "granted") {
 			return existing;
+		}
+
+		// Auto-reject requests for non-existing directories — no point
+		// prompting the user for a path that doesn't exist on disk.
+		if (!existsSync(resolved)) {
+			this._db.logAudit({
+				event: "request",
+				type: "directory",
+				action,
+				resource: resolved,
+				toolName,
+				result: "denied",
+				reason: "path_not_found",
+			});
+			return { status: "denied", userMessage: `Path does not exist: ${resolved}` };
 		}
 
 		if (!this._promptFn) {
