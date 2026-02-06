@@ -15,7 +15,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 // ============ Constants ============
 
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 const LOCAL_SHARE = join(homedir(), ".local", "share");
 
 // ============ Repo ID Helpers (inlined from shared) ============
@@ -192,7 +192,7 @@ function migrateV1ToV2(database: Database, dbPath: string): void {
         title TEXT NOT NULL,
         description TEXT,
         status TEXT NOT NULL DEFAULT 'todo'
-          CHECK(status IN ('todo','in_progress','blocked','done','cancelled')),
+          CHECK(status IN ('todo','planned','in_progress','blocked','done','cancelled')),
         priority TEXT DEFAULT 'medium'
           CHECK(priority IN ('low','medium','high','critical')),
         tags TEXT,
@@ -226,6 +226,57 @@ function migrateV1ToV2(database: Database, dbPath: string): void {
 	}
 }
 
+function migrateV2ToV3(database: Database, dbPath: string): void {
+	// Backup before migration
+	copyFileSync(dbPath, `${dbPath}.v2.bak`);
+
+	database.exec("PRAGMA foreign_keys = OFF");
+	database.exec("BEGIN IMMEDIATE");
+
+	try {
+		// Rebuild table with 'planned' status in CHECK constraint
+		database.exec(`
+      DROP TABLE IF EXISTS tasks_new;
+
+      CREATE TABLE tasks_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL DEFAULT 'todo'
+          CHECK(status IN ('todo','planned','in_progress','blocked','done','cancelled')),
+        priority TEXT DEFAULT 'medium'
+          CHECK(priority IN ('low','medium','high','critical')),
+        tags TEXT,
+        parent_id INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        FOREIGN KEY (parent_id) REFERENCES tasks_new(id) ON DELETE CASCADE
+      );
+
+      INSERT INTO tasks_new (id, title, description, status, priority, tags, parent_id, created_at, updated_at, completed_at)
+      SELECT id, title, description, status, priority, tags, parent_id, created_at, updated_at, completed_at
+      FROM tasks;
+
+      DROP TABLE tasks;
+      ALTER TABLE tasks_new RENAME TO tasks;
+
+      CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+      CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
+      CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+
+      INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 3);
+    `);
+
+		database.exec("COMMIT");
+	} catch (e) {
+		database.exec("ROLLBACK");
+		throw e;
+	} finally {
+		database.exec("PRAGMA foreign_keys = ON");
+	}
+}
+
 function initSchema(): void {
 	if (!db) throw new Error("Database not initialized");
 
@@ -235,14 +286,18 @@ function initSchema(): void {
 		migrateV1ToV2(db, currentDbPath!);
 	}
 
-	// For fresh DBs, create v2 schema directly
+	if (!isFresh && current < 3) {
+		migrateV2ToV3(db, currentDbPath!);
+	}
+
+	// For fresh DBs, create v3 schema directly
 	db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
       description TEXT,
       status TEXT NOT NULL DEFAULT 'todo'
-        CHECK(status IN ('todo','in_progress','blocked','done','cancelled')),
+        CHECK(status IN ('todo','planned','in_progress','blocked','done','cancelled')),
       priority TEXT DEFAULT 'medium'
         CHECK(priority IN ('low','medium','high','critical')),
       tags TEXT,
@@ -261,11 +316,12 @@ function initSchema(): void {
 
 // ============ Types ============
 
-export type TaskStatus = "todo" | "in_progress" | "blocked" | "done" | "cancelled";
+export type TaskStatus = "todo" | "planned" | "in_progress" | "blocked" | "done" | "cancelled";
 export type TaskPriority = "low" | "medium" | "high" | "critical";
 
 export const TASK_STATUS_ICONS: Record<TaskStatus, string> = {
 	todo: "○",
+	planned: "▣",
 	in_progress: "◐",
 	blocked: "⊘",
 	done: "●",
@@ -507,6 +563,7 @@ export function deleteTask(id: number): boolean {
 
 export interface TaskSummary {
 	todo: number;
+	planned: number;
 	in_progress: number;
 	blocked: number;
 	done: number;
@@ -524,6 +581,7 @@ export function getTaskSummary(): TaskSummary {
 
 	const summary: TaskSummary = {
 		todo: 0,
+		planned: 0,
 		in_progress: 0,
 		blocked: 0,
 		done: 0,
@@ -536,7 +594,7 @@ export function getTaskSummary(): TaskSummary {
 	}
 
 	summary.activeTasks = listTasks({
-		status: ["todo", "in_progress", "blocked"],
+		status: ["todo", "planned", "in_progress", "blocked"],
 		limit: 20,
 	});
 
@@ -564,7 +622,7 @@ export function buildTasksPrompt(options: PromptOptions = {}): string {
 	);
 	lines.push("");
 
-	const activeCount = summary.todo + summary.in_progress + summary.blocked;
+	const activeCount = summary.todo + summary.planned + summary.in_progress + summary.blocked;
 	if (activeCount > 0) {
 		lines.push("## Active Tasks");
 		for (const task of summary.activeTasks) {
@@ -581,7 +639,7 @@ export function buildTasksPrompt(options: PromptOptions = {}): string {
 
 	lines.push("## Overview");
 	lines.push(
-		`Status: ${summary.todo} todo, ${summary.in_progress} in progress, ${summary.blocked} blocked, ${summary.done} done`,
+		`Status: ${summary.todo} todo, ${summary.planned} planned, ${summary.in_progress} in progress, ${summary.blocked} blocked, ${summary.done} done`,
 	);
 	lines.push("");
 

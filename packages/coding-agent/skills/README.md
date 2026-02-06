@@ -47,6 +47,8 @@ phi_delta forget 99               # delete
 # Quick status commands (list or transition)
 phi_epsilon todo                  # list todo
 phi_epsilon todo 1                # mark #1 as todo
+phi_epsilon planned               # list planned
+phi_epsilon planned 1             # mark #1 as planned
 phi_epsilon wip                   # list in-progress
 phi_epsilon wip 1                 # start working on #1
 phi_epsilon done                  # list completed
@@ -55,7 +57,7 @@ phi_epsilon drop 1                # cancel #1
 
 # Task management
 phi_epsilon add "task title" --priority high
-phi_epsilon backlog               # wip + todo by priority
+phi_epsilon backlog               # wip + planned + todo by priority
 phi_epsilon next                  # highest priority todo
 phi_epsilon get 1                 # details
 phi_epsilon tag 1 backend         # add tag
@@ -73,7 +75,7 @@ phi_delta:
   --importance N    1=low  2=normal  3=high  4=critical
 
 phi_epsilon:
-  --status S        todo | in_progress | blocked | done | cancelled
+  --status S        todo | planned | in_progress | blocked | done | cancelled
   --priority P      low | medium | high | critical
 ```
 

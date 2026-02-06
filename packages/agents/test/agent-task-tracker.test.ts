@@ -19,7 +19,7 @@ describe("Epsilon Task Output Parsing", () => {
 
 		it("should extract title from task detail line", () => {
 			const text = "Created task #1:\n✓ #1 [medium] My Task Title [tag]\n  todo | 2026-02-04";
-			const titleMatch = text.match(/[○◐✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
+			const titleMatch = text.match(/[○▣◐⊘✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
 			expect(titleMatch).not.toBeNull();
 			expect(titleMatch![1].trim()).toBe("My Task Title");
 		});
@@ -27,15 +27,15 @@ describe("Epsilon Task Output Parsing", () => {
 		it("should extract status from status line", () => {
 			const text = "Created task #1:\n✓ #1 [medium] My Task Title\n  in_progress | 2026-02-04";
 			const lines = text.split("\n");
-			const statusLine = lines.find((l) => /^\s+(todo|in_progress|blocked|done|cancelled)\s*\|/i.test(l));
+			const statusLine = lines.find((l) => /^\s+(todo|planned|in_progress|blocked|done|cancelled)\s*\|/i.test(l));
 			expect(statusLine).not.toBeUndefined();
-			const status = statusLine!.match(/^\s+(todo|in_progress|blocked|done|cancelled)/i)?.[1]?.toLowerCase();
+			const status = statusLine!.match(/^\s+(todo|planned|in_progress|blocked|done|cancelled)/i)?.[1]?.toLowerCase();
 			expect(status).toBe("in_progress");
 		});
 
 		it("should handle title with special characters", () => {
 			const text = "Created task #42:\n✓ #42 [high] Fix bug: memory leak [urgent]\n  todo | 2026-02-04";
-			const titleMatch = text.match(/[○◐✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
+			const titleMatch = text.match(/[○▣◐⊘✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
 			expect(titleMatch).not.toBeNull();
 			expect(titleMatch![1].trim()).toBe("Fix bug: memory leak");
 		});
@@ -72,16 +72,16 @@ describe("Epsilon Task Output Parsing", () => {
 		it("should extract new status from update", () => {
 			const text = "Updated task #5:\n✓ #5 [high] My Task\n  done | 2026-02-04";
 			const lines = text.split("\n");
-			const statusLine = lines.find((l) => /^\s+(todo|in_progress|blocked|done|cancelled)\s*\|/i.test(l));
-			const status = statusLine!.match(/^\s+(todo|in_progress|blocked|done|cancelled)/i)?.[1]?.toLowerCase();
+			const statusLine = lines.find((l) => /^\s+(todo|planned|in_progress|blocked|done|cancelled)\s*\|/i.test(l));
+			const status = statusLine!.match(/^\s+(todo|planned|in_progress|blocked|done|cancelled)/i)?.[1]?.toLowerCase();
 			expect(status).toBe("done");
 		});
 
 		it("should handle cancelled status", () => {
 			const text = "Updated task #10:\n✗ #10 [low] Cancelled Task\n  cancelled | 2026-02-04";
 			const lines = text.split("\n");
-			const statusLine = lines.find((l) => /^\s+(todo|in_progress|blocked|done|cancelled)\s*\|/i.test(l));
-			const status = statusLine!.match(/^\s+(todo|in_progress|blocked|done|cancelled)/i)?.[1]?.toLowerCase();
+			const statusLine = lines.find((l) => /^\s+(todo|planned|in_progress|blocked|done|cancelled)\s*\|/i.test(l));
+			const status = statusLine!.match(/^\s+(todo|planned|in_progress|blocked|done|cancelled)/i)?.[1]?.toLowerCase();
 			expect(status).toBe("cancelled");
 		});
 	});
@@ -121,25 +121,37 @@ describe("Epsilon Task Output Parsing", () => {
 	describe("Status Icon Patterns", () => {
 		it("should match todo icon (○)", () => {
 			const text = "○ #1 [medium] Pending Task";
-			const match = text.match(/[○◐✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
+			const match = text.match(/[○▣◐⊘✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
+			expect(match).not.toBeNull();
+		});
+
+		it("should match planned icon (▣)", () => {
+			const text = "▣ #1 [medium] Planned Task";
+			const match = text.match(/[○▣◐⊘✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
 			expect(match).not.toBeNull();
 		});
 
 		it("should match in_progress icon (◐)", () => {
 			const text = "◐ #1 [medium] In Progress Task";
-			const match = text.match(/[○◐✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
+			const match = text.match(/[○▣◐⊘✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
+			expect(match).not.toBeNull();
+		});
+
+		it("should match blocked icon (⊘)", () => {
+			const text = "⊘ #1 [medium] Blocked Task";
+			const match = text.match(/[○▣◐⊘✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
 			expect(match).not.toBeNull();
 		});
 
 		it("should match done icon (✓)", () => {
 			const text = "✓ #1 [medium] Done Task";
-			const match = text.match(/[○◐✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
+			const match = text.match(/[○▣◐⊘✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
 			expect(match).not.toBeNull();
 		});
 
 		it("should match error icon (✗)", () => {
 			const text = "✗ #1 [medium] Cancelled Task";
-			const match = text.match(/[○◐✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
+			const match = text.match(/[○▣◐⊘✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
 			expect(match).not.toBeNull();
 		});
 	});
@@ -177,7 +189,7 @@ describe("Epsilon Task Output Parsing", () => {
 		it("should handle title with brackets", () => {
 			// Title with brackets should stop at the tag bracket
 			const text = "✓ #1 [medium] Task [with] brackets [tag1, tag2]";
-			const titleMatch = text.match(/[○◐✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
+			const titleMatch = text.match(/[○▣◐⊘✓✗]\s+#\d+\s+\[\w+\]\s+([^[\n]+)/);
 			expect(titleMatch).not.toBeNull();
 			expect(titleMatch![1].trim()).toBe("Task");
 		});
@@ -186,7 +198,7 @@ describe("Epsilon Task Output Parsing", () => {
 
 describe("AgentTaskInfo Calculation", () => {
 	// Type for task status (matches TaskStatus in types.ts)
-	type TaskStatus = "todo" | "in_progress" | "blocked" | "done" | "cancelled";
+	type TaskStatus = "todo" | "planned" | "in_progress" | "blocked" | "done" | "cancelled";
 	type TaskEntry = { title: string; status: TaskStatus };
 
 	// These tests verify the getTaskInfo logic

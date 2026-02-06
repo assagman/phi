@@ -28,6 +28,7 @@ import {
 
 const TaskStatusEnum = Type.Union([
 	Type.Literal("todo"),
+	Type.Literal("planned"),
 	Type.Literal("in_progress"),
 	Type.Literal("blocked"),
 	Type.Literal("done"),
@@ -177,7 +178,7 @@ function formatTask(task: Task): string {
 const epsilonTaskCreate = createTool(
 	"epsilon_task_create",
 	"Create Task",
-	"Create a new task. Priority: low/medium/high/critical. Status: todo/in_progress/blocked/done/cancelled.",
+	"Create a new task. Priority: low/medium/high/critical. Status: todo/planned/in_progress/blocked/done/cancelled.",
 	TaskCreateSchema,
 	(input) => {
 		const id = createTask(input);
