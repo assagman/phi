@@ -4109,6 +4109,23 @@ export const MODELS = {
 			contextWindow: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
+		"gpt-5.3-codex": {
+			id: "gpt-5.3-codex",
+			name: "GPT-5.3 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: {
+				input: 1.75,
+				output: 14,
+				cacheRead: 0.175,
+				cacheWrite: 0,
+			},
+			contextWindow: 400000,
+			maxTokens: 128000,
+		} satisfies Model<"openai-codex-responses">,
 	},
 	"opencode": {
 		"big-pickle": {
@@ -8525,13 +8542,13 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text"],
 			cost: {
-				input: 0.07,
+				input: 0.06,
 				output: 0.39999999999999997,
-				cacheRead: 0.01,
+				cacheRead: 0.0100000002,
 				cacheWrite: 0,
 			},
-			contextWindow: 200000,
-			maxTokens: 131072,
+			contextWindow: 202752,
+			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 	},
 	"vercel-ai-gateway": {
