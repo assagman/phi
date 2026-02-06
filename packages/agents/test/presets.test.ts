@@ -24,7 +24,7 @@ describe("Preset Templates", () => {
 			expect(reviewerTemplate.name).toBe("reviewer");
 			expect(reviewerTemplate.description).toBeDefined();
 			expect(reviewerTemplate.systemPrompt).toContain("code reviewer");
-			expect(reviewerTemplate.model).toBe("openai-codex/gpt-5.2");
+			expect(reviewerTemplate.model).toBe("openai-codex/gpt-5.3-codex");
 			expect(reviewerTemplate.thinkingLevel).toBe("high");
 			expect(reviewerTemplate.temperature).toBe(0.6);
 		});
@@ -62,7 +62,7 @@ describe("Preset Templates", () => {
 			expect(plannerTemplate.name).toBe("planner");
 			expect(plannerTemplate.description).toBeDefined();
 			expect(plannerTemplate.systemPrompt).toContain("planner");
-			expect(plannerTemplate.model).toBe("openai-codex/gpt-5.2");
+			expect(plannerTemplate.model).toBe("openai-codex/gpt-5.3-codex");
 			expect(plannerTemplate.thinkingLevel).toBe("high");
 			expect(plannerTemplate.temperature).toBe(0.3);
 		});

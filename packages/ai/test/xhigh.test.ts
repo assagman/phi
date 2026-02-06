@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getModel } from "../src/models.js";
+import { getModel, supportsXhigh } from "../src/models.js";
 import { stream } from "../src/stream.js";
 import type { Context, Model } from "../src/types.js";
 
@@ -14,6 +14,17 @@ function makeContext(): Context {
 		],
 	};
 }
+
+describe("supportsXhigh model capability", () => {
+	it("returns true for gpt-5.3-codex", () => {
+		expect(supportsXhigh(getModel("openai-codex", "gpt-5.3-codex"))).toBe(true);
+		expect(supportsXhigh(getModel("openai", "gpt-5.3-codex"))).toBe(true);
+	});
+
+	it("returns false for non-xhigh models", () => {
+		expect(supportsXhigh(getModel("openai", "gpt-5-mini"))).toBe(false);
+	});
+});
 
 describe.skipIf(!process.env.OPENAI_API_KEY)("xhigh reasoning", () => {
 	describe("codex-max (supports xhigh)", () => {
