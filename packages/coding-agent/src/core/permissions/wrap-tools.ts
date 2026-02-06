@@ -15,6 +15,7 @@
 import { dirname } from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "agent";
 import { resolveToCwd } from "../tools/path-utils.js";
+import { extractHostsFromCommand } from "./bash-domain-extractor.js";
 import { extractPathsFromCommand } from "./bash-path-extractor.js";
 import type { PermissionManager } from "./permission-manager.js";
 import type { PermissionAction } from "./types.js";
@@ -125,6 +126,21 @@ function wrapTool(tool: AgentTool, permissionManager: PermissionManager): AgentT
 					if (error) {
 						return {
 							content: [{ type: "text", text: error }],
+							details: {},
+						};
+					}
+				}
+
+				// Bash: extract network hosts and check each
+				const hosts = extractHostsFromCommand(command);
+				for (const host of hosts) {
+					const result = await permissionManager.requestNetwork(host, toolName);
+					if (result.status === "denied") {
+						const msg = result.userMessage
+							? `Permission denied: network access to ${host} was rejected by user.\nUser message: ${result.userMessage}`
+							: `Permission denied: network access to ${host} was rejected by user.`;
+						return {
+							content: [{ type: "text", text: msg }],
 							details: {},
 						};
 					}
