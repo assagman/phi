@@ -1,15 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { extractRetryDelay } from "../src/providers/google-gemini-cli.js";
 
 describe("extractRetryDelay header parsing", () => {
+	let originalDateNow: typeof Date.now;
+
+	beforeEach(() => {
+		originalDateNow = Date.now;
+	});
+
 	afterEach(() => {
-		vi.useRealTimers();
+		Date.now = originalDateNow;
 	});
 
 	it("prefers Retry-After seconds header", () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
-
 		const response = new Response("", { headers: { "Retry-After": "5" } });
 		const delay = extractRetryDelay("Please retry in 1s", response);
 
@@ -17,9 +20,8 @@ describe("extractRetryDelay header parsing", () => {
 	});
 
 	it("parses Retry-After HTTP date header", () => {
-		vi.useFakeTimers();
 		const now = new Date("2025-01-01T00:00:00Z");
-		vi.setSystemTime(now);
+		Date.now = () => now.getTime();
 
 		const retryAt = new Date(now.getTime() + 12000).toUTCString();
 		const response = new Response("", { headers: { "Retry-After": retryAt } });
@@ -29,9 +31,8 @@ describe("extractRetryDelay header parsing", () => {
 	});
 
 	it("parses x-ratelimit-reset header", () => {
-		vi.useFakeTimers();
 		const now = new Date("2025-01-01T00:00:00Z");
-		vi.setSystemTime(now);
+		Date.now = () => now.getTime();
 
 		const resetAtMs = now.getTime() + 20000;
 		const resetSeconds = Math.floor(resetAtMs / 1000).toString();
@@ -42,9 +43,6 @@ describe("extractRetryDelay header parsing", () => {
 	});
 
 	it("parses x-ratelimit-reset-after header", () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
-
 		const response = new Response("", { headers: { "x-ratelimit-reset-after": "30" } });
 		const delay = extractRetryDelay("", response);
 
