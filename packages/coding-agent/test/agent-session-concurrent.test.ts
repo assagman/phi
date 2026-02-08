@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "agent";
 import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "ai";
-import { PermissionDb, PermissionManager } from "permission";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -104,15 +104,11 @@ describe("AgentSession concurrent prompt guard", () => {
 		// Set a runtime API key so validation passes
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
-		const permissionDb = new PermissionDb(join(tempDir, "permissions.db"));
-		const permissionManager = new PermissionManager({ cwd: tempDir, db: permissionDb, preAllowedDirs: [] });
-
 		session = new AgentSession({
 			agent,
 			sessionManager,
 			settingsManager,
 			modelRegistry,
-			permissionManager,
 		});
 
 		return session;
@@ -198,15 +194,11 @@ describe("AgentSession concurrent prompt guard", () => {
 		const modelRegistry = new ModelRegistry(authStorage, tempDir);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
-		const permissionDb2 = new PermissionDb(join(tempDir, "permissions2.db"));
-		const permissionManager2 = new PermissionManager({ cwd: tempDir, db: permissionDb2, preAllowedDirs: [] });
-
 		session = new AgentSession({
 			agent,
 			sessionManager,
 			settingsManager,
 			modelRegistry,
-			permissionManager: permissionManager2,
 		});
 
 		// First prompt completes
