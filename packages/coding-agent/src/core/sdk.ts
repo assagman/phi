@@ -23,10 +23,6 @@
 import { Agent, type AgentMessage, type AgentTool, type ThinkingLevel } from "agent";
 import type { Message, Model } from "ai";
 import { join } from "path";
-import { PermissionDb, PermissionManager, wrapToolRegistryWithPermissions, wrapToolsWithPermissions } from "permission";
-// TEMPORARILY DISABLED: createSandboxProvider + SandboxConfig
-// import { createSandboxProvider, DEFAULT_DENIED_READ_PATHS, type SandboxConfig, type SandboxProvider } from "sandbox";
-import { DEFAULT_DENIED_READ_PATHS, type SandboxProvider } from "sandbox";
 import { getAgentDir } from "../config.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -34,7 +30,6 @@ import {
 	type BuiltinToolsLifecycle,
 	createBuiltinToolsLifecycle,
 	createBuiltinUIContext,
-	getDataDir,
 } from "./builtin-tools/index.js";
 import {
 	computeFileLists,
@@ -159,10 +154,6 @@ export interface CreateAgentSessionResult {
 	modelFallbackMessage?: string;
 	/** Builtin tools lifecycle (for UI context setup in interactive mode) */
 	builtinToolsLifecycle: BuiltinToolsLifecycle;
-	/** Permission manager for CWD enforcement and directory access control */
-	permissionManager?: PermissionManager;
-	/** Sandbox provider for OS-level bash command sandboxing (undefined if init failed) */
-	sandboxProvider?: SandboxProvider;
 }
 
 // Re-exports
@@ -203,51 +194,6 @@ export {
 
 function getDefaultAgentDir(): string {
 	return getAgentDir();
-}
-
-/** Resolve the git root directory that needs write access (bare repo root or .git dir). */
-function getGitRootDir(cwd: string): string | null {
-	try {
-		const { execSync } = require("node:child_process") as typeof import("node:child_process");
-		const stdio: ["pipe", "pipe", "pipe"] = ["pipe", "pipe", "pipe"];
-		const commonDir = execSync("git rev-parse --git-common-dir", {
-			cwd,
-			encoding: "utf-8",
-			stdio,
-			timeout: 3000,
-		}).trim();
-		const { resolve } = require("node:path") as typeof import("node:path");
-		return resolve(cwd, commonDir);
-	} catch {
-		return null;
-	}
-}
-
-/** Extract unique hostnames from git remote URLs. */
-function getGitRemoteDomains(cwd: string): string[] {
-	try {
-		const { execSync } = require("node:child_process") as typeof import("node:child_process");
-		const stdio: ["pipe", "pipe", "pipe"] = ["pipe", "pipe", "pipe"];
-		const output = execSync("git remote -v", { cwd, encoding: "utf-8", stdio, timeout: 3000 }).trim();
-		if (!output) return [];
-		const domains = new Set<string>();
-		for (const line of output.split("\n")) {
-			const url = line.split(/\s+/)[1];
-			if (!url) continue;
-			// SSH: git@github.com:user/repo.git
-			const sshMatch = url.match(/@([^:/]+)/);
-			if (sshMatch) {
-				domains.add(sshMatch[1]);
-				continue;
-			}
-			// HTTPS: https://github.com/user/repo.git
-			const httpsMatch = url.match(/https?:\/\/([^/]+)/);
-			if (httpsMatch) domains.add(httpsMatch[1]);
-		}
-		return [...domains];
-	} catch {
-		return [];
-	}
 }
 
 // Discovery Functions
@@ -422,87 +368,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd);
 	time("sessionManager");
 
-	// Initialize OS-level sandbox for bash command enforcement
-	const gitRoot = getGitRootDir(cwd);
-	const gitDomains = getGitRemoteDomains(cwd);
-	// Paths phi's own code needs write access to (sandbox layer).
-	// Includes DB storage, agent config dir, and git root for worktree metadata.
-	const phiInfraPaths = [getDataDir(cwd), agentDir, ...(gitRoot ? [gitRoot] : [])];
-	// Paths the LLM tools can access without prompting (permission layer).
-	// Only git root — needed for bare-repo worktree/git operations.
-	// agentDir (has auth.json/API keys) and dataDir (internal DBs) are excluded.
-	const workspaceRoots = gitRoot ? [gitRoot] : [];
-	// const initialSandboxConfig: SandboxConfig = {
-	// 	allowedWritePaths: [cwd, "/tmp", ...phiInfraPaths],
-	// 	deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
-	// 	allowedDomains: gitDomains,
-	// };
-	// TEMPORARILY DISABLED: sandbox causes issues — skip OS-level sandboxing.
-	// All sandbox-dependent code gracefully handles undefined (optional everywhere).
-	let sandboxProvider: SandboxProvider | undefined;
-	// try {
-	// 	sandboxProvider = await createSandboxProvider(initialSandboxConfig);
-	// } catch (err) {
-	// 	const message = err instanceof Error ? err.message : String(err);
-	// 	console.error(`[sandbox] Initialization failed: ${message}`);
-	// 	console.error("[sandbox] Bash commands will rely on static path extraction only (reduced security).");
-	// }
-	time("sandboxProvider");
-
-	// Create permission database and manager for CWD enforcement
-	const permissionDb = new PermissionDb(join(getDataDir(cwd), "permissions.db"));
-	const capturedSandbox = sandboxProvider;
-	const permissionManager = new PermissionManager({
-		cwd,
-		db: permissionDb,
-		// Workspace roots: auto-allowed directories (git common dir, phi infrastructure).
-		// Paths within these dirs are granted automatically without prompting — essential
-		// for bare-repo worktree operations and phi data storage.
-		workspaceRoots,
-		preAllowedDirs: settingsManager.getAllowedDirs(),
-		legacyJsonPath: join(agentDir, "permissions.json"),
-		onGrantChange: capturedSandbox
-			? async (writePaths) => {
-					// Merge dynamic permission grants with phi infrastructure paths
-					// that must always be writable (DB storage, agent config, git root)
-					const allPaths = new Set(writePaths);
-					for (const p of phiInfraPaths) allPaths.add(p);
-					// Merge git remote domains with user-granted network domains
-					const allDomains = new Set(gitDomains);
-					for (const d of permissionManager.getAllowedDomains() as string[]) allDomains.add(d);
-					await capturedSandbox.updateConfig({
-						allowedWritePaths: [...allPaths],
-						deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
-						allowedDomains: [...allDomains],
-					});
-				}
-			: undefined,
-	});
-	time("permissionManager");
-
-	// Pre-grant git remote domains as session grants so the permission wrapper
-	// doesn't prompt for them (they're already in the sandbox allowedDomains)
-	for (const domain of gitDomains) {
-		await permissionManager.grant("network", domain, "session", "net_connect");
-	}
-
-	// Apply persisted grants (network + fs_write) to sandbox at startup.
-	// Without this, grants from previous sessions would be accepted by the
-	// permission layer but denied by the sandbox until a new grant triggers sync.
-	if (sandboxProvider) {
-		const persistedDomains = permissionManager.getAllowedDomains() as string[];
-		const persistedWritePaths = permissionManager.getAllowedWritePaths() as string[];
-		const allDomains = new Set(gitDomains);
-		for (const d of persistedDomains) allDomains.add(d);
-		const allWritePaths = new Set(persistedWritePaths);
-		for (const p of phiInfraPaths) allWritePaths.add(p);
-		await sandboxProvider.updateConfig({
-			allowedWritePaths: [...allWritePaths],
-			deniedReadPaths: DEFAULT_DENIED_READ_PATHS,
-			allowedDomains: [...allDomains],
-		});
-	}
-
 	// Check if session has existing data to restore
 	const existingSession = sessionManager.buildSessionContext();
 	time("loadSession");
@@ -585,18 +450,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const contextFiles = options.contextFiles ?? discoverContextFiles(cwd, agentDir);
 	time("discoverContextFiles");
 
-	// Register discovered context files and skill files as safe for file-level access.
-	// These are public config files (AGENTS.md, SKILL.md) that the agent should be able
-	// to read without prompting, even if they live in restricted directories like agentDir.
-	const safeFiles: string[] = [...contextFiles.map((f) => f.path), ...skills.map((s) => s.filePath)];
-	permissionManager.addSafeFiles(safeFiles);
-
 	const autoResizeImages = settingsManager.getImageAutoResize();
 	const shellCommandPrefix = settingsManager.getShellCommandPrefix();
 	// Create ALL built-in tools for the registry (extensions can enable any of them)
 	const allBuiltInToolsMap = createAllTools(cwd, {
 		read: { autoResizeImages },
-		bash: { commandPrefix: shellCommandPrefix, sandboxProvider },
+		bash: { commandPrefix: shellCommandPrefix },
 	});
 	// Determine initially active built-in tools (default: read, bash, edit, write)
 	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
@@ -706,14 +565,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			wrappedToolRegistry.set(tool.name, tool);
 		}
 	}
-
-	// Permission wrapping
-	activeToolsArray = wrapToolsWithPermissions(activeToolsArray as AgentTool[], permissionManager);
-	const permissionWrappedRegistry = wrapToolRegistryWithPermissions(
-		wrappedToolRegistry ?? toolRegistry,
-		permissionManager,
-	);
-	time("wrapPermissions");
 
 	// Function to rebuild system prompt when tools change.
 	// Optional cwdOverride allows changeCwd() to pass the new directory.
@@ -925,16 +776,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		skillWarnings,
 		skillsSettings: settingsManager.getSkillsSettings(),
 		modelRegistry,
-		toolRegistry: permissionWrappedRegistry,
+		toolRegistry: wrappedToolRegistry ?? toolRegistry,
 		rebuildSystemPrompt,
 		builtinToolsLifecycle,
-		permissionManager,
-		sandboxProvider,
 		cwd,
 		createBuiltInTools: (newCwd: string) => {
 			const rawTools = createAllTools(newCwd, {
 				read: { autoResizeImages },
-				bash: { commandPrefix: shellCommandPrefix, sandboxProvider },
+				bash: { commandPrefix: shellCommandPrefix },
 			}) as Record<string, AgentTool>;
 			// Re-wrap rebuilt tools with extensions so wrappers survive cwd changes
 			let tools: AgentTool[];
@@ -943,8 +792,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			} else {
 				tools = Object.values(rawTools);
 			}
-			// Re-wrap with permissions
-			tools = wrapToolsWithPermissions(tools, permissionManager);
 
 			const result: Record<string, AgentTool> = {};
 			for (const tool of tools) {
@@ -960,7 +807,5 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionsResult,
 		modelFallbackMessage,
 		builtinToolsLifecycle,
-		permissionManager,
-		sandboxProvider,
 	};
 }

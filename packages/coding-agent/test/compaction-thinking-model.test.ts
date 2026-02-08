@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent, type ThinkingLevel } from "agent";
 import { getModel, type Model } from "ai";
-import { PermissionDb, PermissionManager } from "permission";
+
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
@@ -77,15 +77,11 @@ describe.skipIf(!HAS_ANTIGRAVITY_AUTH)("Compaction with thinking models (Antigra
 
 		const authStorage = getRealAuthStorage();
 		const modelRegistry = new ModelRegistry(authStorage);
-		const permissionDb = new PermissionDb(join(tempDir, "permissions.db"));
-		const permissionManager = new PermissionManager({ cwd: tempDir, db: permissionDb, preAllowedDirs: [] });
-
 		session = new AgentSession({
 			agent,
 			sessionManager,
 			settingsManager,
 			modelRegistry,
-			permissionManager,
 		});
 
 		session.subscribe(() => {});
@@ -174,15 +170,11 @@ describe.skipIf(!HAS_ANTHROPIC_AUTH)("Compaction with thinking models (Anthropic
 
 		const authStorage = getRealAuthStorage();
 		const modelRegistry = new ModelRegistry(authStorage);
-		const permissionDb2 = new PermissionDb(join(tempDir, "permissions2.db"));
-		const permissionManager2 = new PermissionManager({ cwd: tempDir, db: permissionDb2, preAllowedDirs: [] });
-
 		session = new AgentSession({
 			agent,
 			sessionManager,
 			settingsManager,
 			modelRegistry,
-			permissionManager: permissionManager2,
 		});
 
 		session.subscribe(() => {});

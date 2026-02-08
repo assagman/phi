@@ -18,8 +18,6 @@ import { resolve as resolvePath } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "agent";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "ai";
 import { completeSimple, isContextOverflow, modelsAreEqual, supportsXhigh } from "ai";
-import type { PermissionManager } from "permission";
-import type { SandboxProvider } from "sandbox";
 import { getAuthPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
@@ -128,10 +126,6 @@ export interface AgentSessionConfig {
 	rebuildSystemPrompt?: (toolNames: string[], cwd?: string) => string;
 	/** Builtin tools lifecycle (delta, epsilon, sigma, handoff) */
 	builtinToolsLifecycle?: import("./builtin-tools/index.js").BuiltinToolsLifecycle;
-	/** Permission manager for CWD enforcement and directory access control */
-	permissionManager: PermissionManager;
-	/** Sandbox provider for OS-level bash command sandboxing (undefined if init failed) */
-	sandboxProvider?: SandboxProvider;
 	/** Initial working directory */
 	cwd?: string;
 	/** Factory to rebuild built-in tools for a new cwd */
@@ -269,10 +263,6 @@ export class AgentSession {
 	private _pendingCwdChange: string | undefined = undefined;
 	private _autoSessionNamePromise: Promise<void> | undefined = undefined;
 
-	// Permission management
-	private readonly _permissionManager: PermissionManager;
-	private readonly _sandboxProvider: SandboxProvider | undefined;
-
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -288,8 +278,6 @@ export class AgentSession {
 		this._rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this._baseSystemPrompt = config.agent.state.systemPrompt;
 		this._builtinToolsLifecycle = config.builtinToolsLifecycle;
-		this._permissionManager = config.permissionManager;
-		this._sandboxProvider = config.sandboxProvider;
 		this._cwd = config.cwd ?? process.cwd();
 		this._createBuiltInTools = config.createBuiltInTools;
 
@@ -403,11 +391,6 @@ export class AgentSession {
 			}
 
 			await this._checkCompaction(msg);
-		}
-
-		// Clear once-scoped permission grants after agent turn completes
-		if (event.type === "agent_end") {
-			this._permissionManager.clearOnceGrants();
 		}
 
 		// Apply deferred CWD change after agent finishes (not while streaming)
@@ -638,11 +621,6 @@ export class AgentSession {
 		this._eventListeners = [];
 		// Shutdown builtin tools (closes databases)
 		this._builtinToolsLifecycle?.onSessionShutdown();
-		// Clear session-scoped permissions and close permission DB
-		this._permissionManager.clearSessionGrants();
-		this._permissionManager.close();
-		// Dispose sandbox provider (fire-and-forget — dispose is async but cleanup is best-effort)
-		void this._sandboxProvider?.dispose();
 	}
 
 	// =========================================================================
@@ -672,11 +650,6 @@ export class AgentSession {
 	/** Current working directory */
 	get cwd(): string {
 		return this._cwd;
-	}
-
-	/** Permission manager for CWD enforcement and directory access control */
-	get permissionManager(): PermissionManager {
-		return this._permissionManager;
 	}
 
 	/** Current retry attempt (0 if not retrying) */
@@ -2093,16 +2066,7 @@ export class AgentSession {
 
 		// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
 		const prefix = this.settingsManager.getShellCommandPrefix();
-		let resolvedCommand = prefix ? `${prefix}\n${command}` : command;
-
-		// Wrap with sandbox if available (same protection as agent bash tool)
-		if (this._sandboxProvider) {
-			try {
-				resolvedCommand = await this._sandboxProvider.wrapCommand(resolvedCommand, this._cwd);
-			} catch {
-				// Sandbox wrap failed — proceed without (static extraction still active)
-			}
-		}
+		const resolvedCommand = prefix ? `${prefix}\n${command}` : command;
 
 		try {
 			const result = options?.operations
@@ -2773,13 +2737,6 @@ export class AgentSession {
 
 		if (!statSync(newPath).isDirectory()) {
 			throw new Error(`Path is not a directory: ${newPath}`);
-		}
-
-		// Enforce CWD boundary: new path must be within the immutable workspace root
-		if (!this._permissionManager.isWithinCwd(resolvePath(newPath))) {
-			throw new Error(
-				`Cannot change directory to ${newPath}: outside workspace boundary (${this._permissionManager.cwd})`,
-			);
 		}
 
 		const previousCwd = this._cwd;

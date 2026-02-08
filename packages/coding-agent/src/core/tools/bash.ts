@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { AgentTool } from "agent";
 import { spawn } from "child_process";
-import type { SandboxProvider } from "sandbox";
 import { toolsLog } from "../../utils/logger.js";
 import { getShellConfig, killProcessTree } from "../../utils/shell.js";
 import { type BashDisplayHints, buildDisplayHints, matchRule } from "./bash-rules.js";
@@ -28,8 +27,6 @@ export interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
 	displayHints?: BashDisplayHints;
-	/** Set when sandbox blocks a command — contains violation details */
-	sandboxViolation?: string;
 }
 
 /**
@@ -143,14 +140,11 @@ export interface BashToolOptions {
 	operations?: BashOperations;
 	/** Command prefix prepended to every command (e.g., "shopt -s expand_aliases" for alias support) */
 	commandPrefix?: string;
-	/** Sandbox provider for OS-level command sandboxing */
-	sandboxProvider?: SandboxProvider;
 }
 
 export function createBashTool(cwd: string, options?: BashToolOptions): AgentTool<typeof bashSchema> {
 	const ops = options?.operations ?? defaultBashOperations;
 	const commandPrefix = options?.commandPrefix;
-	const sandboxProvider = options?.sandboxProvider;
 
 	return {
 		name: "bash",
@@ -168,25 +162,10 @@ export function createBashTool(cwd: string, options?: BashToolOptions): AgentToo
 				timeout,
 				cwd,
 				hasCommandPrefix: !!commandPrefix,
-				hasSandbox: !!sandboxProvider,
 			});
 
 			// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
-			let resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
-
-			// Wrap with sandbox if available (OS-level enforcement)
-			if (sandboxProvider) {
-				try {
-					resolvedCommand = await sandboxProvider.wrapCommand(resolvedCommand, cwd);
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					toolsLog.error("bash sandbox wrap failed", { command: command.slice(0, 100), error: message });
-					return {
-						content: [{ type: "text", text: `Sandbox error: ${message}` }],
-						details: { sandboxViolation: message } satisfies BashToolDetails,
-					};
-				}
-			}
+			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 
 			// Match per-command rules for exit code handling and display hints
 			const rule = matchRule(command);

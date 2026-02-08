@@ -3,22 +3,6 @@
  */
 
 // Extensions system
-// Permissions system (re-exported from permission package)
-export {
-	type PermissionCheckResult,
-	type PermissionGrant,
-	PermissionManager,
-	type PermissionManagerConfig,
-	type PermissionPromptFn,
-	type PermissionPromptResult,
-	type PermissionRequest,
-	type PermissionScope,
-	type PermissionType,
-	wrapToolRegistryWithPermissions,
-	wrapToolsWithPermissions,
-} from "permission";
-// Sandbox system (re-exported from sandbox package)
-export { createSandboxProvider, DEFAULT_DENIED_READ_PATHS, type SandboxConfig, type SandboxProvider } from "sandbox";
 export {
 	AgentSession,
 	type AgentSessionConfig,

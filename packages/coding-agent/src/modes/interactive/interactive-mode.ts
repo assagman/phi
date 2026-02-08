@@ -63,7 +63,6 @@ import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/
 import { type AppAction, KeybindingsManager } from "../../core/keybindings.js";
 import { createCompactionSummaryMessage } from "../../core/messages.js";
 import { resolveModelScope } from "../../core/model-resolver.js";
-import { createPermissionPromptUI } from "../../core/permission-ui.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { loadProjectContextFiles } from "../../core/system-prompt.js";
 import { ToolExecutionStorage } from "../../core/tool-execution-storage.js";
@@ -294,19 +293,6 @@ export class InteractiveMode {
 
 		// Initialize tool execution storage for history
 		this.toolExecutionStorage = new ToolExecutionStorage(session.sessionId);
-
-		// Wire up permission prompt UI (must be before any tool execution)
-		session.permissionManager.setPromptFn(async (request) => {
-			return this.showExtensionCustom((tui, t, _kb, done) => {
-				const ui = createPermissionPromptUI(tui, t, request, done);
-				return {
-					render: (w: number) => ui.render(w),
-					handleInput: (d: string) => ui.handleInput(d),
-					invalidate: () => ui.invalidate(),
-					focused: true,
-				};
-			});
-		});
 
 		// Populate builtin tools UI context (sigma, handoff need UI access)
 		if (options.builtinToolsLifecycle) {
